@@ -5,6 +5,27 @@ plugins:
   - model.openrouter
   - routing.role_router
   - session.jsonl
+  - storage.artifacts_sqlite
+  - storage.blobs_filesystem
+  - literature.crossref
+  - literature.semantic_scholar
+  - literature.ingestion
+  - literature.identity_resolver
+  - literature.search_planner
+  - literature.search_orchestrator
+  - literature.screening_protocol_builder
+  - literature.screening_view_builder
+  - literature.title_abstract_screener
+  - literature.screening_orchestrator
+  - literature.evidence_extractor
+  - literature.evidence_orchestrator
+  - literature.synthesis
+  - literature.gap_analyzer
+  - documents.locator.metadata
+  - documents.locator.unpaywall
+  - documents.fetcher.http
+  - documents.extractor.pypdf
+  - documents.acquisition_orchestrator
   - autonomy.configurable
   - tool.echo
   - loop.simple_tool_loop
@@ -29,6 +50,66 @@ models:
 
 session:
   root: ".research/sessions"
+
+artifacts:
+  store: sqlite
+  path: ".research/artifacts.db"
+
+literature:
+  crossref:
+    enabled: true
+    timeout_seconds: 20
+  semantic_scholar:
+    enabled: true
+    timeout_seconds: 20
+  planning:
+    model_role: fast
+    max_queries: 8
+    max_sources_per_query: 2
+  orchestration:
+    max_queries: 8
+    max_results_per_query_per_source: 50
+    max_total_provider_requests: 50
+    max_total_papers: 500
+  screening:
+    protocol_model_role: reasoning
+    screening_model_role: fast
+    max_candidates: 500
+    max_model_calls: 500
+    max_inclusion_criteria: 12
+    max_exclusion_criteria: 12
+    review_uncertain: true
+    review_low_confidence_below: 0.65
+  evidence:
+    model_role: reasoning
+    pages_per_chunk: 4
+    max_chunks_per_document: 50
+    max_model_calls: 500
+  synthesis:
+    model_role: reasoning
+    batch_profiles: 3
+    max_evidence_per_profile: 12
+    max_batches: 20
+    max_model_calls: 100
+  gap:
+    model_role: reasoning
+    max_statements: 200
+    max_gaps: 50
+    max_model_calls: 20
+
+documents:
+  blob_root: ".research/blobs"
+  location:
+    use_metadata: true
+    use_unpaywall: true
+  download:
+    timeout_seconds: 30
+    max_redirects: 5
+    max_bytes: 52428800
+  acquisition:
+    max_locations_per_paper: 5
+  extraction:
+    extractor: pypdf
 
 loop:
   max_steps: 8

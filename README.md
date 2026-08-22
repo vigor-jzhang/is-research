@@ -56,6 +56,10 @@ plugins:
   - model.openrouter
   - routing.role_router
   - session.jsonl
+  - storage.artifacts_sqlite
+  - literature.crossref
+  - literature.semantic_scholar
+  - literature.ingestion
   - autonomy.configurable
   - tool.echo
   - loop.simple_tool_loop
@@ -70,8 +74,29 @@ models:
 session:
   root: ".research/sessions"
 
+artifacts:
+  store: sqlite
+  path: ".research/artifacts.db"
+
+literature:
+  crossref:
+    enabled: true
+    timeout_seconds: 20
+  semantic_scholar:
+    enabled: true
+    timeout_seconds: 20
+
 loop:
   max_steps: 8
+```
+
+Secrets in `.env`:
+
+```
+OPENROUTER_API_KEY=...
+CROSSREF_MAILTO=you@example.com
+SEMANTIC_SCHOLAR_API_KEY=...
+UNPAYWALL_EMAIL=you@example.com
 ```
 
 Validate:
@@ -99,6 +124,61 @@ uv run --env-file .env research-agent run --config configs/example.yaml --prompt
 
 # Inspect a session
 uv run research-agent session inspect <session-id>
+
+# Research artifacts (SQLite, no network)
+uv run research-agent artifacts list --type paper_record
+uv run research-agent artifacts inspect <artifact-id>
+uv run research-agent artifacts lineage <artifact-id> --direction ancestors
+
+# Literature (provider-neutral, ingestion via artifacts)
+uv run research-agent literature sources
+uv run --env-file .env research-agent literature search --source crossref --query "algorithmic pricing" --limit 5
+uv run --env-file .env research-agent literature search --source semantic_scholar --query "information systems" --limit 5
+uv run --env-file .env research-agent literature get --source crossref --id "10.1234/abc"
+
+# Search strategy & orchestration (Phase 2C, requires OpenRouter for planning)
+uv run --env-file .env research-agent literature plan --question <rq_artifact_id> [--research-plan <rp_id>]
+uv run --env-file .env research-agent literature execute --strategy <strategy_artifact_id>
+uv run --env-file .env research-agent literature discover --question <rq_artifact_id>  # plan+execute
+uv run research-agent literature identities list
+uv run research-agent literature identities inspect <identity_id>
+
+# Screening (Phase 2D, PaperIdentity level, approval-gated)
+uv run --env-file .env research-agent literature screening protocol create --question <rq_id> [--research-plan <rp_id>]
+uv run research-agent literature screening protocol inspect <protocol_id>
+uv run research-agent literature screening protocol approve <draft_protocol_id>
+uv run --env-file .env research-agent literature screening run --search-execution <exec_id> --protocol <approved_protocol_id>
+uv run research-agent literature screening decisions list [--execution <screening_exec_id>]
+uv run research-agent literature screening decisions inspect <decision_id>
+uv run research-agent literature screening review --decision <decision_id> --final include --notes "human override"
+
+# Documents (Phase 2E, acquisition from ScreenedLiteratureSet, no LLM)
+uv run research-agent literature documents locate --set <screened_set_id>
+uv run research-agent literature documents acquire --set <screened_set_id>
+uv run research-agent literature documents run --set <screened_set_id>  # locate+acquire+extract
+uv run research-agent literature documents list [--set <id>] [--execution <id>]
+uv run research-agent literature documents inspect <full_text_doc_id>
+uv run research-agent literature documents import --identity <paper_identity_id> --file paper.pdf
+uv run research-agent literature documents text <full_text_doc_id> --page 5
+
+# Evidence extraction (Phase 2F, page-grounded, structured, model-assisted)
+uv run --env-file .env research-agent literature evidence run --corpus <full-text-corpus-id>
+uv run research-agent literature evidence profiles list
+uv run research-agent literature evidence profiles inspect <profile_id>
+uv run research-agent literature evidence items list --profile <profile_id>
+uv run research-agent literature evidence items inspect <evidence_id>
+
+# Cross-paper synthesis (Phase 2G, evidence-grounded, model-assisted)
+uv run --env-file .env research-agent literature synthesis run --corpus <evidence-corpus-id>
+uv run research-agent literature synthesis inspect <synthesis_id>
+uv run research-agent literature synthesis themes list --synthesis <synthesis_id>
+uv run research-agent literature synthesis themes inspect <theme_id>
+
+# Research gap analysis (Phase 2H, evidence-grounded)
+uv run --env-file .env research-agent literature gaps run --synthesis <synthesis-id> --corpus <evidence-corpus-id> [--question <rq-id>]
+uv run research-agent literature gaps list --analysis <gap-analysis-id>
+uv run research-agent literature gaps inspect <gap-id>
+uv run research-agent literature gaps analysis inspect <analysis-id>
 ```
 
 The `run` command demonstrates:
@@ -113,19 +193,25 @@ config → kernel → plugin manager → JSONL session → simple_tool_loop
 ```bash
 uv run pytest
 # mocked HTTP, no real API calls — live tests are skipped
-uv run --env-file .env pytest -m live -v   # opt-in live OpenRouter smoke (requires key)
+uv run --env-file .env pytest -m live -v                 # OpenRouter live
+uv run --env-file .env pytest -m live_literature -v      # Crossref/Semantic Scholar live
+uv run --env-file .env pytest -m live_screening -v       # Screening live (OpenRouter)
+uv run --env-file .env pytest -m live_documents -v       # Document live (Unpaywall, needs UNPAYWALL_EMAIL)
+uv run --env-file .env pytest -m "live or live_literature or live_screening or live_documents" -v
 ```
 
-OpenRouter tests use `respx` to mock `https://openrouter.ai/api/v1/chat/completions`.
+Provider tests use `respx` to mock `https://api.crossref.org/works`, `https://api.semanticscholar.org/graph/v1`, and `https://openrouter.ai/api/v1/chat/completions`.
 
-The live smoke test `tests/live/test_openrouter_live.py` verifies:
-`config → bootstrap → role_router → OpenRouter → real model → session`
-and asserts structural success (output, model metadata, usage, session events) with minimal tokens. It skips cleanly when `OPENROUTER_API_KEY` is absent and never logs the key.
+- The OpenRouter live smoke `tests/live/test_openrouter_live.py` verifies `config → bootstrap → role_router → OpenRouter → real model → session`
+- Literature live tests `tests/live/test_literature_live.py` verify small Crossref/Semantic Scholar lookups/searches
 
-Optional ad-hoc live run:
+All live tests assert structural success with minimal tokens and skip cleanly when keys are absent, never logging credentials.
+
+Optional ad-hoc live runs:
 
 ```bash
 uv run --env-file .env research-agent run --prompt "echo hello"
+uv run --env-file .env research-agent literature search --source crossref --query "test" --limit 2
 ```
 
 ## Quality Gates
@@ -144,31 +230,55 @@ All must pass before Phase 1 is considered complete.
 ```
 src/research_harness/
   kernel/        # plugin, manager, services, events, runtime (generic, no plugin discovery)
-  contracts/     # typed Protocols for model, routing, tool, loop, session, autonomy
+  contracts/     # typed Protocols: model, routing, tool, loop, session, autonomy, artifact, literature
   config/        # Pydantic YAML schema + loader + dotenv helper
-  app/
-    bootstrap.py # composition root: discovers builtin+external plugins, builds Runtime
+  app/bootstrap.py # composition root: builtin+external plugins, builds Runtime
+  research/
+    schemas/     # PaperRecord, EvidenceItem, ResearchClaim, etc. + ProviderRecordSnapshot
+    envelope.py  # ArtifactEnvelope[T] + content hashing
+    provenance/  # ProvenanceLink
   plugins/
     models/openrouter
     routing/role_router
     tools/echo
     loops/simple_tool_loop
     sessions/jsonl
-    autonomy/configurable
-    registry.py  # builtin registry only
+    storage/
+      artifacts_sqlite  # generic SQLite ArtifactStore
+      blobs_filesystem  # content-addressed BlobStore (sha256)
+    literature/
+      crossref (client, mapper)
+      semantic_scholar (client, mapper)
+      ingestion
+      identity_resolver
+      search_planner (model-assisted)
+      search_orchestrator
+      screening_* (protocol, view, screener, orchestrator)
+    documents/
+      locator_metadata / locator_unpaywall
+      fetcher_http (SSRF/size/PDF validation)
+      extractor_pypdf (page-level, 1-based)
+      acquisition_orchestrator (ScreenedSet → Corpus)
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/
   architecture.md
   plugin-authoring.md
+  research-domain.md
+  literature-sources.md
 tests/
-  unit/          # architecture, external plugins, session, etc.
-  live/          # opt-in live smoke (pytest -m live)
+  unit/          # architecture, external plugins, envelope, mappers, providers, ingestion
+  integration/   # e2e + literature ingestion
+  live/          # opt-in live smoke (pytest -m live / live_literature)
 ```
 
 ## Architecture
 
 See `docs/architecture.md` for kernel, service registry, event bus, sessions, model abstraction, and ASCII diagram.
+
+## Research Domain
+
+See `docs/research-domain.md` for artifact envelopes, content hashing, provenance (`Paper → Evidence → Claim`), session vs artifact persistence, and external identifier handling.
 
 ## Creating a Plugin
 

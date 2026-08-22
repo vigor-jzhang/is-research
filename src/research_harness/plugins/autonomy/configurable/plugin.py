@@ -24,6 +24,8 @@ class ConfigurableAutonomyPolicy:
         "model_assumptions",
         "major_model_revision",
         "final_contribution_claim",
+        "screening_protocol",
+        "screening_review",
     }
 
     def __init__(

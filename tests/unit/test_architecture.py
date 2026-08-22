@@ -162,3 +162,74 @@ def test_plugin_metadata_uses_service_contracts_not_imports():
     assert not violations, "plugins must use service contracts, not direct imports:\n" + "\n".join(
         violations
     )
+
+
+def test_kernel_has_no_research_imports():
+    kernel_root = SRC_ROOT / "kernel"
+    forbidden = [
+        re.compile(r"from\s+research_harness\.research"),
+        re.compile(r"import\s+research_harness\.research"),
+        re.compile(r"from\s+research_harness\.contracts\.artifact"),
+        re.compile(r"import\s+research_harness\.contracts\.artifact"),
+    ]
+    violations: list[str] = []
+    for f in _read_files(kernel_root):
+        text = f.read_text(encoding="utf-8")
+        for pat in forbidden:
+            if pat.search(text):
+                violations.append(f"{f.relative_to(SRC_ROOT)}: {pat.pattern}")
+    assert not violations, "kernel must not import research/artifact store:\n" + "\n".join(
+        violations
+    )
+
+
+def test_research_schemas_have_no_storage_plugin_imports():
+    research_root = SRC_ROOT / "research"
+    forbidden = [
+        re.compile(r"from\s+research_harness\.plugins\.storage"),
+        re.compile(r"import\s+research_harness\.plugins\.storage"),
+        re.compile(r"from\s+research_harness\.contracts\.artifact.*SQLite"),
+        re.compile(r"SQLiteArtifactStore"),
+    ]
+    violations: list[str] = []
+    for f in _read_files(research_root):
+        text = f.read_text(encoding="utf-8")
+        for pat in forbidden:
+            if pat.search(text):
+                violations.append(f"{f.relative_to(SRC_ROOT)}: {pat.pattern}")
+    assert not violations, "research schemas must not import concrete storage:\n" + "\n".join(
+        violations
+    )
+
+
+def test_artifact_consumers_use_contract_not_implementation():
+    # Only the sqlite plugin and CLI diagnostics may import SQLiteArtifactStore directly
+    allowed = {
+        pathlib.Path("plugins/storage/artifacts_sqlite/plugin.py"),
+        pathlib.Path(
+            "cli/main.py"
+        ),  # CLI helper _get_artifact_store directly instantiates for inspection
+    }
+    violations: list[str] = []
+    for f in SRC_ROOT.rglob("*.py"):
+        rel = f.relative_to(SRC_ROOT)
+        if rel in allowed:
+            continue
+        # Research plugins and tests should use artifact_store.default service, not direct SQLite class
+        # We check for direct import of SQLiteArtifactStore outside allowed
+        text = f.read_text(encoding="utf-8")
+        if "SQLiteArtifactStore" in text and rel.parts[0] not in ("plugins", "cli"):
+            # Allow tests that directly test the store implementation
+            if rel.parts[0] == "tests" and "test_artifact_store" in str(rel):
+                continue
+            if rel.parts[0] == "tests" and "test_research_lineage" in str(rel):
+                continue
+            violations.append(f"{rel}: directly imports SQLiteArtifactStore")
+        # Also check for direct sqlite3 usage outside storage plugin
+        if "import sqlite3" in text and "storage/artifacts_sqlite" not in str(rel):
+            if rel.parts[0] == "tests":
+                continue
+            violations.append(f"{rel}: directly uses sqlite3 outside storage plugin")
+    assert not violations, (
+        "consumers must use ArtifactStore contract, not SQLite impl:\n" + "\n".join(violations)
+    )

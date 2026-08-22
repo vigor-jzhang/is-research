@@ -257,6 +257,25 @@ Custom `.env` loader (`config/dotenv.py`) is a lightweight fallback; canonical i
 
 `ConfigurableAutonomyPolicy` (`plugins/autonomy/configurable/plugin.py:11`) provides `autonomy_policy.default` with modes `high` (never requires approval) and `interactive` (requires approval for checkpoints like `research_question`, `proposed_mechanism`, `final_contribution_claim`). Research plugins call `requires_approval` / `request_approval`; they never branch on raw config strings.
 
+## Storage and Documents (Phase 2E)
+
+Two stores with distinct duties:
+
+- `ArtifactStore` (`storage.artifacts_sqlite`) — SQLite, small JSON payloads, provenance graph, `ArtifactEnvelope[T]`
+- `BlobStore` (`storage.blobs_filesystem`) — filesystem content-addressed by `sha256`, `BlobReference{algorithm,digest,size_bytes,media_type,storage_key}`, layout `.research/blobs/sha256/ab/cd/...`, atomic temp+rename, deduplication
+
+Large PDFs and extracted text **never** go inside `artifacts.payload_json`; they go to `BlobStore`, artifacts hold `BlobReference`.
+
+Document plugins (`plugins/documents/*`) compose:
+
+```
+ScreenedLiteratureSet → included PaperIdentities → DocumentLocator(metadata + unpaywall) → DocumentLocation --derived_from--> ProviderRecordSnapshot(unpaywall) → HTTP Fetcher (SSRF/size/PDF validation) → DocumentAcquisition (status) → BlobStore PDF → pypdf Extractor → FullTextDocument (page-level, 1-based) → FullTextCorpus
+```
+
+Contracts `contracts/blob.py:BlobStore` and `contracts/document.py:DocumentLocator/Fetcher/Extractor` are provider-neutral; orchestrator `documents.acquisition_orchestrator` enforces budgets, provenance, and corpus creation. No LLM in Phase 2E.
+
+See `docs/documents.md` for full lifecycle, resolution priority, security, and CLI.
+
 ## Configuration
 
 `AppConfig` (`config/schema.py:56`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX.

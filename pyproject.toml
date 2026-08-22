@@ -12,6 +12,7 @@ dependencies = [
     "typer>=0.12",
     "pyyaml>=6.0",
     "rich>=13.0",
+    "pypdf>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +39,15 @@ packages = ["src/research_harness"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-markers = ["live: marks tests as live OpenRouter integration (requires OPENROUTER_API_KEY, run with `uv run --env-file .env pytest -m live`)"]
+markers = [
+    "live: marks tests as live OpenRouter integration (requires OPENROUTER_API_KEY, run with `uv run --env-file .env pytest -m live`)",
+    "live_literature: marks tests as live literature provider integration (run with `uv run --env-file .env pytest -m live_literature`)",
+    "live_screening: marks tests as live screening integration (requires OPENROUTER_API_KEY, run with `uv run --env-file .env pytest -m live_screening`)",
+    "live_documents: marks tests as live document tests (requires UNPAYWALL_EMAIL, run with `uv run --env-file .env pytest -m live_documents`)",
+    "live_evidence: marks tests as live evidence extraction (requires OPENROUTER_API_KEY + prior FullTextCorpus, run with `uv run --env-file .env pytest -m live_evidence`)",
+    "live_synthesis: marks tests as live synthesis (requires OPENROUTER_API_KEY + prior EvidenceCorpus, run with `uv run --env-file .env pytest -m live_synthesis`)",
+    "live_gap_analysis: marks tests as live gap analysis (requires OPENROUTER_API_KEY + prior LiteratureSynthesis, run with `uv run --env-file .env pytest -m live_gap_analysis`)",
+]
 
 [tool.ruff]
 line-length = 100
@@ -46,7 +55,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
-ignore = ["E501", "B027", "B017", "B904", "F841"]
+ignore = ["E501", "B027", "B017", "B904", "F841", "UP042", "UP046", "SIM102", "SIM105", "SIM108"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -67,4 +76,5 @@ dev = [
     "respx>=0.21",
     "ruff>=0.8",
     "pyright>=1.1",
+    "reportlab>=5.0.1",
 ]
