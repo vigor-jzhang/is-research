@@ -142,6 +142,92 @@ class LiteratureGapConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class ResearchMechanismConfig(BaseModel):
+    generator_role: str = Field(
+        default="reasoning", description="Logical model role for mechanism generation/revision"
+    )
+    critic_role: str = Field(
+        default="critic", description="Logical model role for mechanism critique"
+    )
+    revision_role: str = Field(
+        default="reasoning", description="Logical model role for mechanism revision"
+    )
+    max_candidates: int = Field(default=5, ge=1, le=20)
+    max_model_calls: int = Field(default=20, ge=1, le=100)
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchNumericalConfig(BaseModel):
+    model_role: str = Field(
+        default="reasoning",
+        description="Logical model role for numerical runs (metadata only; numbers are deterministic)",
+    )
+    max_points: int = Field(default=10000, ge=100, le=1000000)
+    artifact_point_threshold: int = Field(default=500, ge=10, le=100000)
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchPropositionConfig(BaseModel):
+    generator_role: str = Field(
+        default="reasoning", description="Logical model role for proposition generation"
+    )
+    critic_role: str = Field(
+        default="critic", description="Logical model role for proposition critique"
+    )
+    interpretation_role: str = Field(
+        default="reasoning", description="Logical model role for economic interpretation"
+    )
+    max_propositions: int = Field(default=8, ge=1, le=50)
+    max_llm_calls: int = Field(default=20, ge=1, le=100)
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchEquilibriumConfig(BaseModel):
+    deriver_role: str = Field(
+        default="reasoning", description="Logical model role for equilibrium derivation"
+    )
+    revision_role: str = Field(
+        default="reasoning", description="Logical model role for candidate revision"
+    )
+    max_revisions: int = Field(
+        default=2, ge=0, le=10, description="Bounded revision attempts per candidate"
+    )
+    max_llm_calls: int = Field(default=10, ge=1, le=100)
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchModelConfig(BaseModel):
+    builder_role: str = Field(
+        default="reasoning", description="Logical model role for model building"
+    )
+    critic_role: str = Field(default="critic", description="Logical model role for model critique")
+    revision_role: str = Field(
+        default="reasoning", description="Logical model role for model revision"
+    )
+    max_actors: int = Field(default=8, ge=1, le=30)
+    max_variables: int = Field(default=40, ge=1, le=200)
+    max_parameters: int = Field(default=40, ge=1, le=200)
+    max_assumptions: int = Field(default=20, ge=1, le=100)
+    max_stages: int = Field(default=20, ge=1, le=100)
+    max_payoffs: int = Field(default=10, ge=1, le=50)
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchConfig(BaseModel):
+    mechanism: ResearchMechanismConfig = Field(default_factory=ResearchMechanismConfig)
+    model: ResearchModelConfig = Field(default_factory=ResearchModelConfig)
+    equilibrium: ResearchEquilibriumConfig = Field(default_factory=ResearchEquilibriumConfig)
+    proposition: ResearchPropositionConfig = Field(default_factory=ResearchPropositionConfig)
+    numerical: ResearchNumericalConfig = Field(default_factory=ResearchNumericalConfig)
+
+    model_config = {"extra": "forbid"}
+
+
 class LiteratureConfig(BaseModel):
     crossref: CrossrefConfig = Field(default_factory=CrossrefConfig)
     semantic_scholar: SemanticScholarConfig = Field(default_factory=SemanticScholarConfig)
@@ -203,6 +289,7 @@ class AppConfig(BaseModel):
     artifacts: ArtifactsConfig = Field(default_factory=ArtifactsConfig)
     literature: LiteratureConfig = Field(default_factory=LiteratureConfig)
     documents: DocumentsConfig = Field(default_factory=DocumentsConfig)
+    research: ResearchConfig = Field(default_factory=ResearchConfig)
 
     @field_validator("plugins")
     @classmethod
@@ -236,6 +323,21 @@ class AppConfig(BaseModel):
             "literature.evidence_orchestrator": {"literature": self.literature.model_dump()},
             "literature.synthesis": {"literature": self.literature.model_dump()},
             "literature.gap_analyzer": {"literature": self.literature.model_dump()},
+            "research.gap_selection": {
+                "research": self.research.model_dump(),
+                "autonomy_mode": self.runtime.autonomy,
+            },
+            "research.mechanism_generator": {"research": self.research.model_dump()},
+            "research.mechanism_critic": {"research": self.research.model_dump()},
+            "research.model_builder": {"research": self.research.model_dump()},
+            "research.model_specification_critic": {"research": self.research.model_dump()},
+            "research.equilibrium_deriver": {"research": self.research.model_dump()},
+            "research.equilibrium_verifier": {},
+            "research.comparative_statics": {},
+            "research.proposition_verifier": {},
+            "research.proposition_critic": {"research": self.research.model_dump()},
+            "research.proposition_generator": {"research": self.research.model_dump()},
+            "research.numerical_analysis": {"research": self.research.model_dump()},
             "documents.locator.metadata": {"documents": self.documents.model_dump()},
             "documents.locator.unpaywall": {"documents": self.documents.model_dump()},
             "documents.fetcher.http": {"documents": self.documents.model_dump()},

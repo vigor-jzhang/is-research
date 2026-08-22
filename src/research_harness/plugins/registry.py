@@ -153,6 +153,98 @@ def _create_gap_analyzer() -> Plugin:
     return GapAnalyzerPlugin()
 
 
+def _create_gap_selection() -> Plugin:
+    from research_harness.plugins.research.gap_selection.plugin import GapSelectionPlugin
+
+    return GapSelectionPlugin()
+
+
+def _create_mechanism_generator() -> Plugin:
+    from research_harness.plugins.research.mechanism_generator.plugin import (
+        MechanismGeneratorPlugin,
+    )
+
+    return MechanismGeneratorPlugin()
+
+
+def _create_mechanism_critic() -> Plugin:
+    from research_harness.plugins.research.mechanism_critic.plugin import (
+        MechanismCriticPlugin,
+    )
+
+    return MechanismCriticPlugin()
+
+
+def _create_model_builder() -> Plugin:
+    from research_harness.plugins.research.model_builder.plugin import ModelBuilderPlugin
+
+    return ModelBuilderPlugin()
+
+
+def _create_model_specification_critic() -> Plugin:
+    from research_harness.plugins.research.model_specification_critic.plugin import (
+        ModelSpecificationCriticPlugin,
+    )
+
+    return ModelSpecificationCriticPlugin()
+
+
+def _create_equilibrium_deriver() -> Plugin:
+    from research_harness.plugins.research.equilibrium_deriver.plugin import (
+        EquilibriumDeriverPlugin,
+    )
+
+    return EquilibriumDeriverPlugin()
+
+
+def _create_equilibrium_verifier() -> Plugin:
+    from research_harness.plugins.research.equilibrium_verifier.plugin import (
+        EquilibriumVerifierPlugin,
+    )
+
+    return EquilibriumVerifierPlugin()
+
+
+def _create_comparative_statics() -> Plugin:
+    from research_harness.plugins.research.comparative_statics.plugin import (
+        ComparativeStaticsPlugin,
+    )
+
+    return ComparativeStaticsPlugin()
+
+
+def _create_proposition_verifier() -> Plugin:
+    from research_harness.plugins.research.proposition_verifier.plugin import (
+        PropositionVerifierPlugin,
+    )
+
+    return PropositionVerifierPlugin()
+
+
+def _create_proposition_critic() -> Plugin:
+    from research_harness.plugins.research.proposition_critic.plugin import (
+        PropositionCriticPlugin,
+    )
+
+    return PropositionCriticPlugin()
+
+
+def _create_proposition_generator() -> Plugin:
+    from research_harness.plugins.research.proposition_generator.plugin import (
+        PropositionGeneratorPlugin,
+    )
+
+    return PropositionGeneratorPlugin()
+
+
+def _create_numerical_analysis() -> Plugin:
+    from research_harness.plugins.research.numerical_analysis.plugin import (
+        NumericalAnalysisPlugin,
+    )
+
+    return NumericalAnalysisPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -213,6 +305,18 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "literature.evidence_orchestrator": _create_evidence_orchestrator,
     "literature.synthesis": _create_synthesis,
     "literature.gap_analyzer": _create_gap_analyzer,
+    "research.gap_selection": _create_gap_selection,
+    "research.mechanism_generator": _create_mechanism_generator,
+    "research.mechanism_critic": _create_mechanism_critic,
+    "research.model_builder": _create_model_builder,
+    "research.model_specification_critic": _create_model_specification_critic,
+    "research.equilibrium_deriver": _create_equilibrium_deriver,
+    "research.equilibrium_verifier": _create_equilibrium_verifier,
+    "research.comparative_statics": _create_comparative_statics,
+    "research.proposition_verifier": _create_proposition_verifier,
+    "research.proposition_critic": _create_proposition_critic,
+    "research.proposition_generator": _create_proposition_generator,
+    "research.numerical_analysis": _create_numerical_analysis,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

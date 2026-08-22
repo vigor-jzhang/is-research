@@ -36,6 +36,11 @@ Payload types live in `src/research_harness/research/schemas/`:
 - `PaperResearchProfile/EvidenceExtractionExecution/EvidenceCorpus` — Phase 2F evidence extraction (see `docs/evidence.md`)
 - `SynthesisStatement/SynthesisTheme/LiteratureSynthesis/SynthesisExecution` — Phase 2G cross-paper synthesis (see `docs/synthesis.md`)
 - `ResearchGap/GapAnalysis/GapAnalysisExecution` — Phase 2H gap analysis (see `docs/gaps.md`)
+- `GapSelection/MechanismCandidate/MechanismCritique/MechanismAnalysis/SelectedMechanism` — Phase 3A mechanism development (see `docs/mechanisms.md`)
+- `FormalAnalyticalModel/ModelActor/ModelVariable/ModelParameter/ModelTimingStage/InformationStructure/ModelAssumption/PayoffFunction/ModelSpecificationCritique` — Phase 3B formal analytical model (see `docs/models.md`)
+- `OptimizationProblem/FirstOrderCondition/BestResponse/EquilibriumCandidate/EquilibriumVerification/EquilibriumAnalysis/EquilibriumExecution` — Phase 3C equilibrium derivation (see `docs/equilibrium.md`)
+- `ComparativeStatic/Proposition/PropositionVerification/PropositionCritique/EconomicInterpretation` — Phase 3D propositions (see `docs/propositions.md`)
+- `ParameterSweep/NumericalResult/RobustnessCheck/WelfareAnalysis/NumericalExperiment/NumericalExperimentExecution` — Phase 3E numerical experiments (see `docs/numerical.md`)
 
 Later phases add `ResearchGap`, `Mechanism`, etc., without kernel changes.
 

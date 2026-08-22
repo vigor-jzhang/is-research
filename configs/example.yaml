@@ -21,6 +21,18 @@ plugins:
   - literature.evidence_orchestrator
   - literature.synthesis
   - literature.gap_analyzer
+  - research.gap_selection
+  - research.mechanism_generator
+  - research.mechanism_critic
+  - research.model_builder
+  - research.model_specification_critic
+  - research.equilibrium_deriver
+  - research.equilibrium_verifier
+  - research.comparative_statics
+  - research.proposition_verifier
+  - research.proposition_critic
+  - research.proposition_generator
+  - research.numerical_analysis
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -96,6 +108,39 @@ literature:
     max_statements: 200
     max_gaps: 50
     max_model_calls: 20
+
+research:
+  mechanism:
+    generator_role: reasoning
+    critic_role: critic
+    revision_role: reasoning
+    max_candidates: 5
+    max_model_calls: 20
+  model:
+    builder_role: reasoning
+    critic_role: critic
+    revision_role: reasoning
+    max_actors: 8
+    max_variables: 40
+    max_parameters: 40
+    max_assumptions: 20
+    max_stages: 20
+    max_payoffs: 10
+  equilibrium:
+    deriver_role: reasoning
+    revision_role: reasoning
+    max_revisions: 2
+    max_llm_calls: 10
+  proposition:
+    generator_role: reasoning
+    critic_role: critic
+    interpretation_role: reasoning
+    max_propositions: 8
+    max_llm_calls: 20
+  numerical:
+    model_role: reasoning
+    max_points: 10000
+    artifact_point_threshold: 500
 
 documents:
   blob_root: ".research/blobs"

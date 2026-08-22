@@ -13,6 +13,8 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0",
     "pypdf>=5.0",
+    "sympy>=1.14.0",
+    "numpy>=2.5.2",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +49,11 @@ markers = [
     "live_evidence: marks tests as live evidence extraction (requires OPENROUTER_API_KEY + prior FullTextCorpus, run with `uv run --env-file .env pytest -m live_evidence`)",
     "live_synthesis: marks tests as live synthesis (requires OPENROUTER_API_KEY + prior EvidenceCorpus, run with `uv run --env-file .env pytest -m live_synthesis`)",
     "live_gap_analysis: marks tests as live gap analysis (requires OPENROUTER_API_KEY + prior LiteratureSynthesis, run with `uv run --env-file .env pytest -m live_gap_analysis`)",
+   "live_mechanism: marks tests as live mechanism development (requires OPENROUTER_API_KEY + prior GapAnalysis, run with `uv run --env-file .env pytest -m live_mechanism`)",
+   "live_model_specification: marks tests as live formal model specification (requires OPENROUTER_API_KEY + prior SelectedMechanism, run with `uv run --env-file .env pytest -m live_model_specification`)",
+   "live_equilibrium: marks tests as live equilibrium derivation (requires OPENROUTER_API_KEY + prior FormalAnalyticalModel, run with `uv run --env-file .env pytest -m live_equilibrium`)",
+   "live_propositions: marks tests as live propositions (requires OPENROUTER_API_KEY + prior verified equilibrium, run with `uv run --env-file .env pytest -m live_propositions`)",
+   "live_numerical_analysis: marks tests as live numerical analysis (requires a prior verified equilibrium; deterministic, no network, run with `uv run --env-file .env pytest -m live_numerical_analysis`)",
 ]
 
 [tool.ruff]

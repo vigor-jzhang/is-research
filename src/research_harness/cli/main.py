@@ -26,6 +26,7 @@ session_app = typer.Typer(help="Session commands")
 runtime_app = typer.Typer(help="Runtime commands")
 artifacts_app = typer.Typer(help="Artifact commands")
 literature_app = typer.Typer(help="Literature commands")
+research_app = typer.Typer(help="Research commands (Phase 3A)")
 
 app.add_typer(plugins_app, name="plugins")
 app.add_typer(config_app, name="config")
@@ -33,6 +34,7 @@ app.add_typer(session_app, name="session")
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(artifacts_app, name="artifacts")
 app.add_typer(literature_app, name="literature")
+app.add_typer(research_app, name="research")
 
 console = Console()
 
@@ -3050,6 +3052,1546 @@ def gaps_analysis_inspect(
                 console.print(
                     f"  [{g.strength.value}] {g.title[:80]} ({g.gap_type.value}) rank {g.ranking.composite if g.ranking else 0}"
                 )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 3A: research commands (gap selection + mechanism development)
+# ---------------------------------------------------------------------------
+
+mechanisms_app = typer.Typer(help="Mechanism development (Phase 3A)")
+research_app.add_typer(mechanisms_app, name="mechanisms")
+model_app = typer.Typer(help="Formal analytical model (Phase 3B)")
+research_app.add_typer(model_app, name="model")
+equilibrium_app = typer.Typer(help="Equilibrium derivation (Phase 3C)")
+research_app.add_typer(equilibrium_app, name="equilibrium")
+comparative_statics_app = typer.Typer(help="Comparative statics (Phase 3D)")
+research_app.add_typer(comparative_statics_app, name="comparative-statics")
+propositions_app = typer.Typer(help="Propositions (Phase 3D)")
+research_app.add_typer(propositions_app, name="propositions")
+numerical_app = typer.Typer(help="Numerical experiments (Phase 3E)")
+research_app.add_typer(numerical_app, name="numerical")
+
+
+@research_app.command("gap-select")
+def research_gap_select(
+    analysis: Annotated[str, typer.Option("--analysis", help="GapAnalysis artifact id")],
+    gap: Annotated[
+        str | None, typer.Option("--gap", help="Explicitly select a ResearchGap id (optional)")
+    ] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Select a research gap from a GapAnalysis (Phase 3A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.gap_selection",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in ["storage.artifacts_sqlite", "research.gap_selection"]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("gap_selection.default")
+            try:
+                sel_id = await svc.select(analysis, selected_gap_id=gap)
+            except Exception as e:
+                console.print(f"[red]Gap selection failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.mechanism import GapSelection
+
+            sel = (await store.get(sel_id)).parse_payload(GapSelection)
+            console.print(f"[green]✓ GapSelection: {sel_id}[/green]")
+            console.print(f"  selected: {sel.selected_gap_id}  status: {sel.status.value}")
+            console.print(f"  selected_by: {sel.selected_by}  autonomy: {sel.autonomy_mode}")
+            console.print(
+                f"  approval_required: {sel.approval_required}  decided_by: {sel.approval_decided_by}"
+            )
+            console.print(f"  rationale: {sel.selection_rationale}")
+            if sel.alternative_gap_ids:
+                console.print(f"  alternatives: {len(sel.alternative_gap_ids)}")
+            for gid in sel.alternative_gap_ids:
+                console.print(f"    - {gid}")
+
+    asyncio.run(_run())
+
+
+@mechanisms_app.command("generate")
+def mechanisms_generate(
+    selection: Annotated[str, typer.Option("--selection", help="GapSelection artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Generate mechanism candidates for a selected gap (Phase 3A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.mechanism_generator",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in ["storage.artifacts_sqlite", "research.mechanism_generator"]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("mechanism_generator.default")
+            try:
+                exec_id = await svc.generate(selection)
+            except Exception as e:
+                console.print(f"[red]Mechanism generation failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.mechanism import (
+                MechanismAnalysis,
+                MechanismAnalysisExecution,
+            )
+
+            rec = (await store.get(exec_id)).parse_payload(MechanismAnalysisExecution)
+            console.print(f"[green]✓ Generation execution: {exec_id}[/green]")
+            console.print(
+                f"  candidates {rec.candidates_created}, rejected {rec.candidates_rejected}"
+            )
+            for env in reversed(await store.list(artifact_type="mechanism_analysis")):
+                a = env.parse_payload(MechanismAnalysis)
+                if a.gap_selection_id == selection:
+                    console.print(f"  MechanismAnalysis: {env.artifact_id} ({a.status.value})")
+                    for cid in a.candidate_ids:
+                        c = (await store.get(cid)).parse_payload(
+                            __import__(
+                                "research_harness.research.schemas.mechanism",
+                                fromlist=["MechanismCandidate"],
+                            ).MechanismCandidate
+                        )
+                        comp = c.evaluation.composite if c.evaluation else 0.0
+                        console.print(
+                            f"    [{comp:.3f}] {c.name[:70]} papers {c.literature_support_papers} "
+                            f"ev {c.literature_support_evidence_items}"
+                        )
+                    break
+
+    asyncio.run(_run())
+
+
+@mechanisms_app.command("inspect")
+def mechanisms_inspect(
+    candidate_id: Annotated[str, typer.Argument(help="MechanismCandidate artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a mechanism candidate (Phase 3A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                c_env = await store.get(candidate_id)
+            except Exception as e:
+                console.print(f"[red]Candidate {candidate_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.mechanism import MechanismCandidate
+
+            c = c_env.parse_payload(MechanismCandidate)
+            console.print(f"[bold]MechanismCandidate {candidate_id}[/bold]")
+            console.print(f"  name: {c.name}  status: {c.status.value}")
+            console.print(f"  gap: {c.gap_id}")
+            console.print(f"  description: {c.description}")
+            console.print(f"  actors: {', '.join(c.actors)}")
+            console.print(f"  causal logic: {c.causal_logic}")
+            console.print(
+                f"  literature support: {c.literature_support_papers} papers, {c.literature_support_evidence_items} evidence items"
+            )
+            if c.grounding:
+                console.print("  grounding:")
+                for g in c.grounding:
+                    console.print(
+                        f"    - {g.element[:90]} [{g.basis.value}]"
+                        + (f" (sources: {len(g.source_ids)})" if g.source_ids else "")
+                    )
+            if c.evaluation:
+                console.print(
+                    f"  evaluation: gap_align {c.evaluation.gap_alignment}, theory {c.evaluation.theoretical_coherence}, "
+                    f"novelty {c.evaluation.novelty_within_reviewed_corpus}, tractability {c.evaluation.analytical_tractability}, "
+                    f"mgr/econ {c.evaluation.managerial_economic_relevance}, IS {c.evaluation.is_relevance} "
+                    f"-> composite {c.evaluation.composite}"
+                )
+            parents = await store.get_parents(c_env.artifact_id)
+            for p in parents:
+                console.print(f"  provenance: {p.relation.value} <- {p.source_artifact_id}")
+
+    asyncio.run(_run())
+
+
+@mechanisms_app.command("critique")
+def mechanisms_critique(
+    candidate_id: Annotated[str, typer.Argument(help="MechanismCandidate artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Critique a mechanism candidate with the independent critic (Phase 3A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.mechanism_critic",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in ["storage.artifacts_sqlite", "research.mechanism_critic"]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("mechanism_critic.default")
+            try:
+                crit_id = await svc.critique(candidate_id)
+            except Exception as e:
+                console.print(f"[red]Critique failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.mechanism import MechanismCritique
+
+            crit = (await store.get(crit_id)).parse_payload(MechanismCritique)
+            console.print(f"[green]✓ MechanismCritique: {crit_id}[/green]")
+            console.print(f"  verdict: {crit.verdict.value}")
+            console.print(f"  overall: {crit.overall_assessment}")
+            for i in crit.issues:
+                console.print(f"  [{i.severity.value}] {i.category.value}: {i.description[:140]}")
+
+    asyncio.run(_run())
+
+
+@mechanisms_app.command("select")
+def mechanisms_select(
+    candidate_id: Annotated[str, typer.Argument(help="MechanismCandidate artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Select/revise a mechanism candidate into the SelectedMechanism (Phase 3A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.mechanism_critic",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in ["storage.artifacts_sqlite", "research.mechanism_critic"]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("mechanism_critic.default")
+            try:
+                sm_id = await svc.select(candidate_id)
+            except Exception as e:
+                console.print(f"[red]Mechanism selection failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.mechanism import SelectedMechanism
+
+            sm = (await store.get(sm_id)).parse_payload(SelectedMechanism)
+            console.print(f"[green]✓ SelectedMechanism: {sm_id}[/green]")
+            console.print(f"  name: {sm.name}")
+            console.print(f"  candidate: {sm.mechanism_candidate_id}")
+            console.print(f"  critiques incorporated: {len(sm.critique_ids)}")
+            if sm.revision_notes:
+                console.print(f"  revision notes: {len(sm.revision_notes)}")
+            console.print(f"  causal logic: {sm.causal_logic[:200]}")
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 3B: formal analytical model commands
+# ---------------------------------------------------------------------------
+
+
+@model_app.command("build")
+def model_build(
+    mechanism: Annotated[str, typer.Option("--mechanism", help="SelectedMechanism artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Build a formal analytical model specification (Phase 3B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.model_builder",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in ["storage.artifacts_sqlite", "research.model_builder"]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("analytical_model_builder.default")
+            try:
+                exec_id = await svc.build(mechanism)
+            except Exception as e:
+                console.print(f"[red]Model build failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.model import (
+                FormalAnalyticalModel,
+                ModelSpecificationExecution,
+            )
+
+            rec = (await store.get(exec_id)).parse_payload(ModelSpecificationExecution)
+            if rec.rejected:
+                console.print("[red]Model specification rejected by structural validation[/red]")
+                for f in rec.failures:
+                    console.print(f"  [red]{f.get('error', '')}[/red]")
+                raise typer.Exit(code=1)
+            console.print(f"[green]✓ Model build execution: {exec_id}[/green]")
+            for env in reversed(await store.list(artifact_type="formal_analytical_model")):
+                m = env.parse_payload(FormalAnalyticalModel)
+                if m.selected_mechanism_id == mechanism:
+                    console.print(f"  Model: {env.artifact_id} ({m.status.value})")
+                    console.print(f"  {m.title}")
+                    console.print(
+                        f"  actors {len(m.actors)}, variables {len(m.variables)}, "
+                        f"parameters {len(m.parameters)}, assumptions {len(m.assumptions)}, "
+                        f"stages {len(m.timing)}, payoffs {len(m.payoffs)}"
+                    )
+                    break
+
+    asyncio.run(_run())
+
+
+@model_app.command("inspect")
+def model_inspect(
+    model_id: Annotated[str, typer.Argument(help="FormalAnalyticalModel artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a formal analytical model (Phase 3B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                m_env = await store.get(model_id)
+            except Exception as e:
+                console.print(f"[red]Model {model_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.model import FormalAnalyticalModel
+
+            m = m_env.parse_payload(FormalAnalyticalModel)
+            console.print(f"[bold]FormalAnalyticalModel {model_id}[/bold]")
+            console.print(f"  {m.title}  ({m.status.value})")
+            console.print(f"  mechanism: {m.selected_mechanism_id}")
+            console.print(f"  game_type: {m.game_type or '?'}")
+            console.print(f"  actors: {', '.join(a.actor_id for a in m.actors)}")
+            console.print("  variables:")
+            for v in m.variables:
+                console.print(
+                    f"    {v.symbol} [{v.kind.value}] owner={v.owner_actor_id or '-'} "
+                    f"domain={v.domain}: {v.meaning[:70]}"
+                )
+            console.print(f"  parameters: {', '.join(p.symbol for p in m.parameters)}")
+            console.print("  timing:")
+            for t in m.timing:
+                console.print(
+                    f"    Stage {t.stage_number} {t.name}: {t.description[:80]} actors={t.actor_ids}"
+                )
+            console.print("  payoffs:")
+            for p in m.payoffs:
+                console.print(
+                    f"    {p.actor_id} ({p.objective_type}): {p.expression.expression} "
+                    f"decisions={p.decision_variables}"
+                )
+            console.print("  assumptions:")
+            for a in m.assumptions:
+                console.print(
+                    f"    [{a.knowledge_basis.value}] {a.statement[:90]} "
+                    f"(restrictiveness {a.restrictiveness})"
+                )
+            parents = await store.get_parents(m_env.artifact_id)
+            for p in parents:
+                console.print(f"  provenance: {p.relation.value} <- {p.source_artifact_id}")
+
+    asyncio.run(_run())
+
+
+@model_app.command("critique")
+def model_critique(
+    model_id: Annotated[str, typer.Argument(help="FormalAnalyticalModel artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Critique a formal analytical model (Phase 3B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.model_builder",
+                        "research.model_specification_critic",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in [
+            "storage.artifacts_sqlite",
+            "research.model_builder",
+            "research.model_specification_critic",
+        ]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("model_specification_critic.default")
+            try:
+                crit_id = await svc.critique(model_id)
+            except Exception as e:
+                console.print(f"[red]Model critique failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.model import ModelSpecificationCritique
+
+            crit = (await store.get(crit_id)).parse_payload(ModelSpecificationCritique)
+            console.print(f"[green]✓ ModelSpecificationCritique: {crit_id}[/green]")
+            console.print(f"  verdict: {crit.verdict}")
+            console.print(f"  overall: {crit.overall_assessment}")
+            for i in crit.issues:
+                console.print(f"  [{i.severity}] {i.category.value}: {i.description[:140]}")
+
+    asyncio.run(_run())
+
+
+@model_app.command("revise")
+def model_revise(
+    model_id: Annotated[str, typer.Argument(help="FormalAnalyticalModel artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Revise a formal analytical model in response to critique (Phase 3B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.model_builder",
+                        "research.model_specification_critic",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in [
+            "storage.artifacts_sqlite",
+            "research.model_builder",
+            "research.model_specification_critic",
+        ]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("model_specification_critic.default")
+            try:
+                v2_id = await svc.revise(model_id)
+            except Exception as e:
+                console.print(f"[red]Model revision failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.model import FormalAnalyticalModel
+
+            v2 = (await store.get(v2_id)).parse_payload(FormalAnalyticalModel)
+            console.print(f"[green]✓ Revised FormalAnalyticalModel: {v2_id}[/green]")
+            console.print(f"  {v2.title}  status={v2.status.value}")
+            console.print(f"  revision notes: {len(v2.revision_notes)}")
+            for note in v2.revision_notes[:8]:
+                console.print(f"    - {note}")
+            console.print(
+                f"  actors {len(v2.actors)}, variables {len(v2.variables)}, "
+                f"assumptions {len(v2.assumptions)}, stages {len(v2.timing)}, "
+                f"payoffs {len(v2.payoffs)}"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 3C: equilibrium derivation commands
+# ---------------------------------------------------------------------------
+
+
+@equilibrium_app.command("derive")
+def equilibrium_derive(
+    model: Annotated[str, typer.Option("--model", help="FormalAnalyticalModel artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Derive + symbolically verify equilibrium (Phase 3C)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.equilibrium_verifier",
+                        "research.equilibrium_deriver",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in [
+            "storage.artifacts_sqlite",
+            "research.equilibrium_verifier",
+            "research.equilibrium_deriver",
+        ]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("equilibrium_deriver.default")
+            try:
+                exec_id = await svc.derive(model)
+            except Exception as e:
+                console.print(f"[red]Equilibrium derivation failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.equilibrium import (
+                EquilibriumAnalysis,
+                EquilibriumExecution,
+                EquilibriumVerification,
+            )
+
+            rec = (await store.get(exec_id)).parse_payload(EquilibriumExecution)
+            if rec.status.value == "not_solvable":
+                console.print("[red]Model not solvable:[/red]")
+                for f in rec.failures:
+                    console.print(f"  [red]{f.get('error', '')}[/red]")
+                raise typer.Exit(code=1)
+            console.print(f"[green]✓ Equilibrium execution: {exec_id}[/green]")
+            console.print(
+                f"  status {rec.status.value}  problems {rec.optimization_problems_created} "
+                f"focs {rec.focs_created} brs {rec.best_responses_created} "
+                f"candidates {rec.candidates_created}  verification {rec.verification_status.value}"
+            )
+            analyses = await store.list(artifact_type="equilibrium_analysis")
+            for a_env in reversed(analyses):
+                a = a_env.parse_payload(EquilibriumAnalysis)
+                if a.model_id == model:
+                    console.print(f"  EquilibriumAnalysis: {a_env.artifact_id} ({a.status.value})")
+                    console.print(
+                        f"  solution order: {' -> '.join(a.solution_order) or 'n/a'}  method: {a.solution_method}"
+                    )
+                    for cid in a.candidate_ids:
+                        c = (await store.get(cid)).parse_payload(
+                            __import__(
+                                "research_harness.research.schemas.equilibrium",
+                                fromlist=["EquilibriumCandidate"],
+                            ).EquilibriumCandidate
+                        )
+                        line = ", ".join(
+                            f"{e.variable} = {e.expression.expression}" for e in c.expressions
+                        )
+                        console.print(f"    [{c.proposed_by}] {c.solution_method}: {line[:110]}")
+                    if a.selected_candidate_id:
+                        for vid in a.verification_ids:
+                            v = (await store.get(vid)).parse_payload(EquilibriumVerification)
+                            if v.candidate_id == a.selected_candidate_id:
+                                console.print(
+                                    f"  selected {a.selected_candidate_id[:8]} [{v.status.value}]"
+                                )
+                                for chk in v.checks:
+                                    console.print(
+                                        f"    {'✓' if chk.passed else '✗'} {chk.check_type.value}: {chk.detail[:100]}"
+                                    )
+                    break
+
+    asyncio.run(_run())
+
+
+@equilibrium_app.command("inspect")
+def equilibrium_inspect(
+    analysis_id: Annotated[str, typer.Argument(help="EquilibriumAnalysis artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect an EquilibriumAnalysis (Phase 3C)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                a_env = await store.get(analysis_id)
+            except Exception as e:
+                console.print(f"[red]Analysis {analysis_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.equilibrium import (
+                EquilibriumAnalysis,
+                EquilibriumCandidate,
+                EquilibriumVerification,
+            )
+
+            a = a_env.parse_payload(EquilibriumAnalysis)
+            console.print(f"[bold]EquilibriumAnalysis {analysis_id}[/bold]")
+            console.print(f"  model: {a.model_id}")
+            console.print(f"  status: {a.status.value}  method: {a.solution_method}")
+            console.print(f"  solution order: {' -> '.join(a.solution_order) or 'n/a'}")
+            console.print(f"  revisions used: {a.revision_rounds}")
+            for cid in a.candidate_ids:
+                c = (await store.get(cid)).parse_payload(EquilibriumCandidate)
+                console.print(f"  candidate {cid} [{c.proposed_by}] round {c.revision_round}:")
+                for e in c.expressions:
+                    console.print(
+                        f"    {e.variable} = {e.expression.expression}  "
+                        f"(conditions: {'; '.join(e.conditions) or '-'})"
+                    )
+            for vid in a.verification_ids:
+                v = (await store.get(vid)).parse_payload(EquilibriumVerification)
+                tag = (
+                    "[green]✓[/green]"
+                    if v.status.value == "verified"
+                    else "[yellow]~[/yellow]"
+                    if v.status.value == "partially_verified"
+                    else "[red]✗[/red]"
+                )
+                console.print(f"  verification {vid} {tag} {v.status.value}")
+                for chk in v.checks:
+                    console.print(
+                        f"    {'✓' if chk.passed else '✗'} {chk.check_type.value}: {chk.detail[:110]}"
+                    )
+            if a.verification_ids:
+                parents = await store.get_parents(a_env.artifact_id)
+                for p in parents:
+                    console.print(f"  provenance: {p.relation.value} <- {p.source_artifact_id}")
+
+    asyncio.run(_run())
+
+
+@equilibrium_app.command("verify")
+def equilibrium_verify(
+    candidate_id: Annotated[str, typer.Argument(help="EquilibriumCandidate artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Symbolically verify an equilibrium candidate (Phase 3C)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite", "research.equilibrium_verifier"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in ["storage.artifacts_sqlite", "research.equilibrium_verifier"]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("equilibrium_verifier.default")
+            try:
+                v_id = await svc.verify(candidate_id)
+            except Exception as e:
+                console.print(f"[red]Verification failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.equilibrium import EquilibriumVerification
+
+            v = (await store.get(v_id)).parse_payload(EquilibriumVerification)
+            tag = (
+                "[green]✓[/green]"
+                if v.status.value == "verified"
+                else "[yellow]~[/yellow]"
+                if v.status.value == "partially_verified"
+                else "[red]✗[/red]"
+            )
+            console.print(
+                f"[green]✓ EquilibriumVerification: {v_id}[/green] {tag} {v.status.value}"
+            )
+            for chk in v.checks:
+                console.print(
+                    f"  {'✓' if chk.passed else '✗'} {chk.check_type.value}: {chk.detail[:110]}"
+                )
+            if v.conditions_required:
+                console.print(f"  conditions: {'; '.join(v.conditions_required)}")
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 3D: comparative statics + propositions commands
+# ---------------------------------------------------------------------------
+
+
+@comparative_statics_app.command("run")
+def comparative_statics_run(
+    equilibrium: Annotated[
+        str, typer.Option("--equilibrium", help="EquilibriumAnalysis artifact id")
+    ],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Derive comparative statics of a verified equilibrium (Phase 3D)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite", "research.comparative_statics"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("comparative_statics.default")
+            try:
+                exec_id = await svc.run(equilibrium)
+            except Exception as e:
+                console.print(f"[red]Comparative statics failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.proposition import (
+                ComparativeStatic,
+                ComparativeStaticsAnalysis,
+                ComparativeStaticsExecution,
+            )
+
+            rec = (await store.get(exec_id)).parse_payload(ComparativeStaticsExecution)
+            console.print(f"[green]✓ Comparative statics execution: {exec_id}[/green]")
+            console.print(f"  statics: {rec.statics_created}")
+            for env in reversed(await store.list(artifact_type="comparative_statics_analysis")):
+                a = env.parse_payload(ComparativeStaticsAnalysis)
+                if a.equilibrium_candidate_id == rec.equilibrium_candidate_id:
+                    console.print(f"  ComparativeStaticsAnalysis: {env.artifact_id}")
+                    for sid in a.static_ids:
+                        s = (await store.get(sid)).parse_payload(ComparativeStatic)
+                        console.print(
+                            f"    d{s.outcome_variable}/d{s.parameter} = "
+                            f"{s.derivative_expression.expression}  [{s.sign.value}]"
+                            + (f"  ({'; '.join(s.conditions)})" if s.conditions else "")
+                        )
+                    break
+
+    asyncio.run(_run())
+
+
+@comparative_statics_app.command("inspect")
+def comparative_statics_inspect(
+    analysis_id: Annotated[str, typer.Argument(help="ComparativeStaticsAnalysis artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a ComparativeStaticsAnalysis (Phase 3D)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                a_env = await store.get(analysis_id)
+            except Exception as e:
+                console.print(f"[red]Analysis {analysis_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.proposition import (
+                ComparativeStatic,
+                ComparativeStaticsAnalysis,
+            )
+
+            a = a_env.parse_payload(ComparativeStaticsAnalysis)
+            console.print(f"[bold]ComparativeStaticsAnalysis {analysis_id}[/bold]")
+            console.print(f"  model: {a.model_id}")
+            console.print(f"  equilibrium candidate: {a.equilibrium_candidate_id}")
+            console.print(f"  summary: {a.summary}")
+            for sid in a.static_ids:
+                s = (await store.get(sid)).parse_payload(ComparativeStatic)
+                tag = (
+                    "[green]✓[/green]"
+                    if s.sign.value == "positive"
+                    else "[red]✓[/red]"
+                    if s.sign.value == "negative"
+                    else "[yellow]0[/yellow]"
+                    if s.sign.value == "zero"
+                    else "[yellow]~[/yellow]"
+                )
+                console.print(
+                    f"  {tag} d{s.outcome_variable}/d{s.parameter} = "
+                    f"{s.derivative_expression.expression}  [{s.sign.value}]"
+                    + (f"  conditions: {'; '.join(s.conditions)}" if s.conditions else "")
+                )
+            parents = await store.get_parents(a_env.artifact_id)
+            for p in parents:
+                console.print(f"  provenance: {p.relation.value} <- {p.source_artifact_id}")
+
+    asyncio.run(_run())
+
+
+@propositions_app.command("generate")
+def propositions_generate(
+    analysis: Annotated[
+        str,
+        typer.Option("--analysis", help="ComparativeStaticsAnalysis artifact id (Phase 3D)"),
+    ],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Generate, verify, critique, and interpret propositions (Phase 3D)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": [
+                        "storage.artifacts_sqlite",
+                        "research.proposition_verifier",
+                        "research.proposition_critic",
+                        "research.proposition_generator",
+                        "model.openrouter",
+                        "routing.role_router",
+                        "autonomy.configurable",
+                    ],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in [
+            "storage.artifacts_sqlite",
+            "research.proposition_verifier",
+            "research.proposition_critic",
+            "research.proposition_generator",
+        ]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("proposition_generator.default")
+            try:
+                prop_ids = await svc.generate(analysis)
+            except Exception as e:
+                console.print(f"[red]Proposition generation failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.proposition import (
+                EconomicInterpretation,
+                Proposition,
+                PropositionCritique,
+                PropositionVerification,
+            )
+
+            console.print(f"[green]✓ Propositions: {len(prop_ids)}[/green]")
+            for pid in prop_ids:
+                p = (await store.get(pid)).parse_payload(Proposition)
+                v = next(
+                    (
+                        env.parse_payload(PropositionVerification)
+                        for env in await store.list(artifact_type="proposition_verification")
+                        if env.parse_payload(PropositionVerification).proposition_id == pid
+                    ),
+                    None,
+                )
+                tag = (
+                    "[green]✓[/green]"
+                    if v and v.status.value == "verified"
+                    else "[yellow]~[/yellow]"
+                    if v and v.status.value == "conditionally_verified"
+                    else "[red]✗[/red]"
+                )
+                console.print(f"  {tag} {pid[:8]} [{p.claim_type.value}] {p.statement[:90]}")
+                crits = [
+                    env.parse_payload(PropositionCritique)
+                    for env in await store.list(artifact_type="proposition_critique")
+                    if env.parse_payload(PropositionCritique).proposition_id == pid
+                ]
+                if crits:
+                    console.print(f"     critique verdict: {crits[0].verdict.value}")
+                interps = [
+                    env.parse_payload(EconomicInterpretation)
+                    for env in await store.list(artifact_type="economic_interpretation")
+                    if env.parse_payload(EconomicInterpretation).proposition_id == pid
+                ]
+                if interps:
+                    console.print(
+                        f"     interpretation: {interps[0].economic_interpretation[:100]}"
+                    )
+
+    asyncio.run(_run())
+
+
+@propositions_app.command("inspect")
+def propositions_inspect(
+    proposition_id: Annotated[str, typer.Argument(help="Proposition artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a proposition with its verification/critique/interpretation."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                p_env = await store.get(proposition_id)
+            except Exception as e:
+                console.print(f"[red]Proposition {proposition_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.proposition import (
+                EconomicInterpretation,
+                Proposition,
+                PropositionCritique,
+                PropositionVerification,
+            )
+
+            p = p_env.parse_payload(Proposition)
+            console.print(f"[bold]Proposition {proposition_id}[/bold]")
+            console.print(f"  {p.statement}")
+            console.print(
+                f"  claim_type: {p.claim_type.value}  outcome: {p.outcome_variable or '-'}  "
+                f"parameter: {p.parameter or '-'}  expected_sign: {p.expected_sign or '-'}"
+            )
+            console.print(f"  conditions: {'; '.join(p.conditions) or '-'}")
+            console.print(f"  supporting statics: {p.supporting_static_ids}")
+            for env in await store.list(artifact_type="proposition_verification"):
+                v = env.parse_payload(PropositionVerification)
+                if v.proposition_id == proposition_id:
+                    tag = (
+                        "[green]✓[/green]"
+                        if v.status.value == "verified"
+                        else "[yellow]~[/yellow]"
+                        if v.status.value == "conditionally_verified"
+                        else "[red]✗[/red]"
+                    )
+                    console.print(f"  verification {tag} {v.status.value}")
+                    for chk in v.checks:
+                        console.print(
+                            f"    {'✓' if chk.passed else '✗'} {chk.check_type.value}: {chk.detail[:110]}"
+                        )
+            for env in await store.list(artifact_type="proposition_critique"):
+                c = env.parse_payload(PropositionCritique)
+                if c.proposition_id == proposition_id:
+                    console.print(f"  critique verdict: {c.verdict.value}")
+                    for i in c.issues:
+                        console.print(
+                            f"    [{i.severity}] {i.category.value}: {i.description[:110]}"
+                        )
+            for env in await store.list(artifact_type="economic_interpretation"):
+                i = env.parse_payload(EconomicInterpretation)
+                if i.proposition_id == proposition_id:
+                    console.print(f"  interpretation ({i.model_role}):")
+                    console.print(f"    math: {i.mathematical_result[:110]}")
+                    console.print(f"    economic: {i.economic_interpretation[:110]}")
+                    console.print(f"    managerial: {i.managerial_implication[:110]}")
+                    console.print(f"    IS: {i.is_theoretical_implication[:110]}")
+
+    asyncio.run(_run())
+
+
+@propositions_app.command("verify")
+def propositions_verify(
+    proposition_id: Annotated[str, typer.Argument(help="Proposition artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Symbolically verify a proposition (Phase 3D)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite", "research.proposition_verifier"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        for req in ["storage.artifacts_sqlite", "research.proposition_verifier"]:
+            if req not in cfg.plugins:
+                cfg.plugins.append(req)
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("proposition_verifier.default")
+            try:
+                v_id = await svc.verify(proposition_id)
+            except Exception as e:
+                console.print(f"[red]Verification failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.proposition import PropositionVerification
+
+            v = (await store.get(v_id)).parse_payload(PropositionVerification)
+            tag = (
+                "[green]✓[/green]"
+                if v.status.value == "verified"
+                else "[yellow]~[/yellow]"
+                if v.status.value == "conditionally_verified"
+                else "[red]✗[/red]"
+            )
+            console.print(
+                f"[green]✓ PropositionVerification: {v_id}[/green] {tag} {v.status.value}"
+            )
+            for chk in v.checks:
+                console.print(
+                    f"  {'✓' if chk.passed else '✗'} {chk.check_type.value}: {chk.detail[:110]}"
+                )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 3E: numerical experiment commands
+# ---------------------------------------------------------------------------
+
+
+@numerical_app.command("run")
+def numerical_run(
+    equilibrium: Annotated[
+        str, typer.Option("--equilibrium", help="EquilibriumAnalysis artifact id")
+    ],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Run deterministic numerical experiments on a verified equilibrium (Phase 3E)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite", "research.numerical_analysis"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("numerical_analysis.default")
+            try:
+                exec_id = await svc.run(equilibrium)
+            except Exception as e:
+                console.print(f"[red]Numerical run failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.numerical import (
+                NumericalExperiment,
+                NumericalExperimentExecution,
+            )
+
+            rec = (await store.get(exec_id)).parse_payload(NumericalExperimentExecution)
+            console.print(f"[green]✓ Numerical execution: {exec_id}[/green]")
+            console.print(f"  engine {rec.engine} {rec.engine_version}  seed {rec.seed}")
+            console.print(
+                f"  sweeps {rec.sweeps_created}  results {rec.results_created}  "
+                f"infeasible {rec.results_infeasible}  robustness {rec.robustness_created}  "
+                f"welfare {rec.welfare_created}"
+            )
+            for env in reversed(await store.list(artifact_type="numerical_experiment")):
+                exp = env.parse_payload(NumericalExperiment)
+                if exp.equilibrium_candidate_id == rec.equilibrium_candidate_id:
+                    console.print(f"  NumericalExperiment: {env.artifact_id}")
+                    console.print(f"  {exp.summary}")
+                    break
+
+    asyncio.run(_run())
+
+
+@numerical_app.command("inspect")
+def numerical_inspect(
+    experiment_id: Annotated[str, typer.Argument(help="NumericalExperiment artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a NumericalExperiment (Phase 3E)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                exp_env = await store.get(experiment_id)
+            except Exception as e:
+                console.print(f"[red]Experiment {experiment_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.numerical import (
+                NumericalExperiment,
+                NumericalResult,
+                ParameterSweep,
+            )
+
+            exp = exp_env.parse_payload(NumericalExperiment)
+            console.print(f"[bold]NumericalExperiment {experiment_id}[/bold]")
+            console.print(f"  model: {exp.model_id}  equilibrium: {exp.equilibrium_candidate_id}")
+            console.print(f"  status: {exp.status}  summary: {exp.summary}")
+            for sid in exp.sweeps:
+                s = (await store.get(sid)).parse_payload(ParameterSweep)
+                console.print(
+                    f"  sweep {s.name} [{s.kind.value}]: {len(s.dimensions)} dim(s), "
+                    f"{s.total_points} points"
+                )
+            for rid in exp.results[:8]:
+                r = (await store.get(rid)).parse_payload(NumericalResult)
+                console.print(
+                    f"  [{r.scenario} {r.group or ''}] {r.parameter_values} -> {r.outcomes}"
+                )
+            if len(exp.results) > 8:
+                console.print(f"  ... {len(exp.results) - 8} more results")
+            for cid in exp.robustness:
+                c = (await store.get(cid)).parse_payload(
+                    __import__(
+                        "research_harness.research.schemas.numerical",
+                        fromlist=["RobustnessCheck"],
+                    ).RobustnessCheck
+                )
+                console.print(f"  robustness [{c.outcome.value}] {c.description[:70]}")
+            for wid in exp.welfare:
+                w = (await store.get(wid)).parse_payload(
+                    __import__(
+                        "research_harness.research.schemas.numerical",
+                        fromlist=["WelfareAnalysis"],
+                    ).WelfareAnalysis
+                )
+                console.print(f"  welfare total {w.total_welfare}")
+            parents = await store.get_parents(exp_env.artifact_id)
+            for p in parents:
+                console.print(f"  provenance: {p.relation.value} <- {p.source_artifact_id}")
+
+    asyncio.run(_run())
+
+
+@numerical_app.command("results")
+def numerical_results(
+    experiment_id: Annotated[str, typer.Argument(help="NumericalExperiment artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """List all NumericalResult series rows (visualization-ready)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            exp = (await store.get(experiment_id)).parse_payload(
+                __import__(
+                    "research_harness.research.schemas.numerical",
+                    fromlist=["NumericalExperiment"],
+                ).NumericalExperiment
+            )
+            from research_harness.research.schemas.numerical import NumericalResult
+
+            header = "feasible | x_param | x_value | parameters -> outcomes"
+            console.print(f"[bold]{header}[/bold]")
+            for rid in exp.results:
+                r = (await store.get(rid)).parse_payload(NumericalResult)
+                console.print(
+                    f"{'✓' if r.feasible else '✗'} {r.x_parameter or '-'} | {r.x_value or '-'} | "
+                    f"{r.parameter_values} -> {r.outcomes}"
+                    + (f"  [invalid: {r.infeasible_reason}]" if not r.feasible else "")
+                )
+            if exp.metadata.get("series_blob_ref"):
+                console.print(
+                    f"[bold]full series table in blob: {exp.metadata['series_blob_ref']['digest'][:16]}...[/bold]"
+                )
+
+    asyncio.run(_run())
+
+
+@numerical_app.command("robustness")
+def numerical_robustness(
+    experiment_id: Annotated[str, typer.Argument(help="NumericalExperiment artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Show robustness checks of a NumericalExperiment (Phase 3E)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            exp = (await store.get(experiment_id)).parse_payload(
+                __import__(
+                    "research_harness.research.schemas.numerical",
+                    fromlist=["NumericalExperiment"],
+                ).NumericalExperiment
+            )
+            from research_harness.research.schemas.numerical import RobustnessCheck
+
+            for cid in exp.robustness:
+                c = (await store.get(cid)).parse_payload(RobustnessCheck)
+                tag = (
+                    "[green]✓[/green]"
+                    if c.outcome.value == "supported"
+                    else "[yellow]~[/yellow]"
+                    if c.outcome.value == "not_testable"
+                    else "[red]✗[/red]"
+                )
+                console.print(f"  {tag} [{c.outcome.value}] {c.check_type.value}: {c.description}")
+                console.print(f"      {c.conclusion}  (admissible: {c.admissible_points})")
+                for v in c.violations[:5]:
+                    console.print(f"      violation at {v.parameter_values}: {v.detail}")
+
+    asyncio.run(_run())
+
+
+@numerical_app.command("welfare")
+def numerical_welfare(
+    experiment_id: Annotated[str, typer.Argument(help="NumericalExperiment artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Show welfare analysis of a NumericalExperiment (Phase 3E)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            exp = (await store.get(experiment_id)).parse_payload(
+                __import__(
+                    "research_harness.research.schemas.numerical",
+                    fromlist=["NumericalExperiment"],
+                ).NumericalExperiment
+            )
+            from research_harness.research.schemas.numerical import WelfareAnalysis
+
+            for wid in exp.welfare:
+                w = (await store.get(wid)).parse_payload(WelfareAnalysis)
+                console.print(f"[bold]WelfareAnalysis {wid}[/bold]")
+                console.print(f"  scenario: {w.scenario}  parameters: {w.parameter_values}")
+                for m in w.metrics:
+                    console.print(f"  {m.name}: {m.value}")
+                console.print(f"  total welfare: {w.total_welfare}")
+                for n in w.notes:
+                    console.print(f"  note: {n}")
 
     asyncio.run(_run())
 

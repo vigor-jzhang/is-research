@@ -179,6 +179,38 @@ uv run --env-file .env research-agent literature gaps run --synthesis <synthesis
 uv run research-agent literature gaps list --analysis <gap-analysis-id>
 uv run research-agent literature gaps inspect <gap-id>
 uv run research-agent literature gaps analysis inspect <analysis-id>
+
+# Mechanism development (Phase 3A, gap selection -> candidate -> critique -> selection)
+uv run --env-file .env research-agent research gap-select --analysis <gap-analysis-id> [--gap <gap-id>]
+uv run --env-file .env research-agent research mechanisms generate --selection <gap-selection-id>
+uv run research-agent research mechanisms inspect <candidate-id>
+uv run --env-file .env research-agent research mechanisms critique <candidate-id>
+uv run --env-file .env research-agent research mechanisms select <candidate-id>
+
+# Formal analytical model (Phase 3B, structured specification)
+uv run --env-file .env research-agent research model build --mechanism <selected-mechanism-id>
+uv run research-agent research model inspect <model-id>
+uv run --env-file .env research-agent research model critique <model-id>
+uv run --env-file .env research-agent research model revise <model-id>
+
+# Equilibrium derivation (Phase 3C, symbolic)
+uv run --env-file .env research-agent research equilibrium derive --model <model-id>
+uv run research-agent research equilibrium inspect <analysis-id>
+uv run research-agent research equilibrium verify <candidate-id>
+
+# Propositions (Phase 3D, comparative statics + economic interpretation)
+uv run research-agent research comparative-statics run --equilibrium <equilibrium-analysis-id>
+uv run research-agent research comparative-statics inspect <comparative-statics-analysis-id>
+uv run --env-file .env research-agent research propositions generate --analysis <comparative-statics-analysis-id>
+uv run research-agent research propositions inspect <proposition-id>
+uv run research-agent research propositions verify <proposition-id>
+
+# Numerical experiments (Phase 3E, deterministic + welfare)
+uv run research-agent research numerical run --equilibrium <equilibrium-analysis-id>
+uv run research-agent research numerical inspect <experiment-id>
+uv run research-agent research numerical results <experiment-id>
+uv run research-agent research numerical robustness <experiment-id>
+uv run research-agent research numerical welfare <experiment-id>
 ```
 
 The `run` command demonstrates:
@@ -197,7 +229,12 @@ uv run --env-file .env pytest -m live -v                 # OpenRouter live
 uv run --env-file .env pytest -m live_literature -v      # Crossref/Semantic Scholar live
 uv run --env-file .env pytest -m live_screening -v       # Screening live (OpenRouter)
 uv run --env-file .env pytest -m live_documents -v       # Document live (Unpaywall, needs UNPAYWALL_EMAIL)
-uv run --env-file .env pytest -m "live or live_literature or live_screening or live_documents" -v
+uv run --env-file .env pytest -m "live_gap_analysis or live_synthesis" -v  # Gap + synthesis live
+uv run --env-file .env pytest -m live_mechanism -v       # Mechanism development live
+uv run --env-file .env pytest -m live_model_specification -v  # Model specification live
+uv run --env-file .env pytest -m live_equilibrium -v       # Equilibrium derivation live
+uv run --env-file .env pytest -m live_propositions -v    # Propositions live
+uv run --env-file .env pytest -m live_numerical_analysis -v  # Numerical analysis live
 ```
 
 Provider tests use `respx` to mock `https://api.crossref.org/works`, `https://api.semanticscholar.org/graph/v1`, and `https://openrouter.ai/api/v1/chat/completions`.
