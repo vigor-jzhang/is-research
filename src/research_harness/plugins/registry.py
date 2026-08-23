@@ -283,6 +283,14 @@ def _create_publication_formatter() -> Plugin:
     return PublicationFormatterPlugin()
 
 
+def _create_novelty_validator() -> Plugin:
+    from research_harness.plugins.research.novelty_validator.plugin import (
+        NoveltyValidatorPlugin,
+    )
+
+    return NoveltyValidatorPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -360,6 +368,7 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "research.manuscript_drafter": _create_manuscript_drafter,
     "research.manuscript_critic": _create_manuscript_critic,
     "research.publication_formatter": _create_publication_formatter,
+    "research.novelty_validator": _create_novelty_validator,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

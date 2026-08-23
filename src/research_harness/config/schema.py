@@ -254,6 +254,74 @@ class ResearchPublicationConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class ResearchNoveltyEvidenceEnrichmentConfig(BaseModel):
+    enabled: bool = Field(
+        default=True,
+        description="Acquire missing abstracts/full text for sparse novelty candidates",
+    )
+    acquire_abstract: bool = Field(default=True)
+    acquire_full_text: bool = Field(default=True)
+    max_attempts_per_candidate: int = Field(default=3, ge=1, le=20)
+    abstract_providers: list[str] = Field(default_factory=lambda: ["semantic_scholar", "crossref"])
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchNoveltyEvidencePreacquisitionConfig(BaseModel):
+    enabled: bool = Field(
+        default=True,
+        description="Pre-acquire evidence for sparse candidates before assessment",
+    )
+    risk_levels: list[str] = Field(
+        default_factory=lambda: ["critical", "high"],
+        description="Only claims with these risks trigger pre-acquisition",
+    )
+    max_candidates_per_claim: int = Field(default=10, ge=1, le=100)
+    max_total_candidates: int = Field(default=30, ge=1, le=500)
+    prefer_abstract: bool = Field(default=True)
+    acquire_full_text: bool = Field(default=False)
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchNoveltyValidationConfig(BaseModel):
+    extractor_role: str = Field(
+        default="reasoning",
+        description="Logical model role for novelty extraction/planning/assessment",
+    )
+    critic_role: str = Field(
+        default="critic", description="Logical model role for the independent critic pass"
+    )
+    max_llm_calls: int = Field(default=40, ge=1, le=500)
+    max_queries_per_claim: int = Field(default=12, ge=1, le=30)
+    queries_per_risk: dict[str, int] = Field(
+        default_factory=lambda: {"critical": 10, "high": 6, "medium": 3, "low": 1},
+        description="Bounded query budgets per claim risk level",
+    )
+    max_results_per_query: int = Field(default=10, ge=1, le=50)
+    providers: list[str] = Field(
+        default_factory=lambda: ["semantic_scholar", "crossref"],
+        description="External literature providers used for novelty search",
+    )
+    search_year_window: int = Field(default=50, ge=1, le=200)
+    require_all_searches_succeed: bool = Field(
+        default=True,
+        description="Any failed search makes claim coverage insufficient (never a false clear)",
+    )
+    require_candidate_evidence: bool = Field(
+        default=True,
+        description="High/critical claims with evidence-less candidates are not clear",
+    )
+    evidence_enrichment: ResearchNoveltyEvidenceEnrichmentConfig = Field(
+        default_factory=ResearchNoveltyEvidenceEnrichmentConfig
+    )
+    evidence_preacquisition: ResearchNoveltyEvidencePreacquisitionConfig = Field(
+        default_factory=ResearchNoveltyEvidencePreacquisitionConfig
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class ResearchConfig(BaseModel):
     mechanism: ResearchMechanismConfig = Field(default_factory=ResearchMechanismConfig)
     model: ResearchModelConfig = Field(default_factory=ResearchModelConfig)
@@ -263,6 +331,9 @@ class ResearchConfig(BaseModel):
     results: ResearchResultsConfig = Field(default_factory=ResearchResultsConfig)
     manuscript: ResearchManuscriptConfig = Field(default_factory=ResearchManuscriptConfig)
     publication: ResearchPublicationConfig = Field(default_factory=ResearchPublicationConfig)
+    novelty: ResearchNoveltyValidationConfig = Field(
+        default_factory=ResearchNoveltyValidationConfig
+    )
 
     model_config = {"extra": "forbid"}
 

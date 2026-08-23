@@ -88,6 +88,8 @@ plugins:
   - research.results_critic
   - research.manuscript_drafter
   - research.manuscript_critic
+  - research.publication_formatter
+  - research.novelty_validator
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -262,6 +264,14 @@ uv run research-agent publication validate <manuscript-id>
 uv run research-agent publication export --manuscript <manuscript-id> --format latex
 uv run research-agent publication package --manuscript <manuscript-id> [--cover-letter]
 uv run research-agent publication inspect <package-id>
+
+# Novelty validation (Phase 5A/5B, external literature-based submission-risk gate)
+uv run research-agent novelty validate <submission-package-id> [--as-of 2026-08-23]
+uv run research-agent novelty revalidate <previous-report-id> <new-package-id> [--force-all]
+uv run research-agent novelty enrich <candidate-assessment-id>  # evidence enrichment (5C)
+uv run research-agent novelty report <package-id>       # reassess (supersedes)
+uv run research-agent novelty gate <package-id>         # gate from latest report
+uv run research-agent novelty inspect <report-or-gate-id>   # incl. staleness
 ```
 
 The `run` command demonstrates:
@@ -291,6 +301,7 @@ uv run --env-file .env pytest -m live_numerical_analysis -v  # Numerical analysi
 uv run --env-file .env pytest -m live_results_assembly -v  # Results assembly live
 uv run --env-file .env pytest -m live_manuscript -v  # Manuscript drafting live
 uv run --env-file .env pytest -m live_publication -v  # Publication formatting live
+uv run --env-file .env pytest -m live_novelty_validation -v  # Novelty validation live
 ```
 
 Provider tests use `respx` to mock `https://api.crossref.org/works`, `https://api.semanticscholar.org/graph/v1`, and `https://openrouter.ai/api/v1/chat/completions`.
@@ -315,7 +326,7 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All gates must pass: `414 passed, 17 skipped` (offline), ruff/format/pyright clean, `config validate` passes, live tests green on demand.
+All gates must pass: `458 passed, 19 skipped` (offline), ruff/format/pyright clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
 
@@ -362,6 +373,7 @@ src/research_harness/
       results_assembler, results_critic                     # Phase 4A
       manuscript_drafter, manuscript_critic                 # Phase 4B
       publication_formatter                                 # Phase 4C
+      novelty_validator                                    # Phase 5A
     documents/
       locator_metadata / locator_unpaywall
       fetcher_http (SSRF/size/PDF validation)
@@ -374,11 +386,11 @@ docs/
   literature-sources.md, search-strategy.md, screening.md, documents.md,
   evidence.md, synthesis.md, gaps.md
   mechanisms.md, models.md, equilibrium.md, propositions.md, numerical.md,
-  results.md, manuscript.md, publication.md
+  results.md, manuscript.md, publication.md, novelty.md
 tests/
-  unit/          # 46 files, all phases (kernel, plugins, schemas, services)
-  integration/   # 17 files, end-to-end offline chains (incl. phase3a-e, phase4a-c)
-  live/          # 15 opt-in live smokes (pytest -m <marker>, needs .env keys)
+  unit/          # 47 files, all phases (kernel, plugins, schemas, services)
+  integration/   # 18 files, end-to-end offline chains (incl. phase3a-e, phase4a-c, phase5a)
+  live/          # 16 opt-in live smokes (pytest -m <marker>, needs .env keys)
 ```
 
 ## Architecture
@@ -407,8 +419,24 @@ Implemented phases:
 - **Phase 4B** — evidence-grounded manuscript drafting, critique, revision
 - **Phase 4C** — publication formatting: citation resolution, bibliography,
   Markdown/LaTeX/DOCX/PDF exports, submission package
-- **Post-Phase-4 (not implemented)** — automatic journal submission,
-  peer-review response generation, external novelty validation
+- **Phase 5A** — external novelty validation: claim extraction, bounded search
+  planning, provider search, evidence-backed candidate assessment with an
+  independent critic pass, coverage-aware claim/report statuses, and the
+  immutable SubmissionReadinessGate
+- **Phase 5B** — incremental revalidation: deterministic change detection,
+  assessment reuse with explicit persisted reasons, affected-claim
+  revalidation, and staleness tracking so a changed manuscript can never
+  silently carry an old report forward
+- **Phase 5C** — evidence enrichment: sparse novelty candidates trigger
+  abstract/full-text acquisition through the existing provider/document
+  pipeline, reassessment via supersession, and recomputed report/gate —
+  without weakening conservative rules
+- **Phase 5D** — bounded evidence pre-acquisition: deterministic,
+  budget-bounded abstract/full-text acquisition for sparse high-risk
+  candidates before assessment, with cache hits, per-candidate selection
+  reasons, and metrics; Phase 5C remains the fallback
+- **Post-Phase-5 (not implemented)** — automatic journal submission,
+  peer-review response generation, open-access full-text prioritization
 
 Each phase has a per-phase doc under `docs/` and a completion report in the
 phase's doc; nothing beyond the implemented phases is claimed.

@@ -41,7 +41,7 @@ Research Harness is a plugin-first system. The kernel is deliberately small and 
                    Tools     Autonomy    Skills
 ```
 
-Research workflow plugins (literature, modeling, equilibrium, numerical, results, manuscript, publication) compose on the same kernel — see `docs/research-domain.md` and the per-phase docs (`docs/literature-sources.md`, `docs/screening.md`, `docs/evidence.md`, `docs/synthesis.md`, `docs/gaps.md`, `docs/mechanisms.md`, `docs/models.md`, `docs/equilibrium.md`, `docs/propositions.md`, `docs/numerical.md`, `docs/results.md`, `docs/manuscript.md`, `docs/publication.md`).
+Research workflow plugins (literature, modeling, equilibrium, numerical, results, manuscript, publication, novelty) compose on the same kernel — see `docs/research-domain.md` and the per-phase docs (`docs/literature-sources.md`, `docs/screening.md`, `docs/evidence.md`, `docs/synthesis.md`, `docs/gaps.md`, `docs/mechanisms.md`, `docs/models.md`, `docs/equilibrium.md`, `docs/propositions.md`, `docs/numerical.md`, `docs/results.md`, `docs/manuscript.md`, `docs/publication.md`, `docs/novelty.md`).
 
 The composition root is `src/research_harness/app/bootstrap.py` — it knows about both kernel and plugins; the kernel knows only about abstractions.
 

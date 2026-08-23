@@ -38,6 +38,7 @@ plugins:
   - research.manuscript_drafter
   - research.manuscript_critic
   - research.publication_formatter
+  - research.novelty_validator
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -160,6 +161,34 @@ research:
   publication:
     formatter_role: reasoning
     max_llm_calls: 10
+  novelty:
+    extractor_role: reasoning
+    critic_role: critic
+    max_llm_calls: 40
+    max_queries_per_claim: 12
+    queries_per_risk:
+      critical: 10
+      high: 6
+      medium: 3
+      low: 1
+    max_results_per_query: 10
+    providers: [semantic_scholar, crossref]
+    search_year_window: 50
+    require_all_searches_succeed: true
+    require_candidate_evidence: true
+    evidence_enrichment:
+      enabled: true
+      acquire_abstract: true
+      acquire_full_text: true
+      max_attempts_per_candidate: 3
+      abstract_providers: [semantic_scholar, crossref]
+    evidence_preacquisition:
+      enabled: true
+      risk_levels: [critical, high]
+      max_candidates_per_claim: 10
+      max_total_candidates: 30
+      prefer_abstract: true
+      acquire_full_text: false
 
 documents:
   blob_root: ".research/blobs"

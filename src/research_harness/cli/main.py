@@ -40,6 +40,9 @@ app.add_typer(manuscript_app, name="manuscript")
 publication_app = typer.Typer(help="Publication formatting (Phase 4C)")
 app.add_typer(publication_app, name="publication")
 
+novelty_app = typer.Typer(help="External novelty validation (Phase 5A)")
+app.add_typer(novelty_app, name="novelty")
+
 console = Console()
 
 
@@ -5377,6 +5380,497 @@ def publication_inspect(
             if pkg.cover_letter_id:
                 cl = (await store.get(pkg.cover_letter_id)).parse_payload(CoverLetter)
                 console.print(f"  cover letter: {pkg.cover_letter_id}  anonymous {cl.anonymous}")
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 5A — external novelty validation
+# ---------------------------------------------------------------------------
+
+
+def _novelty_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
+    cfg_path = config if config is not None and config.exists() else None
+    cfg = load_config(cfg_path) if cfg_path is not None else None
+    if cfg is None:
+        from research_harness.config.loader import load_config_from_dict
+
+        cfg = load_config_from_dict(
+            {
+                "plugins": [
+                    "storage.artifacts_sqlite",
+                    "literature.ingestion",
+                    "literature.identity_resolver",
+                    "literature.crossref",
+                    "literature.semantic_scholar",
+                    *extra_plugins,
+                ],
+                "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+            }
+        )
+    for pid in (
+        "storage.artifacts_sqlite",
+        "literature.ingestion",
+        "literature.identity_resolver",
+        "research.novelty_validator",
+    ):
+        if pid not in cfg.plugins:
+            cfg.plugins.append(pid)
+    return cfg
+
+
+@novelty_app.command("validate")
+def novelty_validate(
+    package: Annotated[str, typer.Argument(help="SubmissionPackage artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+    as_of: Annotated[
+        str | None, typer.Option(help="Assessment date YYYY-MM-DD (default: today)")
+    ] = None,
+    max_results: Annotated[
+        int | None, typer.Option("--max-results", help="Max results per query")
+    ] = None,
+    max_claims: Annotated[
+        int | None, typer.Option("--max-claims", help="Assess only the N highest-risk claims")
+    ] = None,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Deterministic-only mode (no LLM calls)")
+    ] = False,
+    report_only: Annotated[
+        bool, typer.Option("--report-only", help="Create the report without the readiness gate")
+    ] = False,
+) -> None:
+    """Validate manuscript novelty claims against external literature (Phase 5A).
+
+    Runs: claim extraction -> search planning -> external search -> candidate
+    prior-art assessment -> claim assessment -> NoveltyValidationReport, then a
+    SubmissionReadinessGate (unless --report-only).
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _novelty_config(
+            config,
+            [
+                "research.novelty_validator",
+                "literature.crossref",
+                "literature.semantic_scholar",
+            ],
+        )
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("novelty_validator.default")
+            store = runtime.services.require("artifact_store.default")
+            try:
+                report_id = await svc.create_report(
+                    package,
+                    as_of=as_of,
+                    offline=offline,
+                    max_results=max_results,
+                    max_claims=max_claims,
+                )
+            except Exception as e:
+                console.print(f"[red]Novelty validation failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.novelty import (
+                NoveltyClaimAssessment,
+                NoveltyValidationReport,
+            )
+
+            report = (await store.get(report_id)).parse_payload(NoveltyValidationReport)
+            console.print(f"[green]✓ NoveltyValidationReport: {report_id}[/green]")
+            console.print(
+                f"  status: [bold]{report.overall_status.value}[/bold]  "
+                f"as_of {report.as_of_date.isoformat()}"
+            )
+            console.print(
+                f"  claims {len(report.claim_ids)}  blocked {len(report.critical_threats)}  "
+                f"weakened {len(report.weakened_claims)}  "
+                f"unverified {len(report.unverified_claims)}  "
+                f"safe {len(report.safe_within_scope_claims)}"
+            )
+            for aid in report.claim_assessment_ids:
+                a = (await store.get(aid)).parse_payload(NoveltyClaimAssessment)
+                console.print(f"    claim {a.claim_id[:8]}… -> {a.status.value}")
+            if report_only:
+                return
+            gate_id = await svc.create_gate(package, report_id)
+            from research_harness.research.schemas.novelty import SubmissionReadinessGate
+
+            gate = (await store.get(gate_id)).parse_payload(SubmissionReadinessGate)
+            console.print(f"[green]✓ SubmissionReadinessGate: {gate_id}[/green]")
+            console.print(
+                f"  package {gate.package_status} + novelty {gate.novelty_status.value} "
+                f"-> [bold]{gate.status.value}[/bold]"
+            )
+
+    asyncio.run(_run())
+
+
+@novelty_app.command("report")
+def novelty_report(
+    package: Annotated[str, typer.Argument(help="SubmissionPackage artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+    as_of: Annotated[str | None, typer.Option(help="Assessment date YYYY-MM-DD")] = None,
+    max_results: Annotated[
+        int | None, typer.Option("--max-results", help="Max results per query")
+    ] = None,
+    max_claims: Annotated[
+        int | None, typer.Option("--max-claims", help="Assess only the N highest-risk claims")
+    ] = None,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Deterministic-only mode (no LLM calls)")
+    ] = False,
+) -> None:
+    """Re-run external novelty validation for a package (supersedes the previous report)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _novelty_config(
+            config,
+            [
+                "research.novelty_validator",
+                "literature.crossref",
+                "literature.semantic_scholar",
+            ],
+        )
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("novelty_validator.default")
+            store = runtime.services.require("artifact_store.default")
+            report_id = await svc.create_report(
+                package,
+                as_of=as_of,
+                offline=offline,
+                max_results=max_results,
+                max_claims=max_claims,
+            )
+            from research_harness.research.schemas.novelty import NoveltyValidationReport
+
+            report = (await store.get(report_id)).parse_payload(NoveltyValidationReport)
+            console.print(f"[green]✓ NoveltyValidationReport: {report_id}[/green]")
+            console.print(
+                f"  status: [bold]{report.overall_status.value}[/bold]  "
+                f"supersedes: {report.supersedes or '-'}"
+            )
+
+    asyncio.run(_run())
+
+
+@novelty_app.command("gate")
+def novelty_gate(
+    package: Annotated[str, typer.Argument(help="SubmissionPackage artifact id")],
+    report: Annotated[
+        str | None, typer.Option("--report", help="NoveltyValidationReport artifact id")
+    ] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Create the SubmissionReadinessGate from the latest (or given) report."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _novelty_config(config, ["research.novelty_validator"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("novelty_validator.default")
+            store = runtime.services.require("artifact_store.default")
+            gate_id = await svc.create_gate(package, report)
+            from research_harness.research.schemas.novelty import SubmissionReadinessGate
+
+            gate = (await store.get(gate_id)).parse_payload(SubmissionReadinessGate)
+            console.print(f"[green]✓ SubmissionReadinessGate: {gate_id}[/green]")
+            console.print(
+                f"  package {gate.package_status} + novelty {gate.novelty_status.value} "
+                f"-> [bold]{gate.status.value}[/bold]"
+            )
+
+    asyncio.run(_run())
+
+
+@novelty_app.command("revalidate")
+def novelty_revalidate(
+    previous_report: Annotated[
+        str, typer.Argument(help="Previous NoveltyValidationReport artifact id")
+    ],
+    package: Annotated[str, typer.Argument(help="New SubmissionPackage artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+    as_of: Annotated[str | None, typer.Option(help="Assessment date YYYY-MM-DD")] = None,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Deterministic-only mode (no LLM calls)")
+    ] = False,
+    force_all: Annotated[
+        bool, typer.Option("--force-all", help="Bypass reuse; full Phase 5A revalidation")
+    ] = False,
+    max_results: Annotated[
+        int | None, typer.Option("--max-results", help="Max results per query")
+    ] = None,
+) -> None:
+    """Incrementally revalidate novelty after a manuscript supersession (Phase 5B).
+
+    Detects changes, reuses unaffected claim assessments, revalidates affected
+    claims, and produces a NEW report + gate. --force-all skips reuse.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _novelty_config(
+            config,
+            [
+                "research.novelty_validator",
+                "literature.crossref",
+                "literature.semantic_scholar",
+            ],
+        )
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("novelty_validator.default")
+            store = runtime.services.require("artifact_store.default")
+            try:
+                report_id = await svc.revalidate(
+                    previous_report,
+                    package,
+                    as_of=as_of,
+                    offline=offline,
+                    force_all=force_all,
+                    max_results=max_results,
+                )
+            except Exception as e:
+                console.print(f"[red]Revalidation failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.novelty import (
+                NoveltyRevalidationExecution,
+                NoveltyValidationReport,
+                SubmissionReadinessGate,
+            )
+
+            report = (await store.get(report_id)).parse_payload(NoveltyValidationReport)
+            console.print(f"[green]✓ NoveltyValidationReport: {report_id}[/green]")
+            console.print(
+                f"  status: [bold]{report.overall_status.value}[/bold]  "
+                f"supersedes {report.supersedes or '-'}"
+            )
+            console.print(
+                f"  claims {len(report.claim_ids)}  reused {report.coverage_summary.get('claims_reused', 0)}  "
+                f"revalidated {report.coverage_summary.get('claims_revalidated', 0)}"
+            )
+            # the execution records the reuse decisions
+            for env in await store.list(artifact_type="novelty_revalidation_execution"):
+                ex = env.parse_payload(NoveltyRevalidationExecution)
+                if ex.resulting_report_id == report_id:
+                    console.print(
+                        f"  reused assessments {len(ex.reused_assessment_ids)}  "
+                        f"new assessments {len(ex.newly_assessment_ids)}"
+                    )
+                    console.print(f"  counts: {ex.counts}")
+            if report_id:
+                for env in await store.list(artifact_type="submission_readiness_gate"):
+                    g = env.parse_payload(SubmissionReadinessGate)
+                    if g.novelty_report_id == report_id:
+                        console.print(
+                            f"[green]✓ SubmissionReadinessGate: {env.artifact_id}[/green]"
+                        )
+                        console.print(
+                            f"  package {g.package_status} + novelty "
+                            f"{g.novelty_status.value} -> [bold]{g.status.value}[/bold]"
+                        )
+
+    asyncio.run(_run())
+
+
+@novelty_app.command("enrich")
+def novelty_enrich(
+    candidate: Annotated[str, typer.Argument(help="NoveltyCandidateAssessment artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Deterministic-only mode (no LLM calls)")
+    ] = False,
+) -> None:
+    """Enrich a sparse novelty candidate's evidence and reassess it (Phase 5C).
+
+    Acquires abstract/full text through the existing provider/document
+    infrastructure, then creates a superseding candidate assessment and
+    recomputes the claim assessment + report + gate when evidence improves.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _novelty_config(
+            config,
+            [
+                "research.novelty_validator",
+                "literature.crossref",
+                "literature.semantic_scholar",
+                "storage.blobs_filesystem",
+                "documents.locator.metadata",
+                "documents.fetcher.http",
+                "documents.extractor.pypdf",
+                "literature.evidence_extractor",
+            ],
+        )
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("novelty_validator.default")
+            store = runtime.services.require("artifact_store.default")
+            try:
+                new_id = await svc.enrich_candidate(candidate, offline=offline)
+            except Exception as e:
+                console.print(f"[red]Enrichment failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.novelty import (
+                EvidenceEnrichmentExecution,
+                NoveltyCandidateAssessment,
+                NoveltyValidationReport,
+                SubmissionReadinessGate,
+            )
+
+            assessment = (await store.get(new_id)).parse_payload(NoveltyCandidateAssessment)
+            console.print(
+                f"[green]✓ NoveltyCandidateAssessment: {new_id}[/green] "
+                f"(evidence {assessment.evidence_basis.value}, "
+                f"relationship {assessment.relationship.value})"
+            )
+            if new_id != candidate:
+                supers = [
+                    c
+                    for c in await store.get_children(candidate)
+                    if c.relation.value == "supersedes"
+                ]
+                if supers:
+                    console.print(f"  supersedes {candidate}")
+            for env in await store.list(artifact_type="evidence_enrichment_execution"):
+                ex = env.parse_payload(EvidenceEnrichmentExecution)
+                if ex.plan_id and new_id in await store.get_children(ex.plan_id):
+                    console.print(
+                        f"  enrichment: {ex.before_evidence_basis.value} -> "
+                        f"{ex.after_evidence_basis.value}  outcome {ex.outcome.value}  "
+                        f"attempts {len(ex.attempt_ids)}"
+                    )
+            # report the recomputed report/gate if any
+            for env in await store.list(artifact_type="novelty_validation_report"):
+                r = env.parse_payload(NoveltyValidationReport)
+                if r.metadata.get("recomputed_after_enrichment"):
+                    console.print(
+                        f"  recomputed report {env.artifact_id}: {r.overall_status.value}"
+                    )
+                    for genv in await store.list(artifact_type="submission_readiness_gate"):
+                        g = genv.parse_payload(SubmissionReadinessGate)
+                        if g.novelty_report_id == env.artifact_id:
+                            console.print(f"  recomputed gate {genv.artifact_id}: {g.status.value}")
+
+    asyncio.run(_run())
+
+
+@novelty_app.command("inspect")
+def novelty_inspect(
+    report: Annotated[
+        str, typer.Argument(help="NoveltyValidationReport or SubmissionReadinessGate artifact id")
+    ],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a NoveltyValidationReport or SubmissionReadinessGate (Phase 5A/5B).
+    Shows staleness: a report/gate is stale when its manuscript content hash no
+    longer matches the current manuscript lineage."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _novelty_config(config, ["research.novelty_validator"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            svc = runtime.services.require("novelty_validator.default")
+            try:
+                env = await store.get(report)
+            except Exception as e:
+                console.print(f"[red]Artifact {report!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.novelty import (
+                NoveltyClaim,
+                NoveltyClaimAssessment,
+                NoveltyRevisionRecommendation,
+                NoveltyValidationReport,
+                SubmissionReadinessGate,
+            )
+
+            if env.artifact_type == "submission_readiness_gate":
+                gate = env.parse_payload(SubmissionReadinessGate)
+                staleness = await svc.staleness(env.artifact_id)
+                console.print(f"[bold]SubmissionReadinessGate {report}[/bold]")
+                console.print(
+                    f"  status: {gate.status.value}  [bold]staleness: {staleness.value}[/bold]"
+                )
+                console.print(
+                    f"  package {gate.package_status} + novelty {gate.novelty_status.value} "
+                    f"(package {gate.submission_package_id})"
+                )
+                console.print(f"  report {gate.novelty_report_id}")
+                console.print(f"  manuscript {gate.manuscript_id}  draft {gate.draft_id}")
+                return
+
+            r = env.parse_payload(NoveltyValidationReport)
+            staleness = await svc.staleness(env.artifact_id)
+            console.print(f"[bold]NoveltyValidationReport {report}[/bold]")
+            console.print(
+                f"  status: {r.overall_status.value}  as_of {r.as_of_date.isoformat()}  "
+                f"supersedes {r.supersedes or '-'}  "
+                f"[bold]staleness: {staleness.value}[/bold]"
+            )
+            if staleness.value == "stale":
+                console.print(
+                    "  [red]STALE: the assessed manuscript is no longer the current "
+                    "one; revalidate before relying on this report[/red]"
+                )
+            console.print(f"  package {r.submission_package_id}  manuscript {r.manuscript_id}")
+            console.print(f"  hash {r.manuscript_content_hash[:16]}…")
+            if r.coverage_summary.get("revalidation"):
+                console.print(
+                    f"  revalidation: reused {r.coverage_summary.get('claims_reused', 0)}  "
+                    f"revalidated {r.coverage_summary.get('claims_revalidated', 0)}"
+                )
+            for cid in r.claim_ids:
+                c = (await store.get(cid)).parse_payload(NoveltyClaim)
+                console.print(
+                    f"  claim [{c.risk.value}] {c.claim_text[:90]}\n"
+                    f"    ({c.claim_type.value}, section {c.section_id})"
+                )
+            for aid in r.claim_assessment_ids:
+                a = (await store.get(aid)).parse_payload(NoveltyClaimAssessment)
+                console.print(
+                    f"  assessment {a.status.value}: {a.coverage.successful_query_count}/"
+                    f"{a.coverage.planned_query_count} searches, "
+                    f"{a.coverage.candidate_count} candidates"
+                )
+                console.print(f"    {a.reasoning[:160]}")
+            for rid in r.revision_recommendation_ids:
+                rec = (await store.get(rid)).parse_payload(NoveltyRevisionRecommendation)
+                console.print(f"  recommendation: {rec.suggested_wording or '(deterministic)'}")
+            if r.critic_assessment_ids:
+                console.print(
+                    f"  critic passes: {len(r.critic_assessment_ids)} "
+                    f"(disagreements preserved as separate artifacts)"
+                )
 
     asyncio.run(_run())
 

@@ -258,6 +258,7 @@ def _derived_plugin_configs(
         "research.manuscript_drafter": {"research": config.research.model_dump()},
         "research.manuscript_critic": {"research": config.research.model_dump()},
         "research.publication_formatter": {"research": config.research.model_dump()},
+        "research.novelty_validator": {"research": config.research.model_dump()},
         "documents.locator.metadata": {"documents": config.documents.model_dump()},
         "documents.locator.unpaywall": {"documents": config.documents.model_dump()},
         "documents.fetcher.http": {"documents": config.documents.model_dump()},
