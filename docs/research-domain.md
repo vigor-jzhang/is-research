@@ -41,8 +41,11 @@ Payload types live in `src/research_harness/research/schemas/`:
 - `OptimizationProblem/FirstOrderCondition/BestResponse/EquilibriumCandidate/EquilibriumVerification/EquilibriumAnalysis/EquilibriumExecution` — Phase 3C equilibrium derivation (see `docs/equilibrium.md`)
 - `ComparativeStatic/Proposition/PropositionVerification/PropositionCritique/EconomicInterpretation` — Phase 3D propositions (see `docs/propositions.md`)
 - `ParameterSweep/NumericalResult/RobustnessCheck/WelfareAnalysis/NumericalExperiment/NumericalExperimentExecution` — Phase 3E numerical experiments (see `docs/numerical.md`)
+- `ResearchFinding/ContributionClaim/ResearchImplication/ResearchResultsPackage/ResultsAssemblyExecution/ResultsCritique` — Phase 4A findings and claims (see `docs/results.md`)
+- `ManuscriptOutline/ManuscriptSection/CitationReference/ManuscriptDraft/ManuscriptDraftExecution/ManuscriptCritique` — Phase 4B manuscript drafting (see `docs/manuscript.md`)
+- `PublicationProfile/Bibliography/FormattedManuscript/SubmissionPackage/CoverLetter/PublicationExecution` — Phase 4C publication formatting (see `docs/publication.md`)
 
-Later phases add `ResearchGap`, `Mechanism`, etc., without kernel changes.
+All of these phases are implemented and compose on the kernel without kernel changes; each entry links its per-phase doc.
 
 All schemas are Pydantic v2, round-trip via JSON, and use explicit `schema_version`.
 

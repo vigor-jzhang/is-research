@@ -35,6 +35,10 @@ app.add_typer(runtime_app, name="runtime")
 app.add_typer(artifacts_app, name="artifacts")
 app.add_typer(literature_app, name="literature")
 app.add_typer(research_app, name="research")
+manuscript_app = typer.Typer(help="Manuscript drafting (Phase 4B)")
+app.add_typer(manuscript_app, name="manuscript")
+publication_app = typer.Typer(help="Publication formatting (Phase 4C)")
+app.add_typer(publication_app, name="publication")
 
 console = Console()
 
@@ -3072,6 +3076,12 @@ propositions_app = typer.Typer(help="Propositions (Phase 3D)")
 research_app.add_typer(propositions_app, name="propositions")
 numerical_app = typer.Typer(help="Numerical experiments (Phase 3E)")
 research_app.add_typer(numerical_app, name="numerical")
+results_app = typer.Typer(help="Results assembly (Phase 4A)")
+research_app.add_typer(results_app, name="results")
+findings_app = typer.Typer(help="Research findings (Phase 4A)")
+research_app.add_typer(findings_app, name="findings")
+contributions_app = typer.Typer(help="Contribution claims (Phase 4A)")
+research_app.add_typer(contributions_app, name="contributions")
 
 
 @research_app.command("gap-select")
@@ -4592,6 +4602,781 @@ def numerical_welfare(
                 console.print(f"  total welfare: {w.total_welfare}")
                 for n in w.notes:
                     console.print(f"  note: {n}")
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 4A: results assembly, findings, contributions, critique
+# ---------------------------------------------------------------------------
+
+
+@results_app.command("assemble")
+def results_assemble(
+    numerical: Annotated[str, typer.Option("--numerical", help="NumericalExperiment artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Assemble findings, contributions, implications into a package (Phase 4A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite", "research.results_assembler"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("results_assembler.default")
+            try:
+                exec_id = await svc.assemble(numerical)
+            except Exception as e:
+                console.print(f"[red]Results assembly failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.results import (
+                ResearchResultsPackage,
+                ResultsAssemblyExecution,
+            )
+
+            rec = (await store.get(exec_id)).parse_payload(ResultsAssemblyExecution)
+            console.print(f"[green]✓ ResultsAssemblyExecution: {exec_id}[/green]")
+            console.print(
+                f"  findings {rec.findings_created}  contributions {rec.contributions_created}  "
+                f"implications {rec.implications_created}  novelty normalized "
+                f"{rec.novelty_claims_normalized}"
+            )
+            for env in reversed(await store.list(artifact_type="results_package")):
+                pkg = env.parse_payload(ResearchResultsPackage)
+                if pkg.numerical_experiment_id == numerical:
+                    console.print(f"  ResearchResultsPackage: {env.artifact_id}")
+                    console.print(f"  {pkg.summary}")
+                    break
+
+    asyncio.run(_run())
+
+
+@results_app.command("inspect")
+def results_inspect(
+    package_id: Annotated[str, typer.Argument(help="ResearchResultsPackage artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a ResearchResultsPackage (Phase 4A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                p_env = await store.get(package_id)
+            except Exception as e:
+                console.print(f"[red]Package {package_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.results import (
+                ContributionClaim,
+                ResearchFinding,
+                ResearchImplication,
+                ResearchResultsPackage,
+            )
+
+            pkg = p_env.parse_payload(ResearchResultsPackage)
+            console.print(f"[bold]ResearchResultsPackage {package_id}[/bold]")
+            console.print(f"  gap: {pkg.gap_id}")
+            console.print(f"  mechanism: {pkg.selected_mechanism_id}")
+            console.print(f"  model: {pkg.model_id}  equilibrium: {pkg.equilibrium_analysis_id}")
+            console.print(f"  status: {pkg.status}  summary: {pkg.summary}")
+            for fid in pkg.finding_ids:
+                f = (await store.get(fid)).parse_payload(ResearchFinding)
+                console.print(f"  finding [{f.finding_type.value}] {f.statement[:120]}")
+            for cid in pkg.contribution_claim_ids:
+                c = (await store.get(cid)).parse_payload(ContributionClaim)
+                console.print(f"  contribution [{c.contribution_type.value}] {c.claim[:120]}")
+            for iid in pkg.implication_ids:
+                i = (await store.get(iid)).parse_payload(ResearchImplication)
+                console.print(
+                    f"  implication [{i.implication_kind.value}/{i.claim_type.value}] {i.text[:120]}"
+                )
+            if pkg.limitations:
+                console.print("  limitations:")
+                for lim in pkg.limitations:
+                    console.print(f"    - {lim}")
+
+    asyncio.run(_run())
+
+
+@results_app.command("critique")
+def results_critique(
+    package_id: Annotated[str, typer.Argument(help="ResearchResultsPackage artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Critique a ResearchResultsPackage (Phase 4A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite", "research.results_critic"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("results_critic.default")
+            try:
+                crit_id = await svc.critique(package_id)
+            except Exception as e:
+                console.print(f"[red]Results critique failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.results import ResultsCritique
+
+            c = (await store.get(crit_id)).parse_payload(ResultsCritique)
+            console.print(f"[green]✓ ResultsCritique: {crit_id}[/green]")
+            console.print(f"  verdict: {c.verdict.value}")
+            console.print(f"  assessment: {c.overall_assessment}")
+            for issue in c.issues:
+                console.print(
+                    f"  [{issue.severity}] {issue.category.value}: {issue.description[:140]}"
+                )
+            for r in c.recommendations:
+                console.print(f"  rec: {r}")
+
+    asyncio.run(_run())
+
+
+@findings_app.command("list")
+def findings_list(
+    package: Annotated[str, typer.Option("--package", help="ResearchResultsPackage id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """List findings of a package (Phase 4A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            pkg = (await store.get(package)).parse_payload(
+                __import__(
+                    "research_harness.research.schemas.results",
+                    fromlist=["ResearchResultsPackage"],
+                ).ResearchResultsPackage
+            )
+            from research_harness.research.schemas.results import ResearchFinding
+
+            for fid in pkg.finding_ids:
+                f = (await store.get(fid)).parse_payload(ResearchFinding)
+                console.print(f"[bold]{fid}[/bold] [{f.finding_type.value}/{f.confidence.value}]")
+                console.print(f"  {f.statement}")
+                if f.conditions:
+                    console.print(f"  conditions: {'; '.join(f.conditions)}")
+                console.print(f"  supports: props {f.supporting_proposition_ids}")
+                console.print(f"            statics {f.supporting_comparative_static_ids}")
+                console.print(f"            results {len(f.supporting_numerical_result_ids)} ids")
+
+    asyncio.run(_run())
+
+
+@contributions_app.command("list")
+def contributions_list(
+    package: Annotated[str, typer.Option("--package", help="ResearchResultsPackage id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """List contribution claims of a package (Phase 4A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg_path = config if config is not None and config.exists() else None
+        cfg = load_config(cfg_path) if cfg_path is not None else None
+        if cfg is None:
+            from research_harness.config.loader import load_config_from_dict
+
+            cfg = load_config_from_dict(
+                {
+                    "plugins": ["storage.artifacts_sqlite"],
+                    "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+                }
+            )
+        if "storage.artifacts_sqlite" not in cfg.plugins:
+            cfg.plugins.append("storage.artifacts_sqlite")
+
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            pkg = (await store.get(package)).parse_payload(
+                __import__(
+                    "research_harness.research.schemas.results",
+                    fromlist=["ResearchResultsPackage"],
+                ).ResearchResultsPackage
+            )
+            from research_harness.research.schemas.results import ContributionClaim
+
+            for cid in pkg.contribution_claim_ids:
+                c = (await store.get(cid)).parse_payload(ContributionClaim)
+                console.print(f"[bold]{cid}[/bold] [{c.contribution_type.value}]")
+                console.print(f"  claim: {c.claim}")
+                console.print(f"  advances: {c.advances_literature[:200]}")
+                console.print(
+                    f"  findings: {c.finding_ids}"
+                    + ("  [normalized novelty]" if c.novelty_normalized else "")
+                )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 4B: manuscript outline, drafting, inspection, critique, revision
+# ---------------------------------------------------------------------------
+
+
+def _manuscript_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
+    cfg_path = config if config is not None and config.exists() else None
+    cfg = load_config(cfg_path) if cfg_path is not None else None
+    if cfg is None:
+        from research_harness.config.loader import load_config_from_dict
+
+        cfg = load_config_from_dict(
+            {
+                "plugins": ["storage.artifacts_sqlite", *extra_plugins],
+                "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+            }
+        )
+    if "storage.artifacts_sqlite" not in cfg.plugins:
+        cfg.plugins.append("storage.artifacts_sqlite")
+    return cfg
+
+
+@manuscript_app.command("outline")
+def manuscript_outline(
+    results: Annotated[str, typer.Option("--results", help="ResearchResultsPackage artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Build a deterministic manuscript outline over a results package (Phase 4B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _manuscript_config(config, ["research.manuscript_drafter"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("manuscript_drafter.default")
+            try:
+                outline_id = await svc.outline(results)
+            except Exception as e:
+                console.print(f"[red]Outline failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.manuscript import ManuscriptOutline
+
+            outline = (await store.get(outline_id)).parse_payload(ManuscriptOutline)
+            console.print(f"[green]✓ ManuscriptOutline: {outline_id}[/green]")
+            console.print(f"  title: {outline.title}")
+            for spec_ in outline.section_specs:
+                console.print(
+                    f"  {spec_.section_id.value:<22} {spec_.title} "
+                    f"[{len(spec_.artifact_ids)} artifacts]"
+                )
+
+    asyncio.run(_run())
+
+
+@manuscript_app.command("draft")
+def manuscript_draft(
+    outline: Annotated[str, typer.Option("--outline", help="ManuscriptOutline artifact id")],
+    sections: Annotated[
+        str | None,
+        typer.Option(
+            "--sections",
+            help="Comma-separated section ids to draft (default: all sections)",
+        ),
+    ] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Draft the manuscript section by section (Phase 4B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _manuscript_config(config, ["research.manuscript_drafter"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("manuscript_drafter.default")
+            wanted = [s.strip() for s in sections.split(",") if s.strip()] if sections else None
+            try:
+                exec_id = await svc.draft(outline, wanted)
+            except Exception as e:
+                console.print(f"[red]Drafting failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.manuscript import (
+                ManuscriptDraft,
+                ManuscriptDraftExecution,
+            )
+
+            rec = (await store.get(exec_id)).parse_payload(ManuscriptDraftExecution)
+            console.print(f"[green]✓ ManuscriptDraftExecution: {exec_id}[/green]")
+            console.print(
+                f"  sections created {rec.sections_created}  claims {rec.claims_created}  "
+                f"citations {rec.citations_created}  novelty normalized {rec.novelty_claims_normalized}"
+            )
+            if rec.draft_id:
+                draft = (await store.get(rec.draft_id)).parse_payload(ManuscriptDraft)
+                console.print(f"  ManuscriptDraft v{draft.version}: {rec.draft_id}")
+                console.print(f"  {draft.summary}")
+
+    asyncio.run(_run())
+
+
+@manuscript_app.command("inspect")
+def manuscript_inspect(
+    draft_id: Annotated[str, typer.Argument(help="ManuscriptDraft artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a ManuscriptDraft (Phase 4B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _manuscript_config(config, [])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                d_env = await store.get(draft_id)
+            except Exception as e:
+                console.print(f"[red]Draft {draft_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.manuscript import (
+                ManuscriptDraft,
+                ManuscriptSection,
+            )
+
+            draft = d_env.parse_payload(ManuscriptDraft)
+            console.print(f"[bold]ManuscriptDraft v{draft.version} {draft_id}[/bold]")
+            console.print(f"  title: {draft.title}  status: {draft.status.value}")
+            console.print(f"  supersedes: {draft.supersedes or '-'}")
+            console.print(f"  {draft.summary}")
+            for sid in draft.section_ids:
+                s = (await store.get(sid)).parse_payload(ManuscriptSection)
+                console.print(f"  [{s.section_id.value}] {s.title}")
+                console.print(f"      claims: {len(s.claims)}  citations: {len(s.citations)}")
+                console.print(f"      {s.body[:160].replace(chr(10), ' ')}...")
+
+    asyncio.run(_run())
+
+
+@manuscript_app.command("critique")
+def manuscript_critique(
+    draft_id: Annotated[str, typer.Argument(help="ManuscriptDraft artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Critique a ManuscriptDraft (Phase 4B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _manuscript_config(config, ["research.manuscript_critic"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("manuscript_critic.default")
+            try:
+                crit_id = await svc.critique(draft_id)
+            except Exception as e:
+                console.print(f"[red]Critique failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.manuscript import ManuscriptCritique
+
+            c = (await store.get(crit_id)).parse_payload(ManuscriptCritique)
+            console.print(f"[green]✓ ManuscriptCritique: {crit_id}[/green]")
+            console.print(f"  verdict: {c.verdict.value}")
+            console.print(f"  assessment: {c.overall_assessment}")
+            for issue in c.issues:
+                console.print(
+                    f"  [{issue.severity}] {issue.category.value}"
+                    + (f" @ {issue.location}" if issue.location else "")
+                    + f": {issue.description[:130]}"
+                )
+            for r in c.recommendations:
+                console.print(f"  rec: {r}")
+
+    asyncio.run(_run())
+
+
+@manuscript_app.command("revise")
+def manuscript_revise(
+    draft_id: Annotated[str, typer.Argument(help="ManuscriptDraft artifact id (V1)")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Revise a ManuscriptDraft into a superseding version (Phase 4B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _manuscript_config(config, ["research.manuscript_drafter"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("manuscript_drafter.default")
+            try:
+                exec_id = await svc.revise(draft_id)
+            except Exception as e:
+                console.print(f"[red]Revision failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.manuscript import (
+                ManuscriptDraft,
+                ManuscriptDraftExecution,
+            )
+
+            rec = (await store.get(exec_id)).parse_payload(ManuscriptDraftExecution)
+            console.print(f"[green]✓ Revision execution: {exec_id}[/green]")
+            draft = (await store.get(rec.draft_id)).parse_payload(ManuscriptDraft)
+            console.print(f"  ManuscriptDraft v{draft.version}: {rec.draft_id}")
+            console.print(f"  supersedes: {draft.supersedes}")
+            console.print(f"  {draft.summary}")
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 4C: publication formatting, validation, export, packaging
+# ---------------------------------------------------------------------------
+
+
+def _publication_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
+    cfg_path = config if config is not None and config.exists() else None
+    cfg = load_config(cfg_path) if cfg_path is not None else None
+    if cfg is None:
+        from research_harness.config.loader import load_config_from_dict
+
+        cfg = load_config_from_dict(
+            {
+                "plugins": [
+                    "storage.artifacts_sqlite",
+                    "storage.blobs_filesystem",
+                    *extra_plugins,
+                ],
+                "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+            }
+        )
+    for pid in ("storage.artifacts_sqlite", "storage.blobs_filesystem"):
+        if pid not in cfg.plugins:
+            cfg.plugins.append(pid)
+    return cfg
+
+
+@publication_app.command("profile-create")
+def publication_profile_create(
+    name: Annotated[str, typer.Option("--name", help="Journal / style name")],
+    style: Annotated[
+        str, typer.Option("--style", help="citation style: author_year | apa")
+    ] = "author_year",
+    anonymous: Annotated[bool, typer.Option("--anonymous", help="Anonymous-review mode")] = False,
+    total_word_limit: Annotated[
+        int | None, typer.Option("--total-word-limit", help="Total word limit")
+    ] = None,
+    abstract_max_words: Annotated[int, typer.Option("--abstract-max-words")] = 250,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Create a PublicationProfile (Phase 4C)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _publication_config(config, ["research.publication_formatter"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("publication_formatter.default")
+            profile_id = await svc.create_profile(
+                name=name,
+                citation_style=style,
+                total_word_limit=total_word_limit,
+                abstract_max_words=abstract_max_words,
+                anonymous_review=anonymous,
+            )
+            console.print(f"[green]✓ PublicationProfile: {profile_id}[/green]")
+            console.print(f"  {name}  style {style}  anonymous {anonymous}")
+
+    asyncio.run(_run())
+
+
+@publication_app.command("format")
+def publication_format(
+    draft: Annotated[str, typer.Option("--draft", help="ManuscriptDraft artifact id")],
+    profile: Annotated[str, typer.Option("--profile", help="PublicationProfile artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Format a manuscript draft per a publication profile (Phase 4C)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _publication_config(config, ["research.publication_formatter"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("publication_formatter.default")
+            try:
+                m_id = await svc.format(draft, profile)
+            except Exception as e:
+                console.print(f"[red]Formatting failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.publication import FormattedManuscript
+
+            fm = (await store.get(m_id)).parse_payload(FormattedManuscript)
+            console.print(f"[green]✓ FormattedManuscript: {m_id}[/green]")
+            console.print(
+                f"  sections {len(fm.sections)}  total words {fm.total_word_count}  "
+                f"citations {len(fm.citation_map)}"
+            )
+            console.print(f"  front matter: {fm.front_matter.generated_by}")
+
+    asyncio.run(_run())
+
+
+@publication_app.command("validate")
+def publication_validate(
+    manuscript: Annotated[str, typer.Argument(help="FormattedManuscript artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Validate a FormattedManuscript deterministically (Phase 4C)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _publication_config(config, ["research.publication_formatter"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("publication_formatter.default")
+            leaf, passed = await svc.validate(manuscript)
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.publication import FormattedManuscript
+
+            fm = (await store.get(leaf)).parse_payload(FormattedManuscript)
+            if passed:
+                console.print(f"[green]✓ FormattedManuscript validated: {leaf}[/green]")
+            else:
+                console.print(f"[red]✗ FormattedManuscript FAILED validation: {leaf}[/red]")
+            for issue in fm.validation_issues:
+                console.print(f"  [{issue.severity}] {issue.check}: {issue.detail[:130]}")
+
+    asyncio.run(_run())
+
+
+@publication_app.command("export")
+def publication_export(
+    manuscript: Annotated[
+        str, typer.Option("--manuscript", help="FormattedManuscript artifact id")
+    ],
+    format: Annotated[str, typer.Option("--format", help="markdown | latex | docx | pdf")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Export a FormattedManuscript deterministically via the BlobStore (Phase 4C)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _publication_config(config, ["research.publication_formatter"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("publication_formatter.default")
+            try:
+                er_id = await svc.export(manuscript, format)
+            except Exception as e:
+                console.print(f"[red]Export failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.publication import ExportRecord
+
+            er = (await store.get(er_id)).parse_payload(ExportRecord)
+            console.print(f"[green]✓ ExportRecord: {er_id}[/green]")
+            console.print(
+                f"  {er.format} via {er.renderer} {er.renderer_version}  "
+                f"{er.size_bytes} bytes  sha256 {er.content_hash[:16]}…"
+            )
+            console.print(f"  blob: {er.blob_ref['storage_key']}")
+
+    asyncio.run(_run())
+
+
+@publication_app.command("package")
+def publication_package(
+    manuscript: Annotated[
+        str, typer.Option("--manuscript", help="FormattedManuscript artifact id")
+    ],
+    cover_letter: Annotated[
+        bool, typer.Option("--cover-letter", help="Generate a cover letter")
+    ] = False,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Assemble the SubmissionPackage (all formats; ready only when validated)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _publication_config(config, ["research.publication_formatter"])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("publication_formatter.default")
+            try:
+                pkg_id = await svc.package(manuscript, with_cover_letter=cover_letter)
+            except Exception as e:
+                console.print(f"[red]Packaging failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.publication import SubmissionPackage
+
+            pkg = (await store.get(pkg_id)).parse_payload(SubmissionPackage)
+            tag = "✓" if pkg.status.value == "ready" else "✗"
+            console.print(f"[{tag}] SubmissionPackage: {pkg_id}  status {pkg.status.value}")
+            console.print(f"  {pkg.summary}")
+            for er in pkg.export_records:
+                console.print(
+                    f"  export {er.format}: {er.content_hash[:16]}… ({er.size_bytes} bytes)"
+                )
+
+    asyncio.run(_run())
+
+
+@publication_app.command("inspect")
+def publication_inspect(
+    package_id: Annotated[str, typer.Argument(help="SubmissionPackage artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a SubmissionPackage (Phase 4C)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _publication_config(config, [])
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            try:
+                p_env = await store.get(package_id)
+            except Exception as e:
+                console.print(f"[red]Package {package_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.publication import (
+                CoverLetter,
+                FormattedManuscript,
+                SubmissionPackage,
+            )
+
+            pkg = p_env.parse_payload(SubmissionPackage)
+            console.print(f"[bold]SubmissionPackage {package_id}[/bold]")
+            console.print(f"  status: {pkg.status.value}  summary: {pkg.summary}")
+            fm = (await store.get(pkg.formatted_manuscript_id)).parse_payload(FormattedManuscript)
+            console.print(f"  manuscript: {pkg.formatted_manuscript_id} (draft {pkg.draft_id})")
+            console.print(f"    title: {fm.front_matter.title}")
+            console.print(f"    sections: {len(fm.sections)}  words: {fm.total_word_count}")
+            for er in pkg.export_records:
+                console.print(
+                    f"  export {er.format}: blob {er.blob_ref['storage_key']}  "
+                    f"sha256 {er.content_hash[:16]}…"
+                )
+            if pkg.cover_letter_id:
+                cl = (await store.get(pkg.cover_letter_id)).parse_payload(CoverLetter)
+                console.print(f"  cover letter: {pkg.cover_letter_id}  anonymous {cl.anonymous}")
 
     asyncio.run(_run())
 

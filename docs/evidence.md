@@ -14,7 +14,10 @@ FullTextCorpus
 
 > Every extracted research fact or finding is traceable to exact source page(s) in the `FullTextDocument`.
 
-Phase 2F performs **no** cross-paper synthesis, gap detection, theory generation, embeddings, or OCR. Those belong to later phases.
+Phase 2F performs **no** cross-paper synthesis, gap detection, theory
+generation, embeddings, or OCR. Synthesis and gap detection are later
+implemented phases (`docs/synthesis.md`, `docs/gaps.md`); embeddings and OCR
+remain out of scope.
 
 ## Concepts
 

@@ -245,6 +245,44 @@ def _create_numerical_analysis() -> Plugin:
     return NumericalAnalysisPlugin()
 
 
+def _create_results_assembler() -> Plugin:
+    from research_harness.plugins.research.results_assembler.plugin import (
+        ResultsAssemblerPlugin,
+    )
+
+    return ResultsAssemblerPlugin()
+
+
+def _create_results_critic() -> Plugin:
+    from research_harness.plugins.research.results_critic.plugin import ResultsCriticPlugin
+
+    return ResultsCriticPlugin()
+
+
+def _create_manuscript_drafter() -> Plugin:
+    from research_harness.plugins.research.manuscript_drafter.plugin import (
+        ManuscriptDrafterPlugin,
+    )
+
+    return ManuscriptDrafterPlugin()
+
+
+def _create_manuscript_critic() -> Plugin:
+    from research_harness.plugins.research.manuscript_critic.plugin import (
+        ManuscriptCriticPlugin,
+    )
+
+    return ManuscriptCriticPlugin()
+
+
+def _create_publication_formatter() -> Plugin:
+    from research_harness.plugins.research.publication_formatter.plugin import (
+        PublicationFormatterPlugin,
+    )
+
+    return PublicationFormatterPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -317,6 +355,11 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "research.proposition_critic": _create_proposition_critic,
     "research.proposition_generator": _create_proposition_generator,
     "research.numerical_analysis": _create_numerical_analysis,
+    "research.results_assembler": _create_results_assembler,
+    "research.results_critic": _create_results_critic,
+    "research.manuscript_drafter": _create_manuscript_drafter,
+    "research.manuscript_critic": _create_manuscript_critic,
+    "research.publication_formatter": _create_publication_formatter,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

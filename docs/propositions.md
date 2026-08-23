@@ -135,5 +135,6 @@ chain (Phase 3C services → statics → 2 propositions → verification → cri
 → interpretation) with provenance after reopen.
 
 Live (opt-in `live_propositions`): `tests/live/test_propositions_live.py` —
-structural validity and symbolic grounding only. Live run produced 5
-propositions, all symbolically verified, critiqued, and interpreted.
+structural validity and symbolic grounding only. The recorded live run
+produced 5 propositions, all symbolically verified, critiqued, and
+interpreted (per-run figure, not asserted by the live test).

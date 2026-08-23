@@ -33,6 +33,11 @@ plugins:
   - research.proposition_critic
   - research.proposition_generator
   - research.numerical_analysis
+  - research.results_assembler
+  - research.results_critic
+  - research.manuscript_drafter
+  - research.manuscript_critic
+  - research.publication_formatter
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -141,6 +146,20 @@ research:
     model_role: reasoning
     max_points: 10000
     artifact_point_threshold: 500
+  results:
+    assembler_role: reasoning
+    critic_role: critic
+    max_findings: 12
+    max_contributions: 8
+    max_implications: 12
+    max_llm_calls: 10
+  manuscript:
+    drafter_role: reasoning
+    critic_role: critic
+    max_llm_calls: 100
+  publication:
+    formatter_role: reasoning
+    max_llm_calls: 10
 
 documents:
   blob_root: ".research/blobs"

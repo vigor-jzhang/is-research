@@ -218,12 +218,51 @@ class ResearchModelConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class ResearchResultsConfig(BaseModel):
+    assembler_role: str = Field(
+        default="reasoning", description="Logical model role for results assembly"
+    )
+    critic_role: str = Field(
+        default="critic", description="Logical model role for results critique"
+    )
+    max_findings: int = Field(default=12, ge=1, le=50)
+    max_contributions: int = Field(default=8, ge=1, le=30)
+    max_implications: int = Field(default=12, ge=1, le=50)
+    max_llm_calls: int = Field(default=10, ge=1, le=100)
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchManuscriptConfig(BaseModel):
+    drafter_role: str = Field(
+        default="reasoning", description="Logical model role for manuscript drafting"
+    )
+    critic_role: str = Field(
+        default="critic", description="Logical model role for manuscript critique"
+    )
+    max_llm_calls: int = Field(default=100, ge=1, le=1000)
+
+    model_config = {"extra": "forbid"}
+
+
+class ResearchPublicationConfig(BaseModel):
+    formatter_role: str = Field(
+        default="reasoning", description="Logical model role for front matter / cover letter"
+    )
+    max_llm_calls: int = Field(default=10, ge=1, le=100)
+
+    model_config = {"extra": "forbid"}
+
+
 class ResearchConfig(BaseModel):
     mechanism: ResearchMechanismConfig = Field(default_factory=ResearchMechanismConfig)
     model: ResearchModelConfig = Field(default_factory=ResearchModelConfig)
     equilibrium: ResearchEquilibriumConfig = Field(default_factory=ResearchEquilibriumConfig)
     proposition: ResearchPropositionConfig = Field(default_factory=ResearchPropositionConfig)
     numerical: ResearchNumericalConfig = Field(default_factory=ResearchNumericalConfig)
+    results: ResearchResultsConfig = Field(default_factory=ResearchResultsConfig)
+    manuscript: ResearchManuscriptConfig = Field(default_factory=ResearchManuscriptConfig)
+    publication: ResearchPublicationConfig = Field(default_factory=ResearchPublicationConfig)
 
     model_config = {"extra": "forbid"}
 

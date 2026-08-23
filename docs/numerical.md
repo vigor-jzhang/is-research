@@ -11,7 +11,8 @@ FormalAnalyticalModel + Verified Equilibrium + Verified Propositions
 ```
 
 No paper drafting, LaTeX generation, publication claims, new gap search, or
-new theory generation (Phase 4).
+new theory generation here — those belong to later phases (results assembly
+Phase 4A, manuscript drafting Phase 4B, and Phase 4C).
 
 ## Schemas (`src/research_harness/research/schemas/numerical.py`)
 
@@ -128,6 +129,7 @@ baseline/sweeps/probes/grid → robustness → welfare) with provenance after
 reopen.
 
 Live (opt-in `live_numerical_analysis`): `tests/live/test_numerical_analysis_live.py` —
-deterministic, no network; structural validity only. Live run on the seeded
+deterministic, no network; structural validity only. Recorded live run on the seeded
 Cournot game: 39 feasible + 2 infeasible points, 7 robustness checks
-(4 proposition-support supported, 1 not_testable), welfare π1=π2=9, total 18.
+(4 proposition-support supported, 1 not_testable), welfare π1=π2=9, total 18
+(per-run figures, not asserted by the live test).

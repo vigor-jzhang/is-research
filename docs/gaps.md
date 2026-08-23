@@ -14,7 +14,8 @@ ResearchGap candidates (GapAnalysis)
 ```
 
 Phase 2H identifies candidate research opportunities. It does **not** generate
-theories, mechanisms, or analytical models (later phases).
+theories, mechanisms, or analytical models — those are Phases 3A–3B
+(`docs/mechanisms.md`, `docs/models.md`), which consume the selected gap.
 
 ## Gap taxonomy (`src/research_harness/research/schemas/gap.py:GapType`)
 

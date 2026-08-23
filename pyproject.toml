@@ -15,6 +15,8 @@ dependencies = [
     "pypdf>=5.0",
     "sympy>=1.14.0",
     "numpy>=2.5.2",
+    "python-docx>=1.1",
+    "reportlab>=4.2",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +56,9 @@ markers = [
    "live_equilibrium: marks tests as live equilibrium derivation (requires OPENROUTER_API_KEY + prior FormalAnalyticalModel, run with `uv run --env-file .env pytest -m live_equilibrium`)",
    "live_propositions: marks tests as live propositions (requires OPENROUTER_API_KEY + prior verified equilibrium, run with `uv run --env-file .env pytest -m live_propositions`)",
    "live_numerical_analysis: marks tests as live numerical analysis (requires a prior verified equilibrium; deterministic, no network, run with `uv run --env-file .env pytest -m live_numerical_analysis`)",
+  "live_results_assembly: marks tests as live results assembly (requires OPENROUTER_API_KEY + a completed Phase 3 chain, run with `uv run --env-file .env pytest -m live_results_assembly`)",
+  "live_manuscript: marks tests as live manuscript drafting (requires OPENROUTER_API_KEY + a results package, run with `uv run --env-file .env pytest -m live_manuscript`)",
+  "live_publication: marks tests as live publication formatting (requires a manuscript draft; exports are deterministic, run with `uv run --env-file .env pytest -m live_publication`)",
 ]
 
 [tool.ruff]

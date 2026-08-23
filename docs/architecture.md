@@ -41,7 +41,7 @@ Research Harness is a plugin-first system. The kernel is deliberately small and 
                    Tools     Autonomy    Skills
 ```
 
-Later phases compose research workflow plugins (literature, modeling, critique) on the same kernel.
+Research workflow plugins (literature, modeling, equilibrium, numerical, results, manuscript, publication) compose on the same kernel — see `docs/research-domain.md` and the per-phase docs (`docs/literature-sources.md`, `docs/screening.md`, `docs/evidence.md`, `docs/synthesis.md`, `docs/gaps.md`, `docs/mechanisms.md`, `docs/models.md`, `docs/equilibrium.md`, `docs/propositions.md`, `docs/numerical.md`, `docs/results.md`, `docs/manuscript.md`, `docs/publication.md`).
 
 The composition root is `src/research_harness/app/bootstrap.py` — it knows about both kernel and plugins; the kernel knows only about abstractions.
 
@@ -56,14 +56,14 @@ The kernel (`src/research_harness/kernel/`) owns:
 - **event dispatch** — `EventBus` (`kernel/events.py:31`) — in-process async pub/sub; events carry `event_id`, `schema_version`, `event_type`, `timestamp`, `source`, `session_id`, `run_id`, `parent_event_id`, `payload`; wildcard `*` subscription supported; failures are isolated and logged; in-memory `history()` is for tests/debugging — **not** the persistent source of truth
 - **runtime** — `Runtime` (`kernel/runtime.py:17`) is a generic holder of `config`, `PluginManager`, `ServiceRegistry`, `EventBus` with `start`/`stop`; it does **not** discover plugins
 
-The kernel imports **zero** concrete plugins and contains no research behavior. Verified by `tests/unit/test_architecture.py:8`.
+The kernel imports **zero** concrete plugins and contains no research behavior. Verified by `tests/unit/test_architecture.py:13`.
 
 ## Application Bootstrap
 
 The bootstrap layer (`src/research_harness/app/bootstrap.py`) is the composition root:
 
 - Loads YAML config via `config/loader.py`
-- Discovers **built-in** plugins from `plugins/registry.py:46` (`BUILTIN_PLUGINS`)
+- Discovers **built-in** plugins from `plugins/registry.py:316` (`BUILTIN_PLUGINS`, 43 plugins)
 - Discovers **external** plugins via `importlib.metadata.entry_points(group="research_harness.plugins")` — lazy factories, validated on creation, duplicate IDs rejected, clear errors
 - Merges built-in + external deterministically (`get_all_plugin_factories`)
 - Builds per-plugin configs from `AppConfig` (e.g., `models.roles` → `routing.role_router`, `session.root` → `session.jsonl`)
@@ -175,7 +175,7 @@ event producer (loop, provider, tool)
 
 - `Event` (`kernel/events.py:12`) is a Pydantic model with `event_id`, `schema_version`, `event_type`, `timestamp`, `source`, `session_id`, `run_id`, `parent_event_id`, `payload`
 - `EventBus` preserves publish order and isolates handler failures; its in-memory `history()` is **not** used for replay — it exists for unit tests and debugging
-- `JsonlSessionStore` (`plugins/sessions/jsonl/plugin.py:43`) subscribes to `*` on setup; every event with a `session_id` is appended scrubbed to `.research/sessions/<session_id>/events.jsonl` via `store.append`. The loop only `publish`es — it does not directly write to the store for events.
+- `JsonlSessionStore` (`plugins/sessions/jsonl/plugin.py:46`) subscribes to `*` on setup; every event with a `session_id` is appended scrubbed to `.research/sessions/<session_id>/events.jsonl` via `store.append`. The loop only `publish`es — it does not directly write to the store for events.
 - Session creation (`store.create_session`) is still direct (the loop needs a session id), but all subsequent trajectory events flow through the bus.
 - Replay/resume must read `SessionStore`, never `EventBus` history.
 
@@ -204,7 +204,7 @@ Defense in depth:
 
 ## Model Abstraction
 
-Research plugins depend on `ModelProvider` (`contracts/model.py:58`), not on OpenRouter:
+Research plugins depend on `ModelProvider` (`contracts/model.py:64`), not on OpenRouter:
 
 ```python
 ModelRequest  # messages, tools, response_schema, temperature, max_tokens, metadata
@@ -215,7 +215,7 @@ ModelResponse  # message, tool_calls, finish_reason, usage, model, provider, lat
 
 ## OpenRouter Provider
 
-`OpenRouterPlugin` (`plugins/models/openrouter/plugin.py:95`) owns:
+`OpenRouterPlugin` (`plugins/models/openrouter/plugin.py:282`) owns:
 
 - URL (`https://openrouter.ai/api/v1/chat/completions`) and header auth (`OPENROUTER_API_KEY` from env or plugin config)
 - mapping `ModelRequest` ↔ OpenRouter JSON (including `tools`, `response_format` for structured output)
@@ -243,7 +243,7 @@ Custom `.env` loader (`config/dotenv.py`) is a lightweight fallback; canonical i
 
 ## Agent Loop
 
-`SimpleToolLoop` (`plugins/loops/simple_tool_loop/plugin.py:10`) is itself a plugin (`agent_loop.default`):
+`SimpleToolLoop` (`plugins/loops/simple_tool_loop/plugin.py:17`) is itself a plugin (`agent_loop.default`):
 
 1. create session (if store available)
 2. resolve `model_router.default`
@@ -278,18 +278,21 @@ See `docs/documents.md` for full lifecycle, resolution priority, security, and C
 
 ## Configuration
 
-`AppConfig` (`config/schema.py:56`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX.
+`AppConfig` (`config/schema.py:312`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX.
 
 ## CLI
 
-`src/research_harness/cli/main.py` uses Typer and only composes via `app.bootstrap`; it contains no business logic. Commands:
+`src/research_harness/cli/main.py` uses Typer and composes via `app.bootstrap`. The CLI delegates business logic to plugins/services; a few operator-facing commands (protocol approval, screening review overrides) write artifacts directly, and the inspect/list commands read the SQLite store directly. Command groups:
 
-- `plugins list [--config]` — shows id/type/version/provides/requires/source (builtin/external)
-- `plugins inspect <id>` — shows metadata + source
-- `runtime inspect [--config]` — shows resolved plugin order, services (`service → owner`), and model roles (no secrets)
+- `plugins list [--config]` / `plugins inspect <id>` — plugin metadata and source
+- `runtime inspect [--config]` — resolved plugin order, services (`service → owner`), model roles (no secrets)
 - `config validate <path>`
 - `run [--config --prompt --role --max-steps]`
 - `session inspect <id>`
+- `artifacts list/inspect/lineage`
+- `literature` — sources, search, get, plan, execute, discover, identities, screening, documents, evidence, synthesis, gaps (Phases 2A–2H)
+- `research` — gap-select, mechanisms, model, equilibrium, comparative-statics, propositions, numerical, results, findings, contributions (Phases 3A–4A)
+- `manuscript` — outline, draft, inspect, critique, revise (Phase 4B)
 
 ## Dependency Direction
 
@@ -309,16 +312,25 @@ Rules enforced by `tests/unit/test_architecture.py`:
 
 ## Testing
 
-Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. `tests/live/test_openrouter_live.py` is opt-in:
+Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 45 unit, 16 integration, and 14 opt-in live test files cover every phase:
 
 ```bash
-uv run --env-file .env pytest -m live -v
+uv run pytest                # offline: 414 passed, 17 skipped
+uv run --env-file .env pytest -m live -v          # OpenRouter live
+uv run --env-file .env pytest -m live_manuscript -v  # e.g. Phase 4B live
 ```
 
-It asserts structural success (output exists, model metadata, usage parsed, session events) with minimal tokens and never logs the key.
+Live tests assert structural success with minimal tokens and never log keys.
 
-Coverage: lifecycle, services, events, config, OpenRouter, sessions (including nested secret scrubbing), loops, routing, external discovery, architecture, and end-to-end mocked runs.
+Coverage: kernel lifecycle, services, events, config, OpenRouter, sessions (including nested secret scrubbing), loops, routing, external discovery, architecture rules, literature phases (2A–2H), research phases (3A–3E), results assembly (4A), and manuscript drafting (4B), plus end-to-end offline integration chains per phase.
 
-## Future
+## Research Workflows on the Kernel
 
-Phase 2+ will add literature, modeling, verification, critique, and workflow plugins on this same kernel without modifying it. Their schemas belong under `research/` or research plugins, not under `kernel/`.
+Phases 2A–4B compose research plugins on the same kernel without modifying it:
+
+- **Phase 2A–2H** (`plugins/literature/*`, `plugins/documents/*`) — search strategy, screening, acquisition, evidence, synthesis, gaps
+- **Phase 3A–3E** (`plugins/research/*`) — mechanisms, model, equilibrium, propositions, numerical experiments
+- **Phase 4A** — results assembly (findings, contributions, implications, package)
+- **Phase 4B** — evidence-grounded manuscript drafting, critique, revision
+
+Their schemas live under `src/research_harness/research/schemas/`; provenance flows through the immutable SQLite `ArtifactStore` (`derived_from`, `extracted_from`, `generated_from`, `supersedes`). See `docs/research-domain.md` and the per-phase docs for details.

@@ -4,7 +4,7 @@ Plugin-first research harness for Information Systems / analytical-modeling rese
 
 > **Everything that provides an agent capability is a plugin.** The kernel is minimal infrastructure (plugin discovery, lifecycle, services, events, configuration) — all model access, routing, tools, loops, sessions, and autonomy are implemented as plugins.
 
-Inspired by DeepSeek Harness, this is an independent Python implementation designed for a complete autonomous research pipeline (question → planning → literature → gap → theory → model → analysis → verification → critique → paper) while keeping Phase 1 focused on a clean, composable foundation.
+Inspired by DeepSeek Harness, this is an independent Python implementation of a complete autonomous research pipeline (question → planning → literature → gap → theory → model → analysis → verification → critique → manuscript). Phases 2A–4B are implemented: literature search/screening/documents/evidence/synthesis/gaps, mechanism development, analytical modeling, equilibrium derivation, propositions, numerical experiments, results assembly, and evidence-grounded manuscript drafting.
 
 ## Philosophy
 
@@ -46,7 +46,7 @@ Never commit `.env` or API keys. The session event log scrubs sensitive keys and
 
 ## Configuration
 
-See `configs/example.yaml`:
+See `configs/example.yaml` (full 44-plugin composition):
 
 ```yaml
 runtime:
@@ -57,9 +57,42 @@ plugins:
   - routing.role_router
   - session.jsonl
   - storage.artifacts_sqlite
+  - storage.blobs_filesystem
   - literature.crossref
   - literature.semantic_scholar
   - literature.ingestion
+  - literature.identity_resolver
+  - literature.search_planner
+  - literature.search_orchestrator
+  - literature.screening_protocol_builder
+  - literature.screening_view_builder
+  - literature.title_abstract_screener
+  - literature.screening_orchestrator
+  - literature.evidence_extractor
+  - literature.evidence_orchestrator
+  - literature.synthesis
+  - literature.gap_analyzer
+  - research.gap_selection
+  - research.mechanism_generator
+  - research.mechanism_critic
+  - research.model_builder
+  - research.model_specification_critic
+  - research.equilibrium_deriver
+  - research.equilibrium_verifier
+  - research.comparative_statics
+  - research.proposition_verifier
+  - research.proposition_critic
+  - research.proposition_generator
+  - research.numerical_analysis
+  - research.results_assembler
+  - research.results_critic
+  - research.manuscript_drafter
+  - research.manuscript_critic
+  - documents.locator.metadata
+  - documents.locator.unpaywall
+  - documents.fetcher.http
+  - documents.extractor.pypdf
+  - documents.acquisition_orchestrator
   - autonomy.configurable
   - tool.echo
   - loop.simple_tool_loop
@@ -78,17 +111,13 @@ artifacts:
   store: sqlite
   path: ".research/artifacts.db"
 
-literature:
-  crossref:
-    enabled: true
-    timeout_seconds: 20
-  semantic_scholar:
-    enabled: true
-    timeout_seconds: 20
-
 loop:
   max_steps: 8
 ```
+
+The `literature:` (search, screening, evidence, synthesis, gaps), `research:`
+(mechanism, model, equilibrium, proposition, numerical, results, manuscript),
+and `documents:` sections configure each phase; see the per-phase docs below.
 
 Secrets in `.env`:
 
@@ -134,7 +163,7 @@ uv run research-agent artifacts lineage <artifact-id> --direction ancestors
 uv run research-agent literature sources
 uv run --env-file .env research-agent literature search --source crossref --query "algorithmic pricing" --limit 5
 uv run --env-file .env research-agent literature search --source semantic_scholar --query "information systems" --limit 5
-uv run --env-file .env research-agent literature get --source crossref --id "10.1234/abc"
+uv run --env-file .env research-agent literature get "10.1234/abc" --source crossref
 
 # Search strategy & orchestration (Phase 2C, requires OpenRouter for planning)
 uv run --env-file .env research-agent literature plan --question <rq_artifact_id> [--research-plan <rp_id>]
@@ -211,6 +240,28 @@ uv run research-agent research numerical inspect <experiment-id>
 uv run research-agent research numerical results <experiment-id>
 uv run research-agent research numerical robustness <experiment-id>
 uv run research-agent research numerical welfare <experiment-id>
+
+# Results assembly (Phase 4A, findings + contributions + package)
+uv run research-agent research results assemble --numerical <experiment-id>
+uv run research-agent research results inspect <package-id>
+uv run research-agent research findings list --package <package-id>
+uv run research-agent research contributions list --package <package-id>
+uv run research-agent research results critique <package-id>
+
+# Manuscript drafting (Phase 4B, structured + evidence-grounded)
+uv run research-agent manuscript outline --results <package-id>
+uv run research-agent manuscript draft --outline <outline-id>
+uv run research-agent manuscript inspect <draft-id>
+uv run research-agent manuscript critique <draft-id>
+uv run research-agent manuscript revise <draft-id>
+
+# Publication formatting (Phase 4C, citations + exports + submission package)
+uv run research-agent publication profile-create --name "MIS Quarterly (generic)"
+uv run research-agent publication format --draft <draft-id> --profile <profile-id>
+uv run research-agent publication validate <manuscript-id>
+uv run research-agent publication export --manuscript <manuscript-id> --format latex
+uv run research-agent publication package --manuscript <manuscript-id> [--cover-letter]
+uv run research-agent publication inspect <package-id>
 ```
 
 The `run` command demonstrates:
@@ -229,18 +280,22 @@ uv run --env-file .env pytest -m live -v                 # OpenRouter live
 uv run --env-file .env pytest -m live_literature -v      # Crossref/Semantic Scholar live
 uv run --env-file .env pytest -m live_screening -v       # Screening live (OpenRouter)
 uv run --env-file .env pytest -m live_documents -v       # Document live (Unpaywall, needs UNPAYWALL_EMAIL)
-uv run --env-file .env pytest -m "live_gap_analysis or live_synthesis" -v  # Gap + synthesis live
+uv run --env-file .env pytest -m live_evidence -v        # Evidence extraction live
+uv run --env-file .env pytest -m live_synthesis -v       # Synthesis live
+uv run --env-file .env pytest -m live_gap_analysis -v    # Gap analysis live
 uv run --env-file .env pytest -m live_mechanism -v       # Mechanism development live
 uv run --env-file .env pytest -m live_model_specification -v  # Model specification live
 uv run --env-file .env pytest -m live_equilibrium -v       # Equilibrium derivation live
 uv run --env-file .env pytest -m live_propositions -v    # Propositions live
 uv run --env-file .env pytest -m live_numerical_analysis -v  # Numerical analysis live
+uv run --env-file .env pytest -m live_results_assembly -v  # Results assembly live
+uv run --env-file .env pytest -m live_manuscript -v  # Manuscript drafting live
+uv run --env-file .env pytest -m live_publication -v  # Publication formatting live
 ```
 
 Provider tests use `respx` to mock `https://api.crossref.org/works`, `https://api.semanticscholar.org/graph/v1`, and `https://openrouter.ai/api/v1/chat/completions`.
 
-- The OpenRouter live smoke `tests/live/test_openrouter_live.py` verifies `config → bootstrap → role_router → OpenRouter → real model → session`
-- Literature live tests `tests/live/test_literature_live.py` verify small Crossref/Semantic Scholar lookups/searches
+Live smoke tests (`tests/live/`, one per marker) verify structural success end to end with minimal tokens and skip cleanly when keys or prior artifacts are absent, never logging credentials: `test_openrouter_live`, `test_literature_live`, `test_screening_live`, `test_documents_live`, `test_evidence_live`, `test_synthesis_live`, `test_gap_analysis_live`, `test_mechanism_live`, `test_model_specification_live`, `test_equilibrium_live`, `test_propositions_live`, `test_numerical_analysis_live`, `test_results_assembly_live`, `test_manuscript_live`.
 
 All live tests assert structural success with minimal tokens and skip cleanly when keys are absent, never logging credentials.
 
@@ -260,28 +315,32 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All must pass before Phase 1 is considered complete.
+All gates must pass: `414 passed, 17 skipped` (offline), ruff/format/pyright clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
 
 ```
 src/research_harness/
   kernel/        # plugin, manager, services, events, runtime (generic, no plugin discovery)
-  contracts/     # typed Protocols: model, routing, tool, loop, session, autonomy, artifact, literature
+  contracts/     # typed Protocols: model, routing, tool, loop, session, autonomy,
+                 # artifact, blob, literature, document, screening
   config/        # Pydantic YAML schema + loader + dotenv helper
   app/bootstrap.py # composition root: builtin+external plugins, builds Runtime
   research/
-    schemas/     # PaperRecord, EvidenceItem, ResearchClaim, etc. + ProviderRecordSnapshot
+    schemas/     # domain artifacts: paper, evidence, synthesis, gap, mechanism,
+                 # model, equilibrium, proposition, numerical, results, manuscript, ...
     envelope.py  # ArtifactEnvelope[T] + content hashing
-    provenance/  # ProvenanceLink
+    provenance/  # ProvenanceLink (derived_from, extracted_from, generated_from, supersedes)
+    symbolic.py  # shared SymPy helpers (game-consistent FOCs/payoffs, stage plans)
   plugins/
     models/openrouter
     routing/role_router
     tools/echo
     loops/simple_tool_loop
     sessions/jsonl
+    autonomy/configurable
     storage/
-      artifacts_sqlite  # generic SQLite ArtifactStore
+      artifacts_sqlite  # generic SQLite ArtifactStore (immutable)
       blobs_filesystem  # content-addressed BlobStore (sha256)
     literature/
       crossref (client, mapper)
@@ -291,6 +350,18 @@ src/research_harness/
       search_planner (model-assisted)
       search_orchestrator
       screening_* (protocol, view, screener, orchestrator)
+      evidence_extractor / evidence_orchestrator
+      synthesis
+      gap_analyzer
+    research/
+      gap_selection, mechanism_generator, mechanism_critic   # Phase 3A
+      model_builder, model_specification_critic             # Phase 3B
+      equilibrium_deriver, equilibrium_verifier             # Phase 3C
+      comparative_statics, proposition_verifier/critic/generator  # Phase 3D
+      numerical_analysis                                    # Phase 3E
+      results_assembler, results_critic                     # Phase 4A
+      manuscript_drafter, manuscript_critic                 # Phase 4B
+      publication_formatter                                 # Phase 4C
     documents/
       locator_metadata / locator_unpaywall
       fetcher_http (SSRF/size/PDF validation)
@@ -299,14 +370,15 @@ src/research_harness/
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/
-  architecture.md
-  plugin-authoring.md
-  research-domain.md
-  literature-sources.md
+  architecture.md, plugin-authoring.md, research-domain.md
+  literature-sources.md, search-strategy.md, screening.md, documents.md,
+  evidence.md, synthesis.md, gaps.md
+  mechanisms.md, models.md, equilibrium.md, propositions.md, numerical.md,
+  results.md, manuscript.md, publication.md
 tests/
-  unit/          # architecture, external plugins, envelope, mappers, providers, ingestion
-  integration/   # e2e + literature ingestion
-  live/          # opt-in live smoke (pytest -m live / live_literature)
+  unit/          # 46 files, all phases (kernel, plugins, schemas, services)
+  integration/   # 17 files, end-to-end offline chains (incl. phase3a-e, phase4a-c)
+  live/          # 15 opt-in live smokes (pytest -m <marker>, needs .env keys)
 ```
 
 ## Architecture
@@ -323,7 +395,23 @@ See `docs/plugin-authoring.md`.
 
 ## Roadmap
 
-Phase 1 (this release): harness foundation only — no literature search, no analytical modeling, no web UI. See `docs/architecture.md` for the 7-phase roadmap.
+Implemented phases:
+
+- **Phase 1** — plugin-first kernel: services, events, sessions, autonomy, CLI
+- **Phase 2A–2H** — literature: sources, search strategy & orchestration,
+  screening, document acquisition, evidence extraction, synthesis, gap analysis
+- **Phase 3A–3E** — theory: gap selection, mechanism development, formal
+  analytical model, symbolic equilibrium derivation & verification,
+  propositions & comparative statics, numerical experiments & welfare
+- **Phase 4A** — findings, contribution claims, implications, results package
+- **Phase 4B** — evidence-grounded manuscript drafting, critique, revision
+- **Phase 4C** — publication formatting: citation resolution, bibliography,
+  Markdown/LaTeX/DOCX/PDF exports, submission package
+- **Post-Phase-4 (not implemented)** — automatic journal submission,
+  peer-review response generation, external novelty validation
+
+Each phase has a per-phase doc under `docs/` and a completion report in the
+phase's doc; nothing beyond the implemented phases is claimed.
 
 ## License
 
