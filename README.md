@@ -26,7 +26,7 @@ uv run research-agent config validate configs/example.yaml                   # v
 
 ## How to Use It
 
-Configuration lives in `configs/example.yaml` (57 plugins; see
+Configuration lives in `configs/example.yaml` (59 plugins; see
 [docs/configuration.md](docs/configuration.md)). The research pipeline is
 driven by one CLI command per stage; every command writes immutable,
 provenance-linked artifacts to `.research/artifacts.db`:
@@ -67,6 +67,8 @@ uv run research-agent eval run research-gap-analysis-v1        # 10 cases: gap t
 uv run research-agent eval run mechanism-development-v1         # 10 cases: mechanism validity, critic, revision
 uv run research-agent eval run equilibrium-correctness-v1       # 10 cases: closed-form equilibria, symbolic verification
 uv run research-agent eval run numerical-analysis-v1             # 9 cases: sweeps, feasibility, robustness, welfare
+uv run research-agent eval run comparative-statics-v1           # 8 cases: closed-form derivatives, signs, conditions
+uv run research-agent eval run proposition-correctness-v1        # 10 cases: monotonicity, equality, threshold, rejection
 uv run research-agent eval inspect <run-id>                 # per-evaluator detail
 uv run research-agent eval list
 ```
@@ -95,7 +97,7 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All gates must pass: `605 passed, 19 skipped` (offline), ruff/format/pyright
+All gates must pass: `638 passed, 19 skipped` (offline), ruff/format/pyright
 clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
@@ -131,7 +133,7 @@ src/research_harness/
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/            # per-phase + architecture/configuration/cli/plugin-authoring docs
-tests/           # unit/ 59, integration/ 30, live/ 16 (opt-in markers)
+tests/           # unit/ 61, integration/ 32, live/ 16 (opt-in markers)
 ```
 
 ## Documentation
@@ -161,6 +163,7 @@ tests/           # unit/ 59, integration/ 30, live/ 16 (opt-in markers)
 - **Phase 6C** — screening + evidence-extraction benchmarks over the real Phase 2D/2F pipelines
 - **Phase 6D** — gap-analysis + mechanism-development benchmarks over the real Phase 2H/3A pipelines
 - **Phase 6E** — equilibrium + numerical benchmarks over the real Phase 3C/3E pipelines (SymPy closed forms, deterministic tolerances)
+- **Phase 6F** — comparative-statics + proposition-correctness benchmarks over the real Phase 3D pipelines (scripted proposition responses, symbolic sign/condition preservation)
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
 
 Each phase has a per-phase doc under `docs/`; nothing beyond the implemented phases is claimed.

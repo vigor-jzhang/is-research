@@ -1,6 +1,6 @@
 # Configuration
 
-The full composition lives in `configs/example.yaml` (57 plugins, including the Phase 6A-6E evaluation harness and eleven evaluator plugins). `AppConfig`
+The full composition lives in `configs/example.yaml` (59 plugins, including the Phase 6A-6F evaluation harness and thirteen evaluator plugins). `AppConfig`
 (`config/schema.py`) validates it via Pydantic v2; `load_config`
 (`config/loader.py`) fails early with readable messages. Secrets are never in
 YAML — they come from the environment.
@@ -61,6 +61,8 @@ plugins:
   - evaluator.mechanism
   - evaluator.equilibrium
   - evaluator.numerical
+  - evaluator.comparative_statics
+  - evaluator.proposition
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http

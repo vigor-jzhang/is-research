@@ -51,6 +51,8 @@ plugins:
   - evaluator.mechanism
   - evaluator.equilibrium
   - evaluator.numerical
+  - evaluator.comparative_statics
+  - evaluator.proposition
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http

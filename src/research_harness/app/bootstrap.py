@@ -271,6 +271,8 @@ def _derived_plugin_configs(
         "evaluator.mechanism": {"evaluation": config.evaluation.model_dump()},
         "evaluator.equilibrium": {"evaluation": config.evaluation.model_dump()},
         "evaluator.numerical": {"evaluation": config.evaluation.model_dump()},
+        "evaluator.comparative_statics": {"evaluation": config.evaluation.model_dump()},
+        "evaluator.proposition": {"evaluation": config.evaluation.model_dump()},
         "documents.locator.metadata": {"documents": config.documents.model_dump()},
         "documents.locator.unpaywall": {"documents": config.documents.model_dump()},
         "documents.fetcher.http": {"documents": config.documents.model_dump()},

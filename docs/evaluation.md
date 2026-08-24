@@ -1,4 +1,4 @@
-# Evaluation Harness (Phase 6A–6E)
+# Evaluation Harness (Phase 6A–6F)
 
 Plugin-based evaluation framework that measures research-agent quality
 independently from the production pipeline:
@@ -65,6 +65,8 @@ Evaluators are plugin services registered in the service registry:
 | `evaluator.mechanism` | deterministic | Mechanism development (Phase 6D): validity, knowledge-basis discipline, grounding, critic recall, revision success |
 | `evaluator.equilibrium` | deterministic | Equilibrium correctness (Phase 6E): symbolic expression/FOC/best-response equivalence, verification, order, conditions |
 | `evaluator.numerical` | deterministic | Numerical analysis (Phase 6E): value/feasibility/condition/sweep/robustness/welfare/reproducibility |
+| `evaluator.comparative_statics` | deterministic | Comparative statics (Phase 6F): derivative/sign/condition/coverage/ambiguous-sign accuracy, overclaim detection |
+| `evaluator.proposition` | deterministic | Proposition correctness (Phase 6F): verification, monotonicity/equality recomputation, condition/support integrity, rejection justification |
 | `evaluator.claim_grounding` | model-assisted | Whether candidate assessments are grounded in cited evidence (deterministic guard: no evidence → ungrounded without a model call) |
 | `evaluator.citation_correctness` | deterministic | Placeholder check (6A) or full `manuscript_citation` mode (6B): resolution, map accuracy, dedup, leftovers, invented fields |
 | `evaluator.llm_judge` | model-assisted | Generic rubric-driven judge with structured output |
@@ -485,11 +487,85 @@ use deterministic floating-point tolerances (1e-6), never rendered strings.
 Known expected: values 4/4, feasibility 2/2, condition 9/9, sweep 9/9,
 robustness 2/2, welfare 9/9, reproducibility 9/9, pass rate 9/9.
 
-## Known limitations (Phase 6A–6E)
+## Comparative statics benchmark (`comparative-statics-v1`, Phase 6F)
+
+Drives the REAL Phase 3D service:
+
+```
+verified equilibrium → ComparativeStaticsService (SymPy derivatives,
+deterministic sign inference, recorded ambiguity conditions) →
+ComparativeStatic artifacts
+```
+
+Cases (8): positive derivative `dq/da = 1/2`; negative derivative
+`dq/dc = -1/2`; zero derivative (fixed cost drops out of `q* = a/2`);
+ambiguous sign (`dq/da = 1/(2b)` — never a definite overclaim); derivative
+requiring conditions (`dq/db = -(a-c)/(2b²)` with the sign dependency
+recorded); multiple outcomes/parameters (Cournot: 4 statics); incorrect
+expected derivative (reference asserts `dq/da = 2` — fails by design);
+unused parameter (zero static derived anyway).
+
+References are known closed forms, compared with **SymPy symbolic
+equivalence**; the evaluator re-derives every derivative from the produced
+candidate itself (defensive recomputation, never trusting the static's
+string).
+
+### Comparative statics metrics
+
+- `derivative_accuracy`, `sign_accuracy`
+- `condition_preservation_accuracy` (dropped or spurious conditions)
+- `outcome_parameter_coverage`
+- `ambiguous_sign_accuracy`
+
+Critical failures: wrong derivative; wrong sign; definite sign asserted
+when the derivative is ambiguous; conditions dropped (or spurious);
+expected outcome/parameter pair missing.
+
+Known expected: derivatives 11/12 (1 by-design wrong reference), signs
+12/12, conditions 12/12, coverage 12/12, ambiguous 2/2, pass rate 7/8.
+
+## Proposition benchmark (`proposition-correctness-v1`, Phase 6F)
+
+Drives the REAL Phase 3D proposition pipeline:
+
+```
+verified equilibrium → ComparativeStaticsService → PropositionGeneratorService
+(scripted responses) → PropositionVerifierService (symbolic checks) +
+PropositionCriticService
+```
+
+Cases (10): correct positive monotonicity; correct negative monotonicity;
+zero-effect proposition; conditional proposition (ambiguous static with
+declared `b > 0` → conditionally_verified); wrong-sign proposition rejected;
+missing-condition proposition rejected; valid equilibrium equality
+(`q1 = q2`); invalid equality (`q1 = 2*q2`) rejected; hallucinated
+comparative-static ID rejected on equilibrium consistency; unsupported
+threshold claim rejected.
+
+The evaluator recomputes monotonicity signs and equality differences from
+the produced candidate expressions and re-checks every supporting id
+against the produced statics of the same candidate.
+
+### Proposition metrics
+
+- `proposition_verification_accuracy`, `monotonicity_accuracy`
+- `equality_accuracy`, `condition_accuracy`
+- `support_reference_accuracy`
+- `incorrect_proposition_rejection_rate`
+
+Critical failures: incorrect proposition marked verified; wrong symbolic
+derivative/sign; missing required conditions; hallucinated support ids;
+invalid equality accepted; valid equality rejected.
+
+Known expected: verification 10/10, monotonicity 7/7, equality 2/2,
+conditions 1/1, support 10/10, rejection 5/10 (pooled), pass rate 10/10.
+
+## Known limitations (Phase 6A–6F)
 
 - Benchmarks so far: novelty threat, retrieval, citation, screening,
   evidence extraction, gap analysis, mechanism development, equilibrium
-  correctness, numerical analysis. Proposition / manuscript-grounding
+  correctness, numerical analysis, comparative statics, proposition
+  correctness. Results/contribution assembly and manuscript-grounding
   benchmarks are not yet implemented.
 - Case pass/fail is gated only by deterministic evaluators; a benchmark with
   only model-assisted evaluators cannot fail a case (by design — LLM judges
@@ -514,7 +590,8 @@ robustness 2/2, welfare 9/9, reproducibility 9/9, pass rate 9/9.
 
 ## Recommended next increment
 
-Phase 6F: a **proposition/comparative-statics benchmark** over the Phase 3D
-pipeline (verified equilibria → symbolic comparative statics → proposition
-generation/verification with deterministic sign checks), reusing the
-harness, evaluator contract, and generic aggregation end to end.
+Phase 6G: a **results/contribution assembly + manuscript grounding/citation
+integrity benchmark** over the Phase 4 results-package and Phase 4C
+manuscript pipelines (grounded claims, citation integrity, contribution
+coherence), reusing the harness, evaluator contract, and generic
+aggregation end to end.

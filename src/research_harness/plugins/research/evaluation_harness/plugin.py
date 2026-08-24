@@ -24,12 +24,14 @@ from research_harness.research.benchmarks.workflows import (
     BenchmarkError,
     FixtureModelRouter,
     run_citation_workflow,
+    run_comparative_statics_workflow,
     run_equilibrium_workflow,
     run_evidence_workflow,
     run_gap_workflow,
     run_mechanism_workflow,
     run_novelty_workflow,
     run_numerical_workflow,
+    run_proposition_workflow,
     run_retrieval_workflow,
     run_screening_workflow,
 )
@@ -413,6 +415,20 @@ class EvaluationHarnessService:
                 producer=self._producer,
             )
             return produced, None
+        if workflow == "comparative_statics":
+            produced = await run_comparative_statics_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "proposition_generation":
+            produced = await run_proposition_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         raise BenchmarkError(f"unsupported benchmark workflow {workflow!r}")
 
     async def _evaluate_case(
@@ -705,6 +721,8 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.mechanism",
                 "evaluator.equilibrium",
                 "evaluator.numerical",
+                "evaluator.comparative_statics",
+                "evaluator.proposition",
             ],
             optional_requires=["blob_store.default"],
         )
@@ -734,6 +752,8 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.mechanism": ctx.require("evaluator.mechanism"),
                 "evaluator.equilibrium": ctx.require("evaluator.equilibrium"),
                 "evaluator.numerical": ctx.require("evaluator.numerical"),
+                "evaluator.comparative_statics": ctx.require("evaluator.comparative_statics"),
+                "evaluator.proposition": ctx.require("evaluator.proposition"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),

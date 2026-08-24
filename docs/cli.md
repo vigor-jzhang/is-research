@@ -176,7 +176,7 @@ uv run research-agent novelty gate <package-id> [--report <report-id>]
 uv run research-agent novelty inspect <report-or-gate-id>
 ```
 
-## Evaluation harness (Phase 6A–6E)
+## Evaluation harness (Phase 6A–6F)
 
 ```bash
 # Run a benchmark end-to-end (registers the immutable benchmark, runs each
@@ -191,6 +191,8 @@ uv run research-agent eval run research-gap-analysis-v1        # 10 cases: gap t
 uv run research-agent eval run mechanism-development-v1         # 10 cases: mechanism validity, critic, revision
 uv run research-agent eval run equilibrium-correctness-v1       # 10 cases: closed-form equilibria, symbolic verification
 uv run research-agent eval run numerical-analysis-v1             # 9 cases: sweeps, feasibility, robustness, welfare
+uv run research-agent eval run comparative-statics-v1           # 8 cases: closed-form derivatives, signs, conditions
+uv run research-agent eval run proposition-correctness-v1        # 10 cases: monotonicity, equality, threshold, rejection
 uv run research-agent eval run <benchmark> [--evaluators evaluator.deterministic,...]
 
 # Inspect an evaluation run or report (per-evaluator detail)

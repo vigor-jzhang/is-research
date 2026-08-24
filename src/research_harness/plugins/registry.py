@@ -387,6 +387,22 @@ def _create_evaluator_numerical() -> Plugin:
     return NumericalEvaluatorPlugin()
 
 
+def _create_evaluator_comparative_statics() -> Plugin:
+    from research_harness.plugins.research.evaluator_comparative_statics.plugin import (
+        ComparativeStaticsEvaluatorPlugin,
+    )
+
+    return ComparativeStaticsEvaluatorPlugin()
+
+
+def _create_evaluator_proposition() -> Plugin:
+    from research_harness.plugins.research.evaluator_proposition.plugin import (
+        PropositionEvaluatorPlugin,
+    )
+
+    return PropositionEvaluatorPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -477,6 +493,8 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "evaluator.mechanism": _create_evaluator_mechanism,
     "evaluator.equilibrium": _create_evaluator_equilibrium,
     "evaluator.numerical": _create_evaluator_numerical,
+    "evaluator.comparative_statics": _create_evaluator_comparative_statics,
+    "evaluator.proposition": _create_evaluator_proposition,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

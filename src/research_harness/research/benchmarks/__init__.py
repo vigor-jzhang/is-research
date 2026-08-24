@@ -3154,6 +3154,658 @@ NUMERICAL_ANALYSIS_V1: BenchmarkDefinition = BenchmarkDefinition(
     ],
 )
 
+# ---------------------------------------------------------------------------
+# comparative-statics-v1 (Phase 6F): real Phase 3D ComparativeStaticsService
+# ---------------------------------------------------------------------------
+
+
+def _cs_case(
+    case_id: str,
+    name: str,
+    description: str,
+    model: dict[str, Any],
+    candidate: dict[str, Any],
+    reference: dict[str, Any],
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "comparative_statics",
+            "model": model,
+            "candidate": candidate,
+        },
+        reference=reference,
+        evaluation_dimensions=["comparative_statics"],
+        tags=["comparative_statics", "offline"],
+    )
+
+
+def _cs_ref(
+    statics: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    return {"expected_statics": statics}
+
+
+def _cs_static(derivative: str, sign: str, conditions: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "derivative": derivative,
+        "sign": sign,
+        "conditions": conditions or [],
+    }
+
+
+_COMPARATIVE_MONOPOLY_MODEL = _eq_model(
+    "cs-monopoly",
+    "Monopoly",
+    [{"id": "m1", "name": "Monopolist"}],
+    [_dv("q", "m1")],
+    [_param("a"), _param("c")],
+    [{"stage_number": 0, "name": "move", "actor_ids": ["m1"]}],
+    [_payoff("m1", "q*(a - q) - c*q", ["q"], ["a", "c"])],
+)
+
+_COMPARATIVE_MONOPOLY_CANDIDATE = {
+    "expressions": [{"variable": "q", "expression": "(a-c)/2", "symbols_used": ["a", "c"]}],
+    "decision_variables": ["q"],
+    "method": "simultaneous",
+}
+
+_COMPARATIVE_FIXED_COST_MODEL = _eq_model(
+    "cs-fixed-cost",
+    "Monopoly with fixed cost",
+    [{"id": "m1", "name": "Monopolist"}],
+    [_dv("q", "m1")],
+    [_param("a"), _param("c")],
+    [{"stage_number": 0, "name": "move", "actor_ids": ["m1"]}],
+    [_payoff("m1", "q*(a - q) - c", ["q"], ["a", "c"])],
+)
+
+_COMPARATIVE_FIXED_COST_CANDIDATE = {
+    "expressions": [{"variable": "q", "expression": "a/2", "symbols_used": ["a"]}],
+    "decision_variables": ["q"],
+    "method": "simultaneous",
+}
+
+_COMPARATIVE_SLOPE_MODEL = _eq_model(
+    "cs-slope",
+    "Monopoly with slope",
+    [{"id": "m1", "name": "Monopolist"}],
+    [_dv("q", "m1")],
+    [
+        {"symbol": "a", "meaning": "a", "domain": "R_+"},
+        {"symbol": "c", "meaning": "c", "domain": "R_+"},
+        {"symbol": "b", "meaning": "b", "domain": "R"},
+    ],
+    [{"stage_number": 0, "name": "move", "actor_ids": ["m1"]}],
+    [_payoff("m1", "q*(a - b*q) - c*q", ["q"], ["a", "b", "c"])],
+)
+
+_COMPARATIVE_SLOPE_CANDIDATE = {
+    "expressions": [
+        {
+            "variable": "q",
+            "expression": "(a-c)/(2*b)",
+            "symbols_used": ["a", "c", "b"],
+            "conditions": ["2*b != 0"],
+        }
+    ],
+    "decision_variables": ["q"],
+    "method": "sympy_solved",
+}
+
+_COMPARATIVE_UNUSED_PARAM_MODEL = _eq_model(
+    "cs-unused-param",
+    "Monopoly without cost",
+    [{"id": "m1", "name": "Monopolist"}],
+    [_dv("q", "m1")],
+    [_param("a"), _param("c")],
+    [{"stage_number": 0, "name": "move", "actor_ids": ["m1"]}],
+    [_payoff("m1", "q*(a - q)", ["q"], ["a"])],
+)
+
+_COMPARATIVE_UNUSED_PARAM_CANDIDATE = {
+    "expressions": [{"variable": "q", "expression": "a/2", "symbols_used": ["a"]}],
+    "decision_variables": ["q"],
+    "method": "simultaneous",
+}
+
+
+COMPARATIVE_STATICS_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="comparative-statics-v1",
+    version=1,
+    name="Comparative Statics",
+    description=(
+        "Offline benchmark over the real Phase 3D ComparativeStaticsService: "
+        "fixture verified equilibrium -> real SymPy comparative statics with "
+        "known closed-form derivatives and signs. Symbolic equivalence via "
+        "SymPy, never string equality."
+    ),
+    category="comparative_statics",
+    config={"evaluators": ["evaluator.comparative_statics"]},
+    cases=[
+        _cs_case(
+            "cs-positive-derivative",
+            "positive derivative",
+            "dq/da = 1/2 at q* = (a-c)/2 is derived with sign positive.",
+            _COMPARATIVE_MONOPOLY_MODEL,
+            _COMPARATIVE_MONOPOLY_CANDIDATE,
+            _cs_ref({"q/a": _cs_static("1/2", "positive")}),
+        ),
+        _cs_case(
+            "cs-negative-derivative",
+            "negative derivative",
+            "dq/dc = -1/2 at q* = (a-c)/2 is derived with sign negative.",
+            _COMPARATIVE_MONOPOLY_MODEL,
+            _COMPARATIVE_MONOPOLY_CANDIDATE,
+            _cs_ref({"q/c": _cs_static("-1/2", "negative")}),
+        ),
+        _cs_case(
+            "cs-zero-derivative",
+            "zero derivative",
+            "A fixed cost drops out of q* = a/2, so dq/dc = 0 with sign zero.",
+            _COMPARATIVE_FIXED_COST_MODEL,
+            _COMPARATIVE_FIXED_COST_CANDIDATE,
+            _cs_ref({"q/c": _cs_static("0", "zero")}),
+        ),
+        _cs_case(
+            "cs-ambiguous-sign",
+            "ambiguous sign",
+            "dq/da = 1/(2*b) has sign depending on b; production must record "
+            "the ambiguity rather than assert a definite sign.",
+            _COMPARATIVE_SLOPE_MODEL,
+            _COMPARATIVE_SLOPE_CANDIDATE,
+            _cs_ref({"q/a": _cs_static("1/(2*b)", "ambiguous", ["sign of da depends on: b"])}),
+        ),
+        _cs_case(
+            "cs-conditions-recorded",
+            "derivative requiring conditions",
+            "dq/db = -(a-c)/(2*b**2) requires the sign of (a-c); the condition "
+            "is recorded explicitly.",
+            _COMPARATIVE_SLOPE_MODEL,
+            _COMPARATIVE_SLOPE_CANDIDATE,
+            _cs_ref(
+                {
+                    "q/b": _cs_static(
+                        "-(a-c)/(2*b**2)",
+                        "ambiguous",
+                        ["sign of db depends on: a, b, c"],
+                    )
+                }
+            ),
+        ),
+        _cs_case(
+            "cs-multiple-outcomes-parameters",
+            "multiple outcomes and parameters",
+            "The Cournot equilibrium yields four statics (2 outcomes x 2 "
+            "parameters) with the correct signs.",
+            _COURNOT_MODEL,
+            _COURNOT_CANDIDATE,
+            _cs_ref(
+                {
+                    "q1/a": _cs_static("1/3", "positive"),
+                    "q1/c": _cs_static("-1/3", "negative"),
+                    "q2/a": _cs_static("1/3", "positive"),
+                    "q2/c": _cs_static("-1/3", "negative"),
+                }
+            ),
+        ),
+        _cs_case(
+            "cs-incorrect-expected-derivative",
+            "incorrect expected derivative",
+            "The reference asserts a WRONG derivative (dq/da = 2); the "
+            "evaluator must fail the case on symbolic mismatch. Fails by "
+            "design.",
+            _COMPARATIVE_MONOPOLY_MODEL,
+            _COMPARATIVE_MONOPOLY_CANDIDATE,
+            _cs_ref({"q/a": _cs_static("2", "positive")}),
+        ),
+        _cs_case(
+            "cs-unused-parameter",
+            "unused parameter",
+            "A model parameter absent from the payoffs yields dq/dc = 0 with "
+            "sign zero; dq/da = 1/2 remains positive.",
+            _COMPARATIVE_UNUSED_PARAM_MODEL,
+            _COMPARATIVE_UNUSED_PARAM_CANDIDATE,
+            _cs_ref(
+                {
+                    "q/a": _cs_static("1/2", "positive"),
+                    "q/c": _cs_static("0", "zero"),
+                }
+            ),
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# proposition-correctness-v1 (Phase 6F): real Phase 3D generator/verifier
+# ---------------------------------------------------------------------------
+
+
+def _prop_case(
+    case_id: str,
+    name: str,
+    description: str,
+    model: dict[str, Any],
+    candidate: dict[str, Any],
+    expected_propositions: list[dict[str, Any]],
+    llm_fixtures: list[dict[str, Any]],
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "proposition_generation",
+            "model": model,
+            "candidate": candidate,
+            "llm_fixtures": llm_fixtures,
+        },
+        reference={"expected_propositions": expected_propositions},
+        evaluation_dimensions=["proposition"],
+        tags=["proposition", "offline"],
+    )
+
+
+def _prop_item(
+    statement: str,
+    *,
+    claim_type: str = "monotonicity",
+    outcome_variable: str | None = None,
+    parameter: str | None = None,
+    expected_sign: str | None = None,
+    mathematical_form: str | None = None,
+    conditions: list[str] | None = None,
+    supporting_static_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "statement": statement,
+        "claim_type": claim_type,
+        "outcome_variable": outcome_variable,
+        "parameter": parameter,
+        "expected_sign": expected_sign,
+        "mathematical_form": mathematical_form,
+        "conditions": conditions or [],
+        "supporting_static_ids": supporting_static_ids or [],
+    }
+
+
+def _prop_fixtures(
+    case_id: str,
+    items: list[dict[str, Any]],
+    *,
+    critique: bool = True,
+) -> list[dict[str, Any]]:
+    fixtures: list[dict[str, Any]] = [
+        {
+            "match": "Propose testable propositions grounded in the verified equilibrium.",
+            "response": {"propositions": items},
+        }
+    ]
+    if critique:
+        fixtures.append(
+            {
+                "match": "Critique the following research proposition.",
+                "response": {
+                    "overall_assessment": "fixture critique",
+                    "verdict": "keep",
+                    "recommendations": ["fixture"],
+                    "issues": [],
+                },
+            }
+        )
+        fixtures.append(
+            {
+                "match": "Write the economic/IS interpretation of the following verified proposition.",
+                "response": {
+                    "mathematical_result": "fixture result",
+                    "economic_interpretation": "fixture interpretation",
+                    "managerial_implication": "fixture implication",
+                    "is_theoretical_implication": "fixture theory",
+                    "consistency_note": "fixture note",
+                },
+            }
+        )
+    return fixtures
+
+
+def _prop_expectation(
+    *,
+    claim_type: str,
+    expected_verification: str,
+    outcome_variable: str | None = None,
+    parameter: str | None = None,
+    expected_sign: str | None = None,
+    expected_conditions: list[str] | None = None,
+    expected_equality: bool | None = None,
+    expected_rejected: bool = False,
+) -> dict[str, Any]:
+    return {
+        "claim_type": claim_type,
+        "outcome_variable": outcome_variable,
+        "parameter": parameter,
+        "expected_sign": expected_sign,
+        "expected_verification": expected_verification,
+        "expected_conditions": expected_conditions or [],
+        "expected_equality": expected_equality,
+        "expected_rejected": expected_rejected,
+    }
+
+
+def _prop_static_ids(case_id: str, *indices: int) -> list[str]:
+    return [f"{case_id}-static-{i}" for i in indices]
+
+
+PROPOSITION_CORRECTNESS_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="proposition-correctness-v1",
+    version=1,
+    name="Proposition Correctness",
+    description=(
+        "Offline benchmark over the real Phase 3D proposition pipeline: "
+        "fixture verified equilibrium -> real ComparativeStaticsService -> "
+        "real PropositionGeneratorService + PropositionVerifierService + "
+        "PropositionCriticService (scripted responses) with known-answer "
+        "verification outcomes. Symbolic equivalence via SymPy, never string "
+        "equality."
+    ),
+    category="proposition_correctness",
+    config={"evaluators": ["evaluator.proposition"]},
+    cases=[
+        _prop_case(
+            "prop-positive-monotonicity",
+            "correct positive monotonicity",
+            "q1 increases in the demand intercept a; the proposition is "
+            "verified against the positive comparative static.",
+            _COURNOT_MODEL,
+            _COURNOT_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="monotonicity",
+                    outcome_variable="q1",
+                    parameter="a",
+                    expected_sign="positive",
+                    expected_verification="verified",
+                )
+            ],
+            _prop_fixtures(
+                "prop-positive-monotonicity",
+                [
+                    _prop_item(
+                        "Increasing the demand intercept a raises firm 1's equilibrium quantity.",
+                        outcome_variable="q1",
+                        parameter="a",
+                        expected_sign="positive",
+                        supporting_static_ids=_prop_static_ids("prop-positive-monotonicity", 0),
+                    )
+                ],
+            ),
+        ),
+        _prop_case(
+            "prop-negative-monotonicity",
+            "correct negative monotonicity",
+            "q1 decreases in the marginal cost c; the proposition is verified.",
+            _COURNOT_MODEL,
+            _COURNOT_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="monotonicity",
+                    outcome_variable="q1",
+                    parameter="c",
+                    expected_sign="negative",
+                    expected_verification="verified",
+                )
+            ],
+            _prop_fixtures(
+                "prop-negative-monotonicity",
+                [
+                    _prop_item(
+                        "Increasing the marginal cost c lowers firm 1's equilibrium quantity.",
+                        outcome_variable="q1",
+                        parameter="c",
+                        expected_sign="negative",
+                        supporting_static_ids=_prop_static_ids("prop-negative-monotonicity", 1),
+                    )
+                ],
+            ),
+        ),
+        _prop_case(
+            "prop-zero-effect",
+            "zero-effect proposition",
+            "A fixed cost drops out of q* = a/2; the zero-effect proposition is verified.",
+            _COMPARATIVE_FIXED_COST_MODEL,
+            _COMPARATIVE_FIXED_COST_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="monotonicity",
+                    outcome_variable="q",
+                    parameter="c",
+                    expected_sign="zero",
+                    expected_verification="verified",
+                )
+            ],
+            _prop_fixtures(
+                "prop-zero-effect",
+                [
+                    _prop_item(
+                        "The fixed cost c has no effect on the equilibrium quantity.",
+                        outcome_variable="q",
+                        parameter="c",
+                        expected_sign="zero",
+                        supporting_static_ids=_prop_static_ids("prop-zero-effect", 1),
+                    )
+                ],
+            ),
+        ),
+        _prop_case(
+            "prop-conditional",
+            "conditional proposition",
+            "q increases in a only when b > 0; the proposition declares the "
+            "condition and is conditionally verified.",
+            _COMPARATIVE_SLOPE_MODEL,
+            _COMPARATIVE_SLOPE_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="monotonicity",
+                    outcome_variable="q",
+                    parameter="a",
+                    expected_sign="positive",
+                    expected_verification="conditionally_verified",
+                    expected_conditions=["b > 0"],
+                )
+            ],
+            _prop_fixtures(
+                "prop-conditional",
+                [
+                    _prop_item(
+                        "The equilibrium quantity increases in the demand "
+                        "intercept a when the slope parameter b is positive.",
+                        outcome_variable="q",
+                        parameter="a",
+                        expected_sign="positive",
+                        conditions=["b > 0"],
+                        supporting_static_ids=_prop_static_ids("prop-conditional", 0),
+                    )
+                ],
+            ),
+        ),
+        _prop_case(
+            "prop-wrong-sign-rejected",
+            "wrong-sign proposition rejected",
+            "A proposition claiming q1 decreases in a contradicts the positive "
+            "comparative static and is rejected by the symbolic verifier.",
+            _COURNOT_MODEL,
+            _COURNOT_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="monotonicity",
+                    outcome_variable="q1",
+                    parameter="a",
+                    expected_sign="negative",
+                    expected_verification="failed",
+                    expected_rejected=True,
+                )
+            ],
+            _prop_fixtures(
+                "prop-wrong-sign-rejected",
+                [
+                    _prop_item(
+                        "Increasing the demand intercept a lowers firm 1's equilibrium quantity.",
+                        outcome_variable="q1",
+                        parameter="a",
+                        expected_sign="negative",
+                        supporting_static_ids=_prop_static_ids("prop-wrong-sign-rejected", 0),
+                    )
+                ],
+                critique=False,
+            ),
+        ),
+        _prop_case(
+            "prop-missing-condition-rejected",
+            "missing-condition proposition rejected",
+            "A monotonicity proposition on an ambiguous comparative static "
+            "without the required conditions is rejected.",
+            _COMPARATIVE_SLOPE_MODEL,
+            _COMPARATIVE_SLOPE_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="monotonicity",
+                    outcome_variable="q",
+                    parameter="a",
+                    expected_sign="positive",
+                    expected_verification="failed",
+                    expected_rejected=True,
+                )
+            ],
+            _prop_fixtures(
+                "prop-missing-condition-rejected",
+                [
+                    _prop_item(
+                        "The equilibrium quantity increases in the demand intercept a.",
+                        outcome_variable="q",
+                        parameter="a",
+                        expected_sign="positive",
+                        supporting_static_ids=_prop_static_ids(
+                            "prop-missing-condition-rejected", 0
+                        ),
+                    )
+                ],
+                critique=False,
+            ),
+        ),
+        _prop_case(
+            "prop-valid-equality",
+            "valid equilibrium equality",
+            "The symmetric Cournot equilibrium satisfies q1 = q2; the equality "
+            "proposition is verified.",
+            _COURNOT_MODEL,
+            _COURNOT_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="equality",
+                    expected_verification="verified",
+                    expected_equality=True,
+                )
+            ],
+            _prop_fixtures(
+                "prop-valid-equality",
+                [
+                    _prop_item(
+                        "Both firms produce the same equilibrium quantity.",
+                        claim_type="equality",
+                        mathematical_form="q1 = q2",
+                        supporting_static_ids=_prop_static_ids("prop-valid-equality", 0),
+                    )
+                ],
+            ),
+        ),
+        _prop_case(
+            "prop-invalid-equality",
+            "invalid equality",
+            "q1 = 2*q2 does not hold at the symmetric equilibrium; the proposition is rejected.",
+            _COURNOT_MODEL,
+            _COURNOT_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="equality",
+                    expected_verification="failed",
+                    expected_equality=False,
+                    expected_rejected=True,
+                )
+            ],
+            _prop_fixtures(
+                "prop-invalid-equality",
+                [
+                    _prop_item(
+                        "Firm 1 produces twice firm 2's equilibrium quantity.",
+                        claim_type="equality",
+                        mathematical_form="q1 = 2*q2",
+                        supporting_static_ids=_prop_static_ids("prop-invalid-equality", 0),
+                    )
+                ],
+                critique=False,
+            ),
+        ),
+        _prop_case(
+            "prop-hallucinated-support",
+            "hallucinated comparative static ID",
+            "A proposition citing a nonexistent comparative static id is "
+            "rejected on equilibrium consistency.",
+            _COURNOT_MODEL,
+            _COURNOT_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="monotonicity",
+                    outcome_variable="q1",
+                    parameter="a",
+                    expected_sign="positive",
+                    expected_verification="failed",
+                    expected_rejected=True,
+                )
+            ],
+            _prop_fixtures(
+                "prop-hallucinated-support",
+                [
+                    _prop_item(
+                        "Increasing the demand intercept a raises firm 1's equilibrium quantity.",
+                        outcome_variable="q1",
+                        parameter="a",
+                        expected_sign="positive",
+                        supporting_static_ids=["prop-hallucinated-support-static-ghost"],
+                    )
+                ],
+                critique=False,
+            ),
+        ),
+        _prop_case(
+            "prop-unsupported-threshold",
+            "unsupported threshold proposition",
+            "A threshold claim is not supported by the production verifier and is rejected.",
+            _COURNOT_MODEL,
+            _COURNOT_CANDIDATE,
+            [
+                _prop_expectation(
+                    claim_type="threshold",
+                    expected_verification="failed",
+                    expected_rejected=True,
+                )
+            ],
+            _prop_fixtures(
+                "prop-unsupported-threshold",
+                [
+                    _prop_item(
+                        "Firm 1's quantity exceeds firm 2's when the demand "
+                        "intercept is sufficiently large.",
+                        claim_type="threshold",
+                        supporting_static_ids=_prop_static_ids("prop-unsupported-threshold", 0),
+                    )
+                ],
+                critique=False,
+            ),
+        ),
+    ],
+)
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -3164,4 +3816,6 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     MECHANISM_DEVELOPMENT_V1.benchmark_id: MECHANISM_DEVELOPMENT_V1,
     EQUILIBRIUM_CORRECTNESS_V1.benchmark_id: EQUILIBRIUM_CORRECTNESS_V1,
     NUMERICAL_ANALYSIS_V1.benchmark_id: NUMERICAL_ANALYSIS_V1,
+    COMPARATIVE_STATICS_V1.benchmark_id: COMPARATIVE_STATICS_V1,
+    PROPOSITION_CORRECTNESS_V1.benchmark_id: PROPOSITION_CORRECTNESS_V1,
 }

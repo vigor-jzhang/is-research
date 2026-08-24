@@ -491,5 +491,7 @@ class AppConfig(BaseModel):
             "evaluator.mechanism": {"evaluation": self.evaluation.model_dump()},
             "evaluator.equilibrium": {"evaluation": self.evaluation.model_dump()},
             "evaluator.numerical": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.comparative_statics": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.proposition": {"evaluation": self.evaluation.model_dump()},
         }
         return mapping.get(plugin_id, {})

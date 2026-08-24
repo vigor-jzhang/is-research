@@ -1458,3 +1458,276 @@ async def run_numerical_workflow(
 
     after = await artifact_store.list()
     return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# Phase 6F shared fixture: run-unique model + verified candidate + analysis
+# ---------------------------------------------------------------------------
+
+
+async def _put_equilibrium_fixture(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    run_suffix: str,
+    producer: str,
+) -> tuple[str, str, str]:
+    """Create the run-unique fixture FormalAnalyticalModel + verified
+    EquilibriumCandidate + EquilibriumAnalysis used by the Phase 6F workflows
+    (comparative statics / propositions), returning their artifact ids."""
+    from research_harness.research.schemas.equilibrium import (
+        EquilibriumAnalysis,
+        EquilibriumAnalysisStatus,
+        EquilibriumCandidate,
+        EquilibriumExpression,
+        SolutionMethod,
+        VerificationStatus,
+    )
+    from research_harness.research.schemas.model import (
+        Expression,
+        FormalAnalyticalModel,
+        ModelActor,
+        ModelParameter,
+        ModelTimingStage,
+        ModelVariable,
+        PayoffFunction,
+        SymbolKind,
+    )
+
+    model_cfg = case.input.get("model") or {}
+    model = FormalAnalyticalModel(
+        selected_mechanism_id=f"{case.id}-mech",
+        title=model_cfg["title"],
+        description=model_cfg.get("description") or model_cfg["title"],
+        actors=[
+            ModelActor(actor_id=a["id"], name=a["name"], strategic=a.get("strategic", True))
+            for a in model_cfg.get("actors") or []
+        ],
+        variables=[
+            ModelVariable(
+                symbol=v["symbol"],
+                name=v.get("name", v["symbol"]),
+                meaning=v.get("meaning", v["symbol"]),
+                domain=v.get("domain", "R"),
+                kind=SymbolKind(v.get("kind", "state_variable")),
+                owner_actor_id=v.get("owner_actor_id"),
+            )
+            for v in model_cfg.get("variables") or []
+        ],
+        parameters=[
+            ModelParameter(
+                symbol=p["symbol"],
+                name=p.get("name", p["symbol"]),
+                meaning=p.get("meaning", p["symbol"]),
+                domain=p.get("domain", "R"),
+            )
+            for p in model_cfg.get("parameters") or []
+        ],
+        timing=[
+            ModelTimingStage(
+                stage_number=stage["stage_number"],
+                name=stage.get("name", f"stage {stage['stage_number']}"),
+                description=stage.get("description") or f"Stage {stage['stage_number']}",
+                actor_ids=list(stage.get("actor_ids") or []),
+            )
+            for stage in model_cfg.get("timing") or []
+        ],
+        payoffs=[
+            PayoffFunction(
+                actor_id=pf["actor_id"],
+                objective_type=pf.get("objective_type", "profit"),
+                expression=Expression(
+                    expression=pf["expression"],
+                    symbols_used=list(pf.get("symbols_used") or []),
+                ),
+                decision_variables=list(pf.get("decision_variables") or []),
+                parameters=list(pf.get("parameters") or []),
+            )
+            for pf in model_cfg.get("payoffs") or []
+        ],
+    )
+    model_id = f"{case.id}-{run_suffix}-model"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=model,
+            artifact_type="formal_analytical_model",
+            producer=producer,
+            artifact_id=model_id,
+        )
+    )
+
+    candidate_cfg = case.input.get("candidate") or {}
+    candidate = EquilibriumCandidate(
+        model_id=model_id,
+        expressions=[
+            EquilibriumExpression(
+                variable=e["variable"],
+                expression=Expression(
+                    expression=e["expression"],
+                    symbols_used=list(e.get("symbols_used") or []),
+                ),
+                conditions=list(e.get("conditions") or []),
+                solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+            )
+            for e in candidate_cfg.get("expressions") or []
+        ],
+        decision_variables=list(candidate_cfg.get("decision_variables") or []),
+        solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+        proposed_by="sympy",
+        verification_status=VerificationStatus.verified,
+    )
+    candidate_id = f"{case.id}-{run_suffix}-candidate"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=candidate,
+            artifact_type="equilibrium_candidate",
+            producer=producer,
+            artifact_id=candidate_id,
+        )
+    )
+
+    analysis = EquilibriumAnalysis(
+        model_id=model_id,
+        candidate_ids=[candidate_id],
+        verification_ids=[],
+        selected_candidate_id=candidate_id,
+        status=EquilibriumAnalysisStatus.derived,
+        solution_order=list(candidate_cfg.get("solution_order") or []),
+        solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+        revision_rounds=0,
+    )
+    analysis_id = f"{case.id}-{run_suffix}-analysis"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=analysis,
+            artifact_type="equilibrium_analysis",
+            producer=producer,
+            artifact_id=analysis_id,
+        )
+    )
+    return model_id, candidate_id, analysis_id
+
+
+# ---------------------------------------------------------------------------
+# comparative_statics workflow (Phase 6F): real Phase 3D pipeline
+# ---------------------------------------------------------------------------
+
+
+async def run_comparative_statics_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 3D comparative statics: fixture verified
+    equilibrium -> real ComparativeStaticsService -> ComparativeStatic
+    artifacts. Fixtures are run-unique so service idempotency never stales
+    re-runs."""
+    from research_harness.plugins.research.comparative_statics.plugin import (
+        ComparativeStaticsService,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    _, _, analysis_id = await _put_equilibrium_fixture(
+        artifact_store=artifact_store,
+        case=case,
+        run_suffix=run_suffix,
+        producer=producer,
+    )
+
+    svc = ComparativeStaticsService(artifact_store=artifact_store)
+    await svc.run(analysis_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# proposition_generation workflow (Phase 6F): real Phase 3D pipeline
+# ---------------------------------------------------------------------------
+
+
+async def run_proposition_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 3D proposition pipeline: fixture verified
+    equilibrium -> real ComparativeStaticsService -> real
+    PropositionGeneratorService (scripted proposition/critique/interpretation
+    responses) -> real PropositionVerifierService + PropositionCriticService.
+    The ComparativeStatic ids are run-unique; the scripted responses cite the
+    case-scoped ids and are rewritten below."""
+    from research_harness.plugins.research.comparative_statics.plugin import (
+        ComparativeStaticsService,
+    )
+    from research_harness.plugins.research.proposition_critic.plugin import (
+        PropositionCriticService,
+    )
+    from research_harness.plugins.research.proposition_generator.plugin import (
+        PropositionGeneratorService,
+    )
+    from research_harness.plugins.research.proposition_verifier.plugin import (
+        PropositionVerifierService,
+    )
+    from research_harness.research.schemas.proposition import ComparativeStatic
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    model_cfg = case.input.get("model") or {}
+    candidate_cfg = case.input.get("candidate") or {}
+    _, _, analysis_id = await _put_equilibrium_fixture(
+        artifact_store=artifact_store,
+        case=case,
+        run_suffix=run_suffix,
+        producer=producer,
+    )
+
+    cs_svc = ComparativeStaticsService(artifact_store=artifact_store)
+    cs_execution_id = await cs_svc.run(analysis_id)
+    cs_analysis_id = await cs_svc.resolve_analysis(cs_execution_id)
+
+    static_ids_by_pair: dict[tuple[str, str], str] = {}
+    for env in await artifact_store.list():
+        if env.artifact_type != "comparative_static":
+            continue
+        try:
+            s = env.parse_payload(ComparativeStatic)
+        except Exception:  # noqa: BLE001
+            continue
+        static_ids_by_pair[(s.outcome_variable, s.parameter)] = env.artifact_id
+
+    id_map: dict[str, str] = {}
+    for i, (variable, param) in enumerate(
+        (e["variable"], p["symbol"])
+        for e in candidate_cfg.get("expressions") or []
+        for p in model_cfg.get("parameters") or []
+    ):
+        produced_id = static_ids_by_pair.get((variable, param))
+        if produced_id is None:
+            raise BenchmarkError(f"no comparative static produced for {variable}/{param}")
+        id_map[f"{case.id}-static-{i}"] = produced_id
+
+    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+    verifier = PropositionVerifierService(artifact_store=artifact_store)
+    critic = PropositionCriticService(
+        model_router=router,
+        artifact_store=artifact_store,
+        critic_role="critic",
+        interpretation_role="reasoning",
+    )
+    generator = PropositionGeneratorService(
+        model_router=router,
+        artifact_store=artifact_store,
+        verifier=verifier,
+        critic=critic,
+        generator_role="reasoning",
+        max_propositions=8,
+        max_llm_calls=20,
+    )
+    await generator.generate(cs_analysis_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
