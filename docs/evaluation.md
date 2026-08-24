@@ -1,4 +1,4 @@
-# Evaluation Harness (Phase 6A–6G)
+# Evaluation Harness (Phase 6A–6H)
 
 Plugin-based evaluation framework that measures research-agent quality
 independently from the production pipeline:
@@ -69,6 +69,7 @@ Evaluators are plugin services registered in the service registry:
 | `evaluator.proposition` | deterministic | Proposition correctness (Phase 6F): verification, monotonicity/equality recomputation, condition/support integrity, rejection justification |
 | `evaluator.results_grounding` | deterministic | Results assembly (Phase 6G): finding/condition/proposition/numerical support, gap alignment, novelty, contradiction detection |
 | `evaluator.manuscript_grounding` | deterministic | Manuscript grounding (Phase 6G): claim/citation grounding, conditions, critique recall, revision success |
+| `evaluator.pipeline_integrity` | deterministic | End-to-end pipeline integrity (Phase 6H): stage completion, provenance, grounding, conditions, citations, bibliography fidelity |
 | `evaluator.claim_grounding` | model-assisted | Whether candidate assessments are grounded in cited evidence (deterministic guard: no evidence → ungrounded without a model call) |
 | `evaluator.citation_correctness` | deterministic | Placeholder check (6A) or full `manuscript_citation` mode (6B): resolution, map accuracy, dedup, leftovers, invented fields |
 | `evaluator.llm_judge` | model-assisted | Generic rubric-driven judge with structured output |
@@ -646,14 +647,59 @@ Known expected: grounding 15/15, citations 6/6, mathematical 5/5,
 conditions 5/5, unsupported 0/15, citation references 6/6, novelty 15/15,
 consistency 15/15, critique recall 3/3, revision 1/1, pass rate 11/11.
 
-## Known limitations (Phase 6A–6G)
+## End-to-end benchmark (`research-pipeline-e2e-v1`, Phase 6H)
+
+Drives the real production chain across every representative stage:
+
+```
+literature retrieval → screening → evidence extraction → synthesis →
+gap analysis → mechanism → analytical model → equilibrium →
+propositions → numerical analysis → results assembly →
+manuscript grounding → citation formatting
+```
+
+over a small deterministic fixture corpus with scripted model responses.
+The pipeline-integrity evaluator re-derives ground truth from the produced
+artifacts and gates on: missing stages; broken provenance links; unsupported
+evidence/claims; invalid equilibrium expressions; conditions lost
+downstream; wrong citation identity; invented bibliography metadata; and
+numerical disagreement with known expectations.
+
+### Pipeline metrics
+
+- `stage_completion_rate` 13/13, `provenance_integrity_rate` 16/16
+- `grounding_integrity_rate` 14/14, `condition_preservation_rate` 2/2
+- `citation_integrity_rate` 1/1, `bibliography_fidelity_rate` 1/1
+- `deterministic_failure_count` 0, `end_to_end_pass` 1.0
+
+## Coverage matrix
+
+`research_harness/research/evaluation_coverage.py` maps every production
+capability → benchmark → evaluator → metrics → deterministic/advisory gating
+→ covered edge cases → known gaps, across all of 6A-6H. Missing coverage is
+explicit: `uncovered_capabilities()` lists capabilities with no dedicated
+benchmark (Phase 3B model builder and Phase 2G synthesis are covered only
+end-to-end; incremental revalidation, packaging, acquisition, and gap
+selection have no benchmark).
+
+## Evaluation readiness
+
+`research_harness/research/evaluation_readiness.py` generates a report with
+deterministic criteria (benchmark inventory, evaluator inventory, metric
+coverage, deterministic gating per benchmark, by-design failing cases, known
+untested behaviors, uncovered capabilities, reproducibility status,
+provenance/reopen coverage, live-test coverage, model-assisted evaluator
+usage) and a deterministic verdict: `ready` / `ready_with_gaps` /
+`not_ready` — never an LLM judgment. Current verdict: `ready_with_gaps`.
+
+## Known limitations (Phase 6A–6H)
 
 - Benchmarks so far: novelty threat, retrieval, citation, screening,
   evidence extraction, gap analysis, mechanism development, equilibrium
   correctness, numerical analysis, comparative statics, proposition
-  correctness, results assembly, manuscript grounding. Leaderboards, live
-  corpora, model tournaments, and journal-quality scoring are not
-  implemented.
+  correctness, results assembly, manuscript grounding, research-pipeline
+  e2e. Leaderboards, live corpora, model tournaments, automated model
+  selection, and publication-quality scoring are not implemented.
 - Case pass/fail is gated only by deterministic evaluators; a benchmark with
   only model-assisted evaluators cannot fail a case (by design — LLM judges
   never override deterministic verdicts).
@@ -677,8 +723,9 @@ consistency 15/15, critique recall 3/3, revision 1/1, pass rate 11/11.
 
 ## Recommended next increment
 
-Phase 6H (evaluation-completion milestone): a **results/contribution
-assembly + manuscript/citation integrity suite completion** — final
-end-to-end manuscript-grounded submission checks and an evaluation-readiness
-summary (coverage matrix, gap-to-metric mapping, leaderboard opt-in), or the
-first leaderboard/model-tournament increment, reusing the harness unchanged.
+Post-Phase-6: the evaluation program is complete with a deterministic
+readiness verdict (`ready_with_gaps`). Recommended work: standalone
+model-builder and synthesis benchmarks (currently e2e-only), incremental
+novelty revalidation coverage, and — once opted in — the first
+leaderboard/model-tournament increment, reusing the frozen harness
+unchanged.

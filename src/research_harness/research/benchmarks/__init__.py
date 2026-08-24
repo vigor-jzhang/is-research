@@ -5016,6 +5016,593 @@ MANUSCRIPT_GROUNDING_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+# ---------------------------------------------------------------------------
+# research-pipeline-e2e-v1 (Phase 6H): the real production chain end to end
+# ---------------------------------------------------------------------------
+
+_E2E_P0 = {
+    "title": "Algorithmic Pricing and Consumer Welfare in Online Markets",
+    "year": 2020,
+    "venue": "Journal of Platform Studies",
+    "abstract": "Algorithmic pricing raises consumer surplus when switching costs are low.",
+}
+_E2E_P1 = {
+    "title": "Dynamic Pricing in Two-Sided Markets",
+    "year": 2019,
+    "venue": "Journal of Platform Studies",
+    "abstract": "Rising entry costs reduce market participation and consumer surplus.",
+}
+_E2E_P2 = {
+    "title": "A Survey of Estimation Methods for Pricing Data",
+    "year": 2018,
+    "venue": "Methods Review",
+    "abstract": "Survey of estimation methods for pricing data.",
+}
+
+_E2E_CASE_ID = "e2e-research-pipeline"
+_E2E_QUESTION = (
+    "Which mechanisms explain algorithmic pricing effects on consumer "
+    "welfare in platform markets? e2e-research-pipeline"
+)
+
+
+def _e2e_model_fixture() -> dict[str, Any]:
+    return {
+        "match": "Specify a formal analytical model for the selected mechanism.",
+        "response": {
+            "title": "Monopoly platform with linear demand slope",
+            "description": (
+                "A monopolist platform chooses quantity; demand depends on the slope parameter b."
+            ),
+            "game_type": "static complete information",
+            "actors": [
+                {
+                    "actor_id": "m1",
+                    "name": "Monopolist",
+                    "role": "platform",
+                    "strategic": True,
+                }
+            ],
+            "variables": [
+                {
+                    "symbol": "q",
+                    "name": "quantity",
+                    "meaning": "platform output",
+                    "domain": "R_+",
+                    "kind": "decision_variable",
+                    "owner_actor_id": "m1",
+                }
+            ],
+            "parameters": [
+                {
+                    "symbol": "a",
+                    "name": "demand intercept",
+                    "meaning": "demand intercept",
+                    "domain": "R_+",
+                },
+                {
+                    "symbol": "b",
+                    "name": "slope coefficient",
+                    "meaning": "slope coefficient",
+                    "domain": "R",
+                },
+                {
+                    "symbol": "c",
+                    "name": "marginal cost",
+                    "meaning": "marginal cost",
+                    "domain": "R_+",
+                },
+            ],
+            "assumptions": [
+                {
+                    "statement": "Demand is linear in quantity.",
+                    "mathematical_form": {
+                        "expression": "a - b*q",
+                        "symbols_used": ["a", "b", "q"],
+                        "latex": "",
+                    },
+                    "knowledge_basis": "literature_supported",
+                    "source_ids": [f"{_E2E_CASE_ID}-evidence-0"],
+                    "purpose": "demand",
+                    "restrictiveness": "medium",
+                }
+            ],
+            "timing": [
+                {
+                    "stage_number": 0,
+                    "name": "move",
+                    "description": "The monopolist chooses quantity.",
+                    "actor_ids": ["m1"],
+                }
+            ],
+            "information_structure": {
+                "items": [
+                    {
+                        "actor_id": "m1",
+                        "variable_symbols": ["q"],
+                        "available_at_stage": 0,
+                        "visibility": "public",
+                    }
+                ],
+                "uncertainty": [],
+                "summary": "Complete information.",
+            },
+            "payoffs": [
+                {
+                    "actor_id": "m1",
+                    "objective_type": "profit",
+                    "expression": {
+                        "expression": "q*(a - b*q) - c*q",
+                        "symbols_used": ["q", "a", "b", "c"],
+                        "latex": "",
+                    },
+                    "decision_variables": ["q"],
+                    "parameters": ["a", "b", "c"],
+                    "constraints": [],
+                }
+            ],
+        },
+    }
+
+
+def _e2e_mechanism_fixtures() -> list[dict[str, Any]]:
+    candidate = {
+        k: v
+        for k, v in _candidate_payload(
+            "Price competition under entry barriers",
+            basis="literature_supported",
+            source_ids=[f"{_E2E_CASE_ID}-evidence-0", f"{_E2E_CASE_ID}-evidence-1"],
+            support_ids=[f"{_E2E_CASE_ID}-evidence-0", f"{_E2E_CASE_ID}-evidence-1"],
+        ).items()
+        if not k.startswith("_")
+    }
+    return [
+        {
+            "match": "Choose ONE research gap to develop a theoretical mechanism for.",
+            "response": {
+                "selected_gap_id": f"{_E2E_CASE_ID}-gap",
+                "selection_rationale": "fixture selection",
+                "evidence_synthesis_basis": "fixture",
+                "research_importance": 0.8,
+                "theoretical_relevance": 0.8,
+                "analytical_model_suitability": 0.8,
+                "tractability": 0.8,
+            },
+        },
+        {
+            "match": "Develop structured candidate mechanisms for the selected research gap.",
+            "response": {"candidates": [candidate]},
+        },
+        _critique_fixture("keep"),
+    ]
+
+
+RESEARCH_PIPELINE_E2E_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="research-pipeline-e2e-v1",
+    version=1,
+    name="Research Pipeline End-to-End",
+    description=(
+        "Offline benchmark driving the real production chain end to end: "
+        "literature retrieval -> screening -> evidence extraction -> "
+        "synthesis -> gap analysis -> mechanism -> analytical model -> "
+        "equilibrium -> propositions -> numerical analysis -> results "
+        "assembly -> manuscript grounding -> citation formatting, over a "
+        "small deterministic fixture corpus with scripted model responses."
+    ),
+    category="pipeline_integrity",
+    config={"evaluators": ["evaluator.pipeline_integrity"]},
+    cases=[
+        BenchmarkCaseDefinition(
+            id=_E2E_CASE_ID,
+            name="e2e research pipeline",
+            description=(
+                "One run of the full production research pipeline; the "
+                "integrity evaluator verifies stage completion, provenance, "
+                "grounding, conditions, citations, and bibliography fidelity."
+            ),
+            input={
+                "workflow": "research_pipeline_e2e",
+                "research_question": {"question": _E2E_QUESTION},
+                "paper_order": [
+                    _E2E_P0["title"],
+                    _E2E_P1["title"],
+                    _E2E_P2["title"],
+                ],
+                "included_titles": [_E2E_P0["title"], _E2E_P1["title"]],
+                "providers": ["crossref", "semantic_scholar"],
+                "fixture_sources": {
+                    "crossref": [_E2E_P0, _E2E_P1, _E2E_P2],
+                    "semantic_scholar": [_E2E_P0, _E2E_P1, _E2E_P2],
+                },
+                "queries": [
+                    {
+                        "query": "algorithmic pricing consumer welfare platform markets",
+                        "purpose": "e2e benchmark",
+                        "concepts": ["algorithmic pricing", "consumer welfare"],
+                        "synonyms": ["dynamic pricing"],
+                        "target_sources": ["crossref", "semantic_scholar"],
+                        "expected_relevance": "high",
+                    }
+                ],
+                "documents": [
+                    {
+                        "title": _E2E_P0["title"],
+                        "pages": [
+                            {
+                                "page": 1,
+                                "text": (
+                                    "Algorithmic pricing uses demand data to "
+                                    "adjust prices continuously. We find that "
+                                    "algorithmic pricing raises consumer "
+                                    "surplus when switching costs are low."
+                                ),
+                            }
+                        ],
+                    },
+                    {
+                        "title": _E2E_P1["title"],
+                        "pages": [
+                            {
+                                "page": 1,
+                                "text": (
+                                    "Dynamic pricing in two-sided markets "
+                                    "interacts with seller entry. Rising entry "
+                                    "costs reduce market participation and "
+                                    "consumer surplus."
+                                ),
+                            }
+                        ],
+                    },
+                ],
+                "sections": ["literature_review", "propositions", "conclusion"],
+                "profile": {"name": "E2E Profile", "citation_style": "author_year"},
+                "llm_fixtures": [
+                    {
+                        "match": _E2E_QUESTION,
+                        "response": {
+                            "objective": "Select studies on algorithmic pricing in digital markets.",
+                            "inclusion_criteria": [
+                                {
+                                    "criterion_id": "I1",
+                                    "description": "Studies algorithmic pricing in digital markets",
+                                    "rationale": "Core focus",
+                                    "required": True,
+                                }
+                            ],
+                            "exclusion_criteria": [
+                                {
+                                    "criterion_id": "E1",
+                                    "description": "Purely technical or non-scholarly work",
+                                    "rationale": "Out of scope",
+                                    "required": False,
+                                }
+                            ],
+                            "decision_rules": "Include if I1 is satisfied.",
+                        },
+                    },
+                    _screen_fixture(str(_E2E_P0["title"]), "include", 0.95),
+                    _screen_fixture(str(_E2E_P1["title"]), "include", 0.95),
+                    _screen_fixture(str(_E2E_P2["title"]), "exclude", 0.9),
+                    _evidence_fixture(
+                        "uses demand data to adjust prices continuously",
+                        [
+                            _evidence_item(
+                                "result",
+                                "Algorithmic pricing raises consumer surplus when switching costs are low.",
+                                [1],
+                            )
+                        ],
+                    ),
+                    _evidence_fixture(
+                        "interacts with seller entry",
+                        [
+                            _evidence_item(
+                                "finding",
+                                "Rising entry costs reduce market participation and consumer surplus.",
+                                [1],
+                            )
+                        ],
+                    ),
+                    {
+                        "match": "You are a literature synthesizer comparing research papers within a corpus.",
+                        "response": {
+                            "themes": [
+                                {
+                                    "title": "Pricing and welfare",
+                                    "dimension": "welfare",
+                                    "statements": [
+                                        {
+                                            "statement": (
+                                                "Within the reviewed corpus, "
+                                                "algorithmic pricing can raise "
+                                                "consumer surplus when switching "
+                                                "costs are low."
+                                            ),
+                                            "type": "consensus",
+                                            "supporting_evidence_ids": [
+                                                f"{_E2E_CASE_ID}-evidence-0"
+                                            ],
+                                            "confidence": 0.9,
+                                        },
+                                        {
+                                            "statement": (
+                                                "Within the reviewed corpus, "
+                                                "rising entry costs reduce "
+                                                "consumer surplus."
+                                            ),
+                                            "type": "consensus",
+                                            "supporting_evidence_ids": [
+                                                f"{_E2E_CASE_ID}-evidence-1"
+                                            ],
+                                            "confidence": 0.9,
+                                        },
+                                    ],
+                                }
+                            ]
+                        },
+                    },
+                    {
+                        "match": "You are analyzing a literature synthesis to identify candidate research gaps.",
+                        "response": {
+                            "gaps": [
+                                _gap_item(
+                                    "Within the reviewed corpus, the welfare effects of algorithmic pricing under entry dynamics remain under-theorized.",
+                                    "mechanism_gap",
+                                    "A mechanism linking algorithmic pricing to entry dynamics and welfare is missing.",
+                                    stmt_ids=[
+                                        f"{_E2E_CASE_ID}-stmt-0",
+                                        f"{_E2E_CASE_ID}-stmt-1",
+                                    ],
+                                    ev_ids=[
+                                        f"{_E2E_CASE_ID}-evidence-0",
+                                        f"{_E2E_CASE_ID}-evidence-1",
+                                    ],
+                                )
+                            ]
+                        },
+                    },
+                    *_e2e_mechanism_fixtures(),
+                    _e2e_model_fixture(),
+                    {
+                        "match": "Propose a candidate equilibrium for the following game.",
+                        "response": {
+                            "expressions": [
+                                {
+                                    "variable": "q",
+                                    "expression": "(a - c)/(2*b)",
+                                    "symbols_used": ["a", "b", "c"],
+                                }
+                            ]
+                        },
+                    },
+                    {
+                        "match": "Propose testable propositions grounded in the verified equilibrium.",
+                        "response": {
+                            "propositions": [
+                                {
+                                    "statement": (
+                                        "The equilibrium quantity increases in "
+                                        "the demand intercept when the slope "
+                                        "parameter b is positive."
+                                    ),
+                                    "claim_type": "monotonicity",
+                                    "outcome_variable": "q",
+                                    "parameter": "a",
+                                    "expected_sign": "positive",
+                                    "conditions": ["b > 0"],
+                                    "supporting_static_ids": [f"{_E2E_CASE_ID}-static-q-a"],
+                                }
+                            ]
+                        },
+                    },
+                    {
+                        "match": "Critique the following research proposition.",
+                        "response": {
+                            "overall_assessment": "fixture critique",
+                            "verdict": "keep",
+                            "recommendations": ["fixture"],
+                            "issues": [],
+                        },
+                    },
+                    {
+                        "match": "Write the economic/IS interpretation of the following verified proposition.",
+                        "response": {
+                            "mathematical_result": "fixture result",
+                            "economic_interpretation": "fixture interpretation",
+                            "managerial_implication": "fixture implication",
+                            "is_theoretical_implication": "fixture theory",
+                            "consistency_note": "fixture note",
+                        },
+                    },
+                    {
+                        "match": "Assemble findings, contribution claims, and implications from verified results.",
+                        "response": {
+                            "findings": [
+                                {
+                                    "statement": (
+                                        "The equilibrium quantity increases in "
+                                        "the demand intercept when the slope is "
+                                        "positive."
+                                    ),
+                                    "finding_type": "analytical_result",
+                                    "supporting_proposition_ids": [f"{_E2E_CASE_ID}-prop-0"],
+                                    "supporting_comparative_static_ids": [],
+                                    "supporting_numerical_result_ids": [],
+                                    "conditions": ["b > 0"],
+                                    "confidence": "medium",
+                                    "knowledge_basis": "research_inference",
+                                }
+                            ],
+                            "contributions": [
+                                {
+                                    "claim": (
+                                        "Modeling entry barriers explains "
+                                        "platform pricing intensity."
+                                    ),
+                                    "contribution_type": "theoretical",
+                                    "finding_ids": ["FINDING0"],
+                                    "advances_literature": "Extends corpus-bounded pricing theory.",
+                                }
+                            ],
+                            "implications": [
+                                {
+                                    "text": "Platforms facing stronger entry barriers price higher.",
+                                    "implication_kind": "theory",
+                                    "claim_type": "interpretation",
+                                    "grounded_in_finding_ids": ["FINDING0"],
+                                }
+                            ],
+                            "limitations": ["Fixture limitation: linear demand."],
+                        },
+                    },
+                    {
+                        "match": "Critique the following assembled research results package.",
+                        "response": {
+                            "overall_assessment": "fixture assessment",
+                            "verdict": "approve",
+                            "recommendations": ["fixture"],
+                            "issues": [],
+                        },
+                    },
+                    {
+                        "match": "Draft the 'Literature Review' section",
+                        "response": {
+                            "title": "Literature Review",
+                            "body": (
+                                "Prior work shows that algorithmic pricing "
+                                "raises consumer surplus when switching costs "
+                                "are low [CITE:lit-1]."
+                            ),
+                            "claims": [
+                                {
+                                    "text": (
+                                        "Algorithmic pricing raises consumer "
+                                        "surplus when switching costs are low."
+                                    ),
+                                    "grounding_type": "evidence_item",
+                                    "grounding_artifact_id": f"{_E2E_CASE_ID}-evidence-0",
+                                    "citation_id": "lit-1",
+                                    "conditions": [],
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "citation_id": "lit-1",
+                                    "paper_identity_id": f"{_E2E_CASE_ID}-identity-0",
+                                    "evidence_item_id": f"{_E2E_CASE_ID}-evidence-0",
+                                    "page_locator": "p. 1",
+                                    "claim_context": "fixture claim context",
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "match": "Draft the 'Propositions' section",
+                        "response": {
+                            "title": "Propositions",
+                            "body": (
+                                "Proposition: the equilibrium quantity "
+                                "increases in the demand intercept when the "
+                                "slope parameter b is positive (b > 0)."
+                            ),
+                            "claims": [
+                                {
+                                    "text": (
+                                        "The equilibrium quantity increases in "
+                                        "the demand intercept when the slope is "
+                                        "positive."
+                                    ),
+                                    "grounding_type": "verified_proposition",
+                                    "grounding_artifact_id": f"{_E2E_CASE_ID}-prop-0",
+                                    "citation_id": None,
+                                    "conditions": ["b > 0"],
+                                }
+                            ],
+                            "citations": [],
+                        },
+                    },
+                    {
+                        "match": "Draft the 'Conclusion' section",
+                        "response": {
+                            "title": "Conclusion",
+                            "body": (
+                                "A positive demand slope preserves the "
+                                "monotonicity of the equilibrium quantity in "
+                                "the demand intercept."
+                            ),
+                            "claims": [
+                                {
+                                    "text": (
+                                        "The equilibrium quantity increases in "
+                                        "the demand intercept when the slope is "
+                                        "positive."
+                                    ),
+                                    "grounding_type": "research_finding",
+                                    "grounding_artifact_id": f"{_E2E_CASE_ID}-finding-0",
+                                    "citation_id": None,
+                                    "conditions": ["b > 0"],
+                                }
+                            ],
+                            "citations": [],
+                        },
+                    },
+                    {
+                        "match": "Critique the following manuscript draft",
+                        "response": {
+                            "overall_assessment": "fixture assessment",
+                            "verdict": "approve",
+                            "recommendations": ["fixture"],
+                            "issues": [],
+                        },
+                    },
+                ],
+            },
+            reference={
+                "expected_stages": {
+                    "retrieval": "literature_search_execution",
+                    "screening": "screening_decision",
+                    "evidence": "evidence_corpus",
+                    "synthesis": "literature_synthesis",
+                    "gap": "gap_analysis",
+                    "mechanism": "selected_mechanism",
+                    "model": "formal_analytical_model",
+                    "equilibrium": "equilibrium_analysis",
+                    "propositions": "proposition",
+                    "numerical": "numerical_experiment",
+                    "results": "results_package",
+                    "manuscript": "manuscript_draft",
+                    "formatting": "formatted_manuscript",
+                },
+                "expected_provenance": [
+                    ["evidence_item", "synthesis_statement"],
+                    ["synthesis_statement", "research_gap"],
+                    ["evidence_item", "research_gap"],
+                    ["research_gap", "contribution_claim"],
+                    ["equilibrium_candidate", "research_finding"],
+                    ["research_finding", "research_implication"],
+                    ["contribution_claim", "results_package"],
+                    ["results_package", "manuscript_outline"],
+                    ["manuscript_outline", "manuscript_draft"],
+                    ["manuscript_section", "manuscript_draft"],
+                    ["manuscript_draft", "formatted_manuscript"],
+                    ["paper_identity", "bibliography"],
+                    ["equilibrium_candidate", "comparative_static"],
+                    ["comparative_static", "proposition"],
+                    ["selected_mechanism", "formal_analytical_model"],
+                    ["formal_analytical_model", "equilibrium_analysis"],
+                ],
+                "expected_equilibrium": {"q": "(a-c)/(2*b)"},
+                "expected_conditions": ["2*b != 0", "b > 0"],
+                "expected_baseline": {"q": 4.5},
+                "expected_citation_identity": {"lit-1": _E2E_P0["title"]},
+            },
+            evaluation_dimensions=["pipeline"],
+            tags=["e2e", "offline"],
+        )
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -5030,4 +5617,5 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     PROPOSITION_CORRECTNESS_V1.benchmark_id: PROPOSITION_CORRECTNESS_V1,
     RESULTS_ASSEMBLY_V1.benchmark_id: RESULTS_ASSEMBLY_V1,
     MANUSCRIPT_GROUNDING_V1.benchmark_id: MANUSCRIPT_GROUNDING_V1,
+    RESEARCH_PIPELINE_E2E_V1.benchmark_id: RESEARCH_PIPELINE_E2E_V1,
 }

@@ -419,6 +419,14 @@ def _create_evaluator_manuscript_grounding() -> Plugin:
     return ManuscriptGroundingEvaluatorPlugin()
 
 
+def _create_evaluator_pipeline_integrity() -> Plugin:
+    from research_harness.plugins.research.evaluator_pipeline_integrity.plugin import (
+        PipelineIntegrityEvaluatorPlugin,
+    )
+
+    return PipelineIntegrityEvaluatorPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -513,6 +521,7 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "evaluator.proposition": _create_evaluator_proposition,
     "evaluator.results_grounding": _create_evaluator_results_grounding,
     "evaluator.manuscript_grounding": _create_evaluator_manuscript_grounding,
+    "evaluator.pipeline_integrity": _create_evaluator_pipeline_integrity,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

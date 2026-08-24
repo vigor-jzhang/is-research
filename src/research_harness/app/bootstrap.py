@@ -275,6 +275,7 @@ def _derived_plugin_configs(
         "evaluator.proposition": {"evaluation": config.evaluation.model_dump()},
         "evaluator.results_grounding": {"evaluation": config.evaluation.model_dump()},
         "evaluator.manuscript_grounding": {"evaluation": config.evaluation.model_dump()},
+        "evaluator.pipeline_integrity": {"evaluation": config.evaluation.model_dump()},
         "documents.locator.metadata": {"documents": config.documents.model_dump()},
         "documents.locator.unpaywall": {"documents": config.documents.model_dump()},
         "documents.fetcher.http": {"documents": config.documents.model_dump()},

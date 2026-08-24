@@ -5924,6 +5924,7 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.proposition",
         "evaluator.results_grounding",
         "evaluator.manuscript_grounding",
+        "evaluator.pipeline_integrity",
         "storage.blobs_filesystem",
     ):
         if pid not in cfg.plugins:
@@ -6101,6 +6102,75 @@ def eval_inspect(
                 console.print(f"  [red]failure: {failure[:160]}[/red]")
 
     asyncio.run(_run())
+
+
+@evaluation_app.command("coverage")
+def eval_coverage() -> None:
+    """Print the evaluation coverage matrix (capability -> benchmark -> evaluator -> metrics)."""
+    from research_harness.research.evaluation_coverage import (
+        COVERAGE_MATRIX,
+        uncovered_capabilities,
+    )
+
+    for row in COVERAGE_MATRIX:
+        console.print(f"[bold]{row.capability}[/bold] (Phase {row.phase})")
+        console.print(f"  benchmark: {row.benchmark}")
+        console.print(f"  evaluator: {row.evaluator}  [{row.gating}]")
+        console.print(f"  metrics: {', '.join(row.metrics)}")
+        if row.edge_cases:
+            console.print(f"  edge cases: {', '.join(row.edge_cases)}")
+        if row.gaps:
+            console.print(f"  gaps: {', '.join(row.gaps)}")
+        console.print()
+    gaps = uncovered_capabilities()
+    if gaps:
+        console.print("[yellow]Uncovered capabilities:[/yellow]")
+        for name, note in gaps:
+            console.print(f"  - {name}: {note}")
+    else:
+        console.print("[green]No uncovered capabilities.[/green]")
+
+
+@evaluation_app.command("readiness")
+def eval_readiness() -> None:
+    """Print the deterministic evaluation-readiness report."""
+    from research_harness.research.evaluation_readiness import readiness_report
+
+    result = readiness_report()
+    verdict_color = {
+        "ready": "green",
+        "ready_with_gaps": "yellow",
+        "not_ready": "red",
+    }[result.verdict]
+    console.print(f"[bold {verdict_color}]Verdict: {result.verdict}[/]")
+    console.print(f"  {result.narrative}")
+    criteria = result.criteria
+    console.print(
+        f"  benchmarks: {criteria['benchmark_count']}  "
+        f"evaluators: {criteria['evaluator_count']}  "
+        f"coverage rows: {criteria['coverage_matrix_rows']}"
+    )
+    if criteria["benchmarks_without_deterministic_gating"]:
+        console.print(
+            f"  [red]no deterministic gating: {criteria['benchmarks_without_deterministic_gating']}[/red]"
+        )
+    if criteria["evaluators_unresolved"]:
+        console.print(f"  [red]unresolved evaluators: {criteria['evaluators_unresolved']}[/red]")
+    if criteria["missing_coverage_rows"]:
+        console.print(f"  [red]missing coverage rows: {criteria['missing_coverage_rows']}[/red]")
+    console.print(f"  by-design failing cases: {len(criteria['by_design_failing_cases'])}")
+    for case in criteria["by_design_failing_cases"]:
+        console.print(f"    - {case}")
+    console.print("  known untested behaviors:")
+    for behavior in criteria["known_untested_behaviors"]:
+        console.print(f"    - {behavior}")
+    console.print("  uncovered capabilities:")
+    for capability in criteria["uncovered_capabilities"]:
+        console.print(f"    - {capability}")
+    console.print(f"  {criteria['offline_reproducibility']}")
+    console.print(f"  {criteria['provenance_reopen_coverage']}")
+    console.print(f"  {criteria['live_test_coverage']}")
+    console.print(f"  {criteria['model_assisted_evaluators']}")
 
 
 @evaluation_app.command("list")

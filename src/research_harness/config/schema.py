@@ -495,5 +495,6 @@ class AppConfig(BaseModel):
             "evaluator.proposition": {"evaluation": self.evaluation.model_dump()},
             "evaluator.results_grounding": {"evaluation": self.evaluation.model_dump()},
             "evaluator.manuscript_grounding": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.pipeline_integrity": {"evaluation": self.evaluation.model_dump()},
         }
         return mapping.get(plugin_id, {})

@@ -42,6 +42,7 @@ class EvaluatorContext:
     config: dict[str, Any] = field(default_factory=dict)
     model_router: Any | None = field(default=None)
     blob_store: Any | None = field(default=None)
+    provenance: dict[str, list[Any]] = field(default_factory=dict)
 
 
 @runtime_checkable

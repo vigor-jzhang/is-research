@@ -25,6 +25,7 @@ from research_harness.research.benchmarks.workflows import (
     FixtureModelRouter,
     run_citation_workflow,
     run_comparative_statics_workflow,
+    run_e2e_workflow,
     run_equilibrium_workflow,
     run_evidence_workflow,
     run_gap_workflow,
@@ -445,6 +446,16 @@ class EvaluationHarnessService:
                 producer=self._producer,
             )
             return produced, None
+        if workflow == "research_pipeline_e2e":
+            produced = await run_e2e_workflow(
+                artifact_store=self._store,
+                ingestor=self._ingestor,
+                identity_resolver=self._resolver,
+                blob_store=self._blob_store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         raise BenchmarkError(f"unsupported benchmark workflow {workflow!r}")
 
     async def _evaluate_case(
@@ -458,6 +469,12 @@ class EvaluationHarnessService:
     ) -> list[EvaluatorResult]:
         results: list[EvaluatorResult] = []
         fixture_router = FixtureModelRouter(case.input.get("llm_fixtures") or [])
+        provenance: dict[str, list[Any]] = {}
+        for env in produced:
+            try:
+                provenance[env.artifact_id] = await self._store.get_parents(env.artifact_id)
+            except Exception:  # noqa: BLE001
+                provenance[env.artifact_id] = []
         for eid in evaluator_ids:
             evaluator = self._evaluators[eid]
             ctx = EvaluatorContext(
@@ -471,6 +488,7 @@ class EvaluationHarnessService:
                 },
                 model_router=fixture_router,
                 blob_store=self._blob_store,
+                provenance=provenance,
             )
             try:
                 result = await evaluator.evaluate(ctx)
@@ -741,6 +759,7 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.proposition",
                 "evaluator.results_grounding",
                 "evaluator.manuscript_grounding",
+                "evaluator.pipeline_integrity",
             ],
             optional_requires=["blob_store.default"],
         )
@@ -774,6 +793,7 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.proposition": ctx.require("evaluator.proposition"),
                 "evaluator.results_grounding": ctx.require("evaluator.results_grounding"),
                 "evaluator.manuscript_grounding": ctx.require("evaluator.manuscript_grounding"),
+                "evaluator.pipeline_integrity": ctx.require("evaluator.pipeline_integrity"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),

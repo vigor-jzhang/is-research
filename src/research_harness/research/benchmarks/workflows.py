@@ -2316,3 +2316,708 @@ async def run_manuscript_grounding_workflow(
 
     after = await artifact_store.list()
     return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# research_pipeline_e2e workflow (Phase 6H): the real production chain
+# retrieval -> screening -> evidence -> synthesis -> gap -> mechanism ->
+# model -> equilibrium -> propositions -> numerical -> results -> manuscript
+# -> citation formatting, over a small fixture corpus with scripted responses
+# ---------------------------------------------------------------------------
+
+
+def _e2e_router(
+    case: BenchmarkCase, fixtures: list[dict[str, Any]], id_map: dict[str, str]
+) -> FixtureModelRouter:
+    return FixtureModelRouter(_rewrite_ids(fixtures, id_map))
+
+
+async def run_e2e_workflow(
+    *,
+    artifact_store: Any,
+    ingestor: Any,
+    identity_resolver: Any,
+    blob_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real production chain end to end across representative
+    stages. Every stage uses the real production service; model responses
+    are scripted. Fixtures are run-unique so production idempotency never
+    stales re-runs."""
+    from research_harness.plugins.autonomy.configurable.plugin import (
+        ConfigurableAutonomyPolicy,
+    )
+    from research_harness.plugins.literature.evidence_extractor.plugin import (
+        EvidenceExtractorService,
+    )
+    from research_harness.plugins.literature.evidence_orchestrator.plugin import (
+        EvidenceOrchestratorService,
+    )
+    from research_harness.plugins.literature.gap_analyzer.plugin import GapAnalyzerService
+    from research_harness.plugins.literature.screening_orchestrator.plugin import (
+        ScreeningOrchestratorService,
+    )
+    from research_harness.plugins.literature.screening_protocol_builder.plugin import (
+        ScreeningProtocolBuilderService,
+    )
+    from research_harness.plugins.literature.screening_view_builder.plugin import (
+        ScreeningViewBuilderService,
+    )
+    from research_harness.plugins.literature.search_orchestrator.plugin import (
+        LiteratureSearchOrchestratorService,
+    )
+    from research_harness.plugins.literature.synthesis.plugin import (
+        LiteratureSynthesizerService,
+    )
+    from research_harness.plugins.literature.title_abstract_screener.plugin import (
+        TitleAbstractScreenerService,
+    )
+    from research_harness.plugins.research.comparative_statics.plugin import (
+        ComparativeStaticsService,
+    )
+    from research_harness.plugins.research.equilibrium_deriver.plugin import (
+        EquilibriumDeriverService,
+    )
+    from research_harness.plugins.research.equilibrium_verifier.plugin import (
+        EquilibriumVerifierService,
+    )
+    from research_harness.plugins.research.gap_selection.plugin import GapSelectionService
+    from research_harness.plugins.research.manuscript_critic.plugin import (
+        ManuscriptCriticService,
+    )
+    from research_harness.plugins.research.manuscript_drafter.plugin import (
+        ManuscriptDrafterService,
+    )
+    from research_harness.plugins.research.mechanism_critic.plugin import (
+        MechanismCriticService,
+    )
+    from research_harness.plugins.research.mechanism_generator.plugin import (
+        MechanismGeneratorService,
+    )
+    from research_harness.plugins.research.model_builder.plugin import ModelBuilderService
+    from research_harness.plugins.research.numerical_analysis.plugin import (
+        NumericalAnalysisService,
+    )
+    from research_harness.plugins.research.proposition_critic.plugin import (
+        PropositionCriticService,
+    )
+    from research_harness.plugins.research.proposition_generator.plugin import (
+        PropositionGeneratorService,
+    )
+    from research_harness.plugins.research.proposition_verifier.plugin import (
+        PropositionVerifierService,
+    )
+    from research_harness.plugins.research.publication_formatter.plugin import (
+        PublicationFormatterService,
+    )
+    from research_harness.plugins.research.results_assembler.plugin import (
+        ResultsAssemblerService,
+    )
+    from research_harness.plugins.research.results_critic.plugin import (
+        ResultsCriticService,
+    )
+    from research_harness.research.schemas.document_acquisition import (
+        AcquisitionStatus,
+        DocumentAcquisition,
+    )
+    from research_harness.research.schemas.execution import LiteratureSearchExecution
+    from research_harness.research.schemas.full_text import (
+        FullTextCorpus,
+        FullTextDocument,
+        TextStatus,
+    )
+    from research_harness.research.schemas.identity import PaperIdentity
+    from research_harness.research.schemas.project import ResearchQuestion
+    from research_harness.research.schemas.publication import PublicationProfile
+    from research_harness.research.schemas.query import LiteratureQuery
+    from research_harness.research.schemas.strategy import LiteratureSearchStrategy
+
+    if blob_store is None:
+        raise BenchmarkError("research_pipeline_e2e requires a blob store")
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    fixtures = case.input.get("llm_fixtures") or []
+    id_map: dict[str, str] = {}
+    autonomy = ConfigurableAutonomyPolicy(mode="high")
+
+    # ---- stage 1: literature retrieval (real orchestrator) ---------------
+    sources = _fixture_sources(case)
+    query_ids: list[str] = []
+    for i, q in enumerate(case.input.get("queries") or []):
+        query = LiteratureQuery(
+            query=q["query"],
+            purpose=q.get("purpose"),
+            concepts=list(q.get("concepts") or []),
+            synonyms=list(q.get("synonyms") or []),
+            year_from=q.get("year_from"),
+            year_to=q.get("year_to"),
+            target_sources=list(q.get("target_sources") or []),
+            expected_relevance=q.get("expected_relevance"),
+            generated_by=producer,
+        )
+        qid = f"{case.id}-query-{i}"
+        await _put_explicit(
+            artifact_store,
+            ArtifactEnvelope.create(
+                payload=query,
+                artifact_type="literature_query",
+                producer=producer,
+                artifact_id=qid,
+            ),
+        )
+        query_ids.append(qid)
+    strategy = LiteratureSearchStrategy(
+        research_question_id=f"{case.id}-rq",
+        objective="e2e retrieval",
+        query_artifact_ids=query_ids,
+        source_names=list(case.input.get("providers") or []),
+    )
+    await _put_explicit(
+        artifact_store,
+        ArtifactEnvelope.create(
+            payload=strategy,
+            artifact_type="literature_search_strategy",
+            producer=producer,
+            artifact_id=f"{case.id}-strategy",
+        ),
+    )
+    orchestrator = LiteratureSearchOrchestratorService(
+        artifact_store=artifact_store,
+        ingestor=ingestor,
+        service_lookup=make_retrieval_lookup(sources, identity_resolver),
+    )
+    await orchestrator.execute(f"{case.id}-strategy")
+
+    # map ingested records -> identity ids by member title
+    produced_now = await artifact_store.list()
+    records_by_title: dict[str, str] = {}
+    for env in produced_now:
+        if env.artifact_type != "paper_record":
+            continue
+        try:
+            title = str(env.payload.get("title") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        if title:
+            records_by_title[title] = env.artifact_id
+    identity_by_title: dict[str, str] = {}
+    for env in produced_now:
+        if env.artifact_type != "paper_identity":
+            continue
+        try:
+            identity = env.parse_payload(PaperIdentity)
+        except Exception:  # noqa: BLE001
+            continue
+        for member in identity.member_paper_artifact_ids:
+            title = next((t for t, rid in records_by_title.items() if rid == member), None)
+            if title:
+                identity_by_title[title] = env.artifact_id
+    paper_order = list(case.input.get("paper_order") or [])
+    for i, title in enumerate(paper_order):
+        identity_id = identity_by_title.get(title)
+        if identity_id is None:
+            raise BenchmarkError(f"no paper identity produced for {title!r}")
+        id_map[f"{case.id}-identity-{i}"] = identity_id
+
+    # ---- stage 2: screening (real protocol/view/screener/orchestrator) ----
+    rq = ResearchQuestion(
+        question=case.input["research_question"]["question"],
+        motivation="e2e fixture",
+        scope="benchmark",
+    )
+    await _put_explicit(
+        artifact_store,
+        ArtifactEnvelope.create(
+            payload=rq,
+            artifact_type="research_question",
+            producer=producer,
+            artifact_id=f"{case.id}-rq",
+        ),
+    )
+    protocol_builder = ScreeningProtocolBuilderService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        autonomy_policy=autonomy,
+        model_role="reasoning",
+    )
+    protocol_id = await protocol_builder.build(f"{case.id}-rq")
+    identity_ids = [id_map[f"{case.id}-identity-{i}"] for i in range(len(paper_order))]
+    search_exec = LiteratureSearchExecution(
+        strategy_artifact_id=f"{case.id}-strategy",
+        query_artifact_ids=query_ids,
+        paper_identity_artifact_ids=identity_ids,
+        counts={},
+    )
+    search_exec_id = f"{case.id}-{run_suffix}-search-exec"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=search_exec,
+            artifact_type="literature_search_execution",
+            producer=producer,
+            artifact_id=search_exec_id,
+        )
+    )
+    view_builder = ScreeningViewBuilderService(artifact_store=artifact_store)
+    screener = TitleAbstractScreenerService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        model_role="fast",
+    )
+    screening_orchestrator = ScreeningOrchestratorService(
+        artifact_store=artifact_store,
+        view_builder=view_builder,
+        screener=screener,
+        autonomy_policy=autonomy,
+        max_candidates=100,
+        max_model_calls=500,
+    )
+    await screening_orchestrator.screen(search_exec_id, protocol_id)
+
+    # ---- stage 3: evidence extraction (real pipeline) --------------------
+    doc_ids: list[str] = []
+    for i, doc in enumerate(case.input.get("documents") or []):
+        title = doc["title"]
+        identity_id = identity_by_title[title]
+        pdf_blob = await blob_store.put_bytes(b"%PDF-1.4 e2e", media_type="application/pdf")
+        pages = list(doc.get("pages") or [])
+        text_blob = await blob_store.put_bytes(
+            json.dumps({"schema_version": 1, "pages": pages}, sort_keys=True).encode(),
+            media_type="application/json",
+        )
+        acq_id = f"{case.id}-{run_suffix}-acq-{i}"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=DocumentAcquisition(
+                    paper_identity_id=identity_id,
+                    document_location_id=None,
+                    status=AcquisitionStatus.downloaded,
+                    blob=pdf_blob,
+                    sha256=pdf_blob.digest,
+                    size_bytes=pdf_blob.size_bytes,
+                    media_type="application/pdf",
+                    source_type="http",
+                ),
+                artifact_type="document_acquisition",
+                producer=producer,
+                artifact_id=acq_id,
+            )
+        )
+        doc_id = f"{case.id}-{run_suffix}-doc-{i}"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=FullTextDocument(
+                    paper_identity_id=identity_id,
+                    document_acquisition_id=acq_id,
+                    source_blob=pdf_blob,
+                    text_blob=text_blob,
+                    extractor="documents.extractor.pypdf",
+                    page_count=len(pages),
+                    pages_with_text=len(pages),
+                    character_count=sum(len(p.get("text", "")) for p in pages),
+                    text_status=TextStatus.extracted,
+                ),
+                artifact_type="full_text_document",
+                producer=producer,
+                artifact_id=doc_id,
+            )
+        )
+        doc_ids.append(doc_id)
+    corpus = FullTextCorpus(
+        document_acquisition_execution_id=f"{case.id}-acq-exec",
+        screened_literature_set_id=f"{case.id}-set",
+        available_document_ids=doc_ids,
+    )
+    corpus_id = f"{case.id}-{run_suffix}-corpus"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=corpus,
+            artifact_type="full_text_corpus",
+            producer=producer,
+            artifact_id=corpus_id,
+        )
+    )
+    extractor = EvidenceExtractorService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        blob_store=blob_store,
+        model_role="reasoning",
+    )
+    evidence_orchestrator = EvidenceOrchestratorService(
+        artifact_store=artifact_store,
+        blob_store=blob_store,
+        extractor=extractor,
+        model_role="reasoning",
+        pages_per_chunk=4,
+        max_chunks_per_document=50,
+        max_model_calls=500,
+    )
+    await evidence_orchestrator.run(corpus_id)
+
+    # map evidence ids by fixture item order (statements persist verbatim)
+    evidence_by_statement: dict[str, str] = {}
+    for env in await artifact_store.list():
+        if env.artifact_id in before or env.artifact_type != "evidence_item":
+            continue
+        try:
+            statement = str(env.payload.get("statement") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        if statement:
+            evidence_by_statement[statement] = env.artifact_id
+    ev_index = 0
+    for fixture in fixtures:
+        for item in (fixture.get("response") or {}).get("items") or []:
+            statement = str(item.get("statement") or "")
+            env_id = evidence_by_statement.get(statement)
+            if env_id is not None:
+                id_map[f"{case.id}-evidence-{ev_index}"] = env_id
+            ev_index += 1
+
+    evidence_corpus_env = next(
+        (
+            e
+            for e in await artifact_store.list()
+            if e.artifact_id not in before and e.artifact_type == "evidence_corpus"
+        ),
+        None,
+    )
+    if evidence_corpus_env is None:
+        raise BenchmarkError("evidence stage produced no evidence_corpus")
+
+    # ---- stage 4: synthesis (real synthesizer) ---------------------------
+    synthesizer = LiteratureSynthesizerService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        model_role="reasoning",
+        batch_profiles=3,
+        max_batches=20,
+        max_model_calls=100,
+    )
+    await synthesizer.run(evidence_corpus_env.artifact_id)
+    stmt_by_statement: dict[str, str] = {}
+    for env in await artifact_store.list():
+        if env.artifact_id in before or env.artifact_type != "synthesis_statement":
+            continue
+        try:
+            statement = str(env.payload.get("statement") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        if statement:
+            stmt_by_statement[statement] = env.artifact_id
+    stmt_index = 0
+    for fixture in fixtures:
+        for theme in (fixture.get("response") or {}).get("themes") or []:
+            for item in theme.get("statements") or []:
+                statement = str(item.get("statement") or "")
+                env_id = stmt_by_statement.get(statement)
+                if env_id is not None:
+                    id_map[f"{case.id}-stmt-{stmt_index}"] = env_id
+                stmt_index += 1
+
+    synthesis_env = next(
+        (
+            e
+            for e in await artifact_store.list()
+            if e.artifact_id not in before and e.artifact_type == "literature_synthesis"
+        ),
+        None,
+    )
+    if synthesis_env is None:
+        raise BenchmarkError("synthesis stage produced no literature_synthesis")
+
+    # ---- stage 5: gap analysis (real analyzer) ---------------------------
+    gap_analyzer = GapAnalyzerService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        model_role="reasoning",
+    )
+    await gap_analyzer.run(synthesis_env.artifact_id, evidence_corpus_env.artifact_id)
+    gap_envs = [
+        e
+        for e in await artifact_store.list()
+        if e.artifact_id not in before and e.artifact_type == "research_gap"
+    ]
+    if not gap_envs:
+        raise BenchmarkError("gap stage produced no research_gap")
+    gap_env = max(gap_envs, key=lambda e: e.created_at)
+    id_map[f"{case.id}-gap"] = gap_env.artifact_id
+    gap_analysis_env = next(
+        (
+            e
+            for e in await artifact_store.list()
+            if e.artifact_id not in before and e.artifact_type == "gap_analysis"
+        ),
+        None,
+    )
+    if gap_analysis_env is None:
+        raise BenchmarkError("gap stage produced no gap_analysis")
+
+    # ---- stage 6: mechanism (real selection/generation/critic) -----------
+    selection_svc = GapSelectionService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        model_role="reasoning",
+        autonomy_mode="high",
+        autonomy=autonomy,
+    )
+    selection_id = await selection_svc.select(gap_analysis_env.artifact_id)
+    generator_svc = MechanismGeneratorService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        model_role="reasoning",
+        max_candidates=5,
+        max_model_calls=20,
+    )
+    await generator_svc.generate(selection_id)
+    produced_now = await artifact_store.list()
+    candidate_ids = [
+        e.artifact_id
+        for e in produced_now
+        if e.artifact_id not in before and e.artifact_type == "mechanism_candidate"
+    ]
+    critic_svc = MechanismCriticService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        critic_role="critic",
+        revision_role="reasoning",
+    )
+    for cand_id in candidate_ids:
+        await critic_svc.critique(cand_id)
+        await critic_svc.select(cand_id)
+    mechanism_env = next(
+        (
+            e
+            for e in await artifact_store.list()
+            if e.artifact_id not in before and e.artifact_type == "selected_mechanism"
+        ),
+        None,
+    )
+    if mechanism_env is None:
+        raise BenchmarkError("mechanism stage produced no selected_mechanism")
+    id_map[f"{case.id}-mechanism"] = mechanism_env.artifact_id
+
+    # ---- stage 7: analytical model (real model builder) ------------------
+    model_builder = ModelBuilderService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        model_role="reasoning",
+    )
+    await model_builder.build(mechanism_env.artifact_id)
+    model_env = next(
+        (
+            e
+            for e in await artifact_store.list()
+            if e.artifact_id not in before and e.artifact_type == "formal_analytical_model"
+        ),
+        None,
+    )
+    if model_env is None:
+        raise BenchmarkError("model stage produced no formal_analytical_model")
+    id_map[f"{case.id}-model"] = model_env.artifact_id
+
+    # ---- stage 8: equilibrium (real deriver + verifier) ------------------
+    verifier = EquilibriumVerifierService(artifact_store=artifact_store)
+    deriver = EquilibriumDeriverService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        verifier=verifier,
+        model_role="reasoning",
+        revision_role="reasoning",
+        max_revisions=2,
+        max_llm_calls=10,
+    )
+    await deriver.derive(model_env.artifact_id)
+    analysis_candidates = [
+        e
+        for e in await artifact_store.list()
+        if e.artifact_id not in before and e.artifact_type == "equilibrium_analysis"
+    ]
+    if not analysis_candidates:
+        raise BenchmarkError("equilibrium stage produced no equilibrium_analysis")
+    # the deriver supersedes its initial analysis; pick the one that selected a
+    # candidate (latest status carries the final selection)
+    analysis_env = max(analysis_candidates, key=lambda e: e.created_at)
+    id_map[f"{case.id}-analysis"] = analysis_env.artifact_id
+
+    # ---- stage 9: propositions (real statics + generator) ----------------
+    cs_svc = ComparativeStaticsService(artifact_store=artifact_store)
+    cs_execution_id = await cs_svc.run(analysis_env.artifact_id)
+    cs_analysis_id = await cs_svc.resolve_analysis(cs_execution_id)
+    for env in await artifact_store.list():
+        if env.artifact_id in before or env.artifact_type != "comparative_static":
+            continue
+        try:
+            payload = env.payload
+            if isinstance(payload, dict):
+                key = (payload.get("outcome_variable"), payload.get("parameter"))
+            else:
+                key = (payload.outcome_variable, payload.parameter)
+        except Exception:  # noqa: BLE001
+            continue
+        if key[0] and key[1]:
+            id_map[f"{case.id}-static-{key[0]}-{key[1]}"] = env.artifact_id
+    prop_verifier = PropositionVerifierService(artifact_store=artifact_store)
+    prop_critic = PropositionCriticService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        critic_role="critic",
+        interpretation_role="reasoning",
+    )
+    prop_generator = PropositionGeneratorService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        verifier=prop_verifier,
+        critic=prop_critic,
+        generator_role="reasoning",
+        max_propositions=8,
+        max_llm_calls=20,
+    )
+    await prop_generator.generate(cs_analysis_id)
+    prop_by_statement: dict[str, str] = {}
+    for env in await artifact_store.list():
+        if env.artifact_id in before or env.artifact_type != "proposition":
+            continue
+        try:
+            statement = str(env.payload.get("statement") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        if statement:
+            prop_by_statement[statement] = env.artifact_id
+    prop_index = 0
+    for fixture in fixtures:
+        for item in (fixture.get("response") or {}).get("propositions") or []:
+            statement = str(item.get("statement") or "")
+            env_id = prop_by_statement.get(statement)
+            if env_id is not None:
+                id_map[f"{case.id}-prop-{prop_index}"] = env_id
+            prop_index += 1
+
+    # ---- stage 10: numerical analysis (real service) ---------------------
+    numerical_svc = NumericalAnalysisService(
+        artifact_store=artifact_store,
+        blob_store=None,
+        model_role="reasoning",
+        max_points=10000,
+        artifact_point_threshold=500,
+    )
+    await numerical_svc.run(analysis_env.artifact_id)
+    experiment_env = next(
+        (
+            e
+            for e in await artifact_store.list()
+            if e.artifact_id not in before and e.artifact_type == "numerical_experiment"
+        ),
+        None,
+    )
+    if experiment_env is None:
+        raise BenchmarkError("numerical stage produced no numerical_experiment")
+    id_map[f"{case.id}-experiment"] = experiment_env.artifact_id
+
+    # ---- stage 11: results assembly (real assembler + critic) ------------
+    assembler = ResultsAssemblerService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        assembler_role="reasoning",
+        max_findings=12,
+        max_contributions=8,
+        max_implications=12,
+        max_llm_calls=10,
+    )
+    await assembler.assemble(experiment_env.artifact_id)
+    package_env = next(
+        (
+            e
+            for e in await artifact_store.list()
+            if e.artifact_id not in before and e.artifact_type == "results_package"
+        ),
+        None,
+    )
+    if package_env is None:
+        raise BenchmarkError("results stage produced no results_package")
+    id_map[f"{case.id}-package"] = package_env.artifact_id
+    results_critic = ResultsCriticService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        critic_role="critic",
+    )
+    await results_critic.critique(package_env.artifact_id)
+
+    # findings follow the scripted assembly response order
+    finding_by_statement: dict[str, str] = {}
+    for env in await artifact_store.list():
+        if env.artifact_id in before or env.artifact_type != "research_finding":
+            continue
+        try:
+            statement = str(env.payload.get("statement") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        if statement:
+            finding_by_statement[statement] = env.artifact_id
+    finding_index = 0
+    for fixture in fixtures:
+        for item in (fixture.get("response") or {}).get("findings") or []:
+            statement = str(item.get("statement") or "")
+            env_id = finding_by_statement.get(statement)
+            if env_id is not None:
+                id_map[f"{case.id}-finding-{finding_index}"] = env_id
+            finding_index += 1
+
+    # ---- stage 12: manuscript grounding (real drafter + critic) ----------
+    drafter = ManuscriptDrafterService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        drafter_role="reasoning",
+        max_llm_calls=100,
+    )
+    outline_id = await drafter.outline(package_env.artifact_id)
+    draft_sections = list(case.input.get("sections") or [])
+    await drafter.draft(outline_id, section_ids=draft_sections)
+    draft_env = next(
+        (
+            e
+            for e in await artifact_store.list()
+            if e.artifact_id not in before and e.artifact_type == "manuscript_draft"
+        ),
+        None,
+    )
+    if draft_env is None:
+        raise BenchmarkError("manuscript stage produced no manuscript_draft")
+    id_map[f"{case.id}-draft"] = draft_env.artifact_id
+    manuscript_critic = ManuscriptCriticService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        critic_role="critic",
+    )
+    await manuscript_critic.critique(draft_env.artifact_id)
+
+    # ---- stage 13: citation formatting (real formatter) ------------------
+    profile_cfg = case.input.get("profile") or {}
+    profile = PublicationProfile(
+        name=profile_cfg.get("name", "E2E Profile"),
+        citation_style=profile_cfg.get("citation_style", "author_year"),
+        anonymous_review=bool(profile_cfg.get("anonymous_review", False)),
+        abstract_required=False,
+        abstract_max_words=100,
+    )
+    profile_id = f"{case.id}-profile"
+    await _put_explicit(
+        artifact_store,
+        ArtifactEnvelope.create(
+            payload=profile,
+            artifact_type="publication_profile",
+            producer=producer,
+            artifact_id=profile_id,
+        ),
+    )
+    formatter = PublicationFormatterService(
+        model_router=_e2e_router(case, fixtures, id_map),
+        artifact_store=artifact_store,
+        blob_store=None,
+        formatter_role="reasoning",
+    )
+    await formatter.format(draft_env.artifact_id, profile_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]

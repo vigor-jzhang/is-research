@@ -55,6 +55,7 @@ plugins:
   - evaluator.proposition
   - evaluator.results_grounding
   - evaluator.manuscript_grounding
+  - evaluator.pipeline_integrity
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
