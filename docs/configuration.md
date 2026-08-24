@@ -1,6 +1,6 @@
 # Configuration
 
-The full composition lives in `configs/example.yaml` (45 plugins). `AppConfig`
+The full composition lives in `configs/example.yaml` (57 plugins, including the Phase 6A-6E evaluation harness and eleven evaluator plugins). `AppConfig`
 (`config/schema.py`) validates it via Pydantic v2; `load_config`
 (`config/loader.py`) fails early with readable messages. Secrets are never in
 YAML — they come from the environment.
@@ -49,6 +49,18 @@ plugins:
   - research.manuscript_critic
   - research.publication_formatter
   - research.novelty_validator
+  - research.evaluation_harness
+  - evaluator.deterministic
+  - evaluator.retrieval
+  - evaluator.claim_grounding
+  - evaluator.citation_correctness
+  - evaluator.llm_judge
+  - evaluator.screening
+  - evaluator.evidence
+  - evaluator.gap_analysis
+  - evaluator.mechanism
+  - evaluator.equilibrium
+  - evaluator.numerical
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -78,8 +90,10 @@ loop:
 
 The `literature:` (search, screening, evidence, synthesis, gaps), `research:`
 (mechanism, model, equilibrium, proposition, numerical, results, manuscript,
-publication, novelty), and `documents:` sections configure each phase; every
-phase doc under `docs/` documents its own configuration block.
+publication, novelty), `documents:`, and `evaluation:` (evaluator ids,
+`judge_role`, `cost_per_million_tokens`) sections configure each phase; every
+phase doc under `docs/` documents its own configuration block. The
+`evaluation` section is documented in `docs/evaluation.md`.
 
 ## Secrets in `.env`
 

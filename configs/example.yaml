@@ -39,6 +39,18 @@ plugins:
   - research.manuscript_critic
   - research.publication_formatter
   - research.novelty_validator
+  - research.evaluation_harness
+  - evaluator.deterministic
+  - evaluator.retrieval
+  - evaluator.claim_grounding
+  - evaluator.citation_correctness
+  - evaluator.llm_judge
+  - evaluator.screening
+  - evaluator.evidence
+  - evaluator.gap_analysis
+  - evaluator.mechanism
+  - evaluator.equilibrium
+  - evaluator.numerical
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -203,6 +215,17 @@ documents:
     max_locations_per_paper: 5
   extraction:
     extractor: pypdf
+
+evaluation:
+  evaluators:
+    - evaluator.deterministic
+    - evaluator.claim_grounding
+    - evaluator.citation_correctness
+    - evaluator.llm_judge
+  judge_role: critic
+  cost_per_million_tokens:
+    prompt: 0.0
+    completion: 0.0
 
 loop:
   max_steps: 8

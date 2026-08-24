@@ -176,6 +176,33 @@ uv run research-agent novelty gate <package-id> [--report <report-id>]
 uv run research-agent novelty inspect <report-or-gate-id>
 ```
 
+## Evaluation harness (Phase 6A–6E)
+
+```bash
+# Run a benchmark end-to-end (registers the immutable benchmark, runs each
+# case over the production workflow with deterministic fixtures, executes
+# evaluators, persists + prints the aggregated report). Fully offline.
+uv run research-agent eval run novelty-threat-v1           # 7 cases: novelty + false-clear
+uv run research-agent eval run literature-retrieval-v1     # 6 cases: precision@k, recall@k, F1@k, MRR
+uv run research-agent eval run citation-correctness-v1     # 10 cases: citation/bibliography correctness
+uv run research-agent eval run literature-screening-v1       # 9 cases: screening, review gates, failure handling
+uv run research-agent eval run evidence-extraction-v1        # 9 cases: evidence grounding, locators, categories
+uv run research-agent eval run research-gap-analysis-v1        # 10 cases: gap types, grounding, ranking, hallucination
+uv run research-agent eval run mechanism-development-v1         # 10 cases: mechanism validity, critic, revision
+uv run research-agent eval run equilibrium-correctness-v1       # 10 cases: closed-form equilibria, symbolic verification
+uv run research-agent eval run numerical-analysis-v1             # 9 cases: sweeps, feasibility, robustness, welfare
+uv run research-agent eval run <benchmark> [--evaluators evaluator.deterministic,...]
+
+# Inspect an evaluation run or report (per-evaluator detail)
+uv run research-agent eval inspect <run-or-report-id>
+
+# List recent evaluation runs
+uv run research-agent eval list [--limit 20]
+```
+
+See `docs/evaluation.md` for schemas, the evaluator contract, benchmark
+architecture, metrics, and the known-expected metrics of each benchmark.
+
 ## Testing and live markers
 
 Offline: `uv run pytest` — mocked HTTP via `respx`

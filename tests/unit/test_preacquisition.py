@@ -462,7 +462,7 @@ async def test_budget_bounded_selection(store: SQLiteArtifactStore, blobs):
     assert preacq.metrics["candidates_selected"] == 2
     assert len(preacq.selected_candidate_ids) == 2
     assert preacq.metrics["abstracts_acquired"] == 2
-    skipped = [iid for iid in preacq.skipped_candidate_ids]
+    skipped = list(preacq.skipped_candidate_ids)
     assert len(skipped) == 2
     assert all("per-claim budget" in preacq.selection_reasons[s] for s in skipped)
     # deterministic selection reasons recorded for every considered candidate

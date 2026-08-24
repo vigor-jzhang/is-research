@@ -436,7 +436,7 @@ async def test_exports_and_blob_persistence(tmp_path: pathlib.Path):
         fmt: (await store.get(eid)).parse_payload(ExportRecord) for fmt, eid in export_ids.items()
     }
     # blob content round-trips and hash matches
-    for fmt, rec in records.items():
+    for _fmt, rec in records.items():
         data = await blobs.get_bytes(BlobReference(**rec.blob_ref))
         import hashlib
 

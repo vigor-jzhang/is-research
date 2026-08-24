@@ -43,6 +43,9 @@ app.add_typer(publication_app, name="publication")
 novelty_app = typer.Typer(help="External novelty validation (Phase 5A)")
 app.add_typer(novelty_app, name="novelty")
 
+evaluation_app = typer.Typer(help="Evaluation harness (Phase 6A)")
+app.add_typer(evaluation_app, name="eval")
+
 console = Console()
 
 
@@ -5871,6 +5874,263 @@ def novelty_inspect(
                     f"  critic passes: {len(r.critic_assessment_ids)} "
                     f"(disagreements preserved as separate artifacts)"
                 )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# eval — evaluation harness (Phase 6A)
+# ---------------------------------------------------------------------------
+
+
+def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
+    cfg_path = config if config is not None and config.exists() else None
+    cfg = load_config(cfg_path) if cfg_path is not None else None
+    if cfg is None:
+        from research_harness.config.loader import load_config_from_dict
+
+        cfg = load_config_from_dict(
+            {
+                "plugins": [
+                    "storage.artifacts_sqlite",
+                    "literature.ingestion",
+                    "literature.identity_resolver",
+                    "model.openrouter",
+                    "routing.role_router",
+                    *extra_plugins,
+                ],
+                "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
+            }
+        )
+    for pid in (
+        "storage.artifacts_sqlite",
+        "literature.ingestion",
+        "literature.identity_resolver",
+        "model.openrouter",
+        "routing.role_router",
+        "research.evaluation_harness",
+        "evaluator.deterministic",
+        "evaluator.retrieval",
+        "evaluator.claim_grounding",
+        "evaluator.citation_correctness",
+        "evaluator.llm_judge",
+        "evaluator.screening",
+        "evaluator.evidence",
+        "evaluator.gap_analysis",
+        "evaluator.mechanism",
+        "evaluator.equilibrium",
+        "evaluator.numerical",
+        "storage.blobs_filesystem",
+    ):
+        if pid not in cfg.plugins:
+            cfg.plugins.append(pid)
+    return cfg
+
+
+_EVAL_REQUIRED = ("research.evaluation_harness",)
+
+
+@evaluation_app.command("run")
+def eval_run(
+    benchmark: Annotated[str, typer.Argument(help="Benchmark id (builtin: novelty-threat-v1)")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+    evaluators: Annotated[
+        str | None,
+        typer.Option("--evaluators", help="Comma-separated evaluator ids (default: config)"),
+    ] = None,
+) -> None:
+    """Run a benchmark end-to-end (Phase 6A).
+
+    Registers the builtin benchmark definition (immutable, versioned), runs
+    each case over the production workflow with deterministic fixtures (no
+    network), executes the configured evaluators, persists the report, and
+    prints the aggregated metrics.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("evaluation_harness.default")
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.benchmarks import BUILTIN_BENCHMARKS
+            from research_harness.research.schemas.evaluation import (
+                EvaluationReport,
+                EvaluationRun,
+            )
+
+            if benchmark in BUILTIN_BENCHMARKS:
+                await svc.register_benchmark(BUILTIN_BENCHMARKS[benchmark])
+            evaluator_ids = (
+                [e.strip() for e in evaluators.split(",") if e.strip()] if evaluators else None
+            )
+            run_id, report_id = await svc.run_benchmark(benchmark, evaluator_ids=evaluator_ids)
+            run = (await store.get(run_id)).parse_payload(EvaluationRun)
+            report = (await store.get(report_id)).parse_payload(EvaluationReport)
+
+            console.print(f"[bold]Evaluation run {run_id}[/bold]")
+            console.print(
+                f"  benchmark {report.benchmark_id} (v{report.benchmark_version})  "
+                f"status: [bold]{report.status.value}[/bold]"
+            )
+            console.print(
+                f"  cases {report.cases_total} = "
+                f"[green]{report.cases_passed} passed[/green] / "
+                f"[red]{report.cases_failed} failed[/red] / "
+                f"{report.cases_error} error"
+            )
+            console.print(
+                f"  latency {report.execution_latency_ms} ms  "
+                f"cost ${report.execution_cost_usd:.6f}  "
+                f"failures {len(run.failures)}"
+            )
+            for metric in report.metrics:
+                _print_metric(metric)
+            for cr in report.case_results:
+                console.print(
+                    f"  case {cr.case_id} [bold]{cr.status.value}[/bold] ({cr.case_name})"
+                )
+                if cr.error:
+                    console.print(f"    [red]{cr.error[:160]}[/red]")
+            console.print(f"  report artifact: {report_id}")
+            console.print(f"  run artifact: {run_id}")
+
+    asyncio.run(_run())
+
+
+def _print_metric(metric) -> None:  # type: ignore[no-untyped-def]
+
+    value = metric.value
+    if metric.kind.value == "rate":
+        rendered = f"{value:.3f}"
+    elif metric.kind.value == "cost":
+        rendered = f"${value:.6f}"
+    elif metric.kind.value == "latency":
+        rendered = f"{int(value)} ms"
+    else:
+        rendered = f"{value:g}"
+    console.print(f"  metric {metric.metric_id}: {rendered}  (n={metric.count})")
+
+
+@evaluation_app.command("inspect")
+def eval_inspect(
+    run: Annotated[str, typer.Argument(help="EvaluationRun artifact id (or report id)")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect an evaluation run and its aggregated report (Phase 6A)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.evaluation import (
+                EvaluationReport,
+                EvaluationRun,
+                EvaluatorResult,
+            )
+
+            env = await store.get(run)
+            if env.artifact_type == "evaluation_report":
+                report = env.parse_payload(EvaluationReport)
+                console.print(f"[bold]EvaluationReport {report.id}[/bold]")
+                console.print(
+                    f"  run {report.run_id}  benchmark {report.benchmark_id} "
+                    f"(v{report.benchmark_version})  status {report.status.value}"
+                )
+                console.print(
+                    f"  cases {report.cases_total} = {report.cases_passed} passed / "
+                    f"{report.cases_failed} failed / {report.cases_error} error"
+                )
+                for metric in report.metrics:
+                    _print_metric(metric)
+                for cr in report.case_results:
+                    console.print(
+                        f"  case {cr.case_id} [bold]{cr.status.value}[/bold] ({cr.case_name})"
+                    )
+                    for rid in cr.evaluator_result_ids:
+                        r = (await store.get(rid)).parse_payload(EvaluatorResult)
+                        console.print(
+                            f"    {r.evaluator_id} [bold]{r.status.value}[/bold] "
+                            f"score {r.score if r.score is not None else '-'} "
+                            f"{r.explanation[:120]}"
+                        )
+                return
+            if env.artifact_type != "evaluation_run":
+                console.print(
+                    f"[red]artifact {run!r} is not an evaluation_run or evaluation_report[/red]"
+                )
+                raise typer.Exit(code=1)
+            r = env.parse_payload(EvaluationRun)
+            console.print(f"[bold]EvaluationRun {r.id}[/bold]")
+            console.print(
+                f"  benchmark {r.benchmark_id} (v{r.benchmark_version})  "
+                f"hash {r.benchmark_content_hash[:16]}…"
+            )
+            console.print(f"  status {r.status.value}  report {r.report_id}")
+            console.print(
+                f"  cases {r.cases_total} = {r.cases_passed} passed / "
+                f"{r.cases_failed} failed / {r.cases_error} error"
+            )
+            console.print(
+                f"  evaluators {', '.join(r.evaluator_ids)}  "
+                f"judge role {r.model_roles.get('judge', '-')}"
+            )
+            console.print(
+                f"  produced artifacts {len(r.produced_artifact_ids)}  "
+                f"case hashes {len(r.case_hashes)}"
+            )
+            console.print(
+                f"  latency {r.latency_ms} ms  cost ${r.cost_usd:.6f}  tokens {r.token_usage}"
+            )
+            for failure in r.failures:
+                console.print(f"  [red]failure: {failure[:160]}[/red]")
+
+    asyncio.run(_run())
+
+
+@evaluation_app.command("list")
+def eval_list(
+    limit: Annotated[int, typer.Option(help="Max runs to list")] = 20,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """List evaluation runs (most recent first)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            from research_harness.research.schemas.evaluation import EvaluationRun
+
+            runs = [
+                env.parse_payload(EvaluationRun)
+                for env in await store.list(artifact_type="evaluation_run")
+            ]
+            runs.sort(key=lambda r: r.completed_at, reverse=True)
+            for r in runs[:limit]:
+                console.print(
+                    f"  {r.id}  {r.benchmark_id} (v{r.benchmark_version})  "
+                    f"{r.status.value}  {r.cases_passed}/{r.cases_total}  "
+                    f"{r.completed_at.isoformat()}"
+                )
+            if not runs:
+                console.print("  (no evaluation runs yet)")
 
     asyncio.run(_run())
 

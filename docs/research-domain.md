@@ -45,6 +45,7 @@ Payload types live in `src/research_harness/research/schemas/`:
 - `ManuscriptOutline/ManuscriptSection/CitationReference/ManuscriptDraft/ManuscriptDraftExecution/ManuscriptCritique` — Phase 4B manuscript drafting (see `docs/manuscript.md`)
 - `PublicationProfile/Bibliography/FormattedManuscript/SubmissionPackage/CoverLetter/PublicationExecution` — Phase 4C publication formatting (see `docs/publication.md`)
 - `NoveltyClaim/NoveltySearchPlan/NoveltySearchExecution/NoveltyCandidateSet/NoveltyCandidateAssessment/NoveltyCriticAssessment/NoveltyClaimAssessment/NoveltyRevisionRecommendation/NoveltyValidationReport/SubmissionReadinessGate/NoveltyValidationExecution/ManuscriptChangeSet/NoveltyRevalidationPlan/NoveltyRevalidationExecution/EvidenceEnrichmentPlan/EvidenceEnrichmentAttempt/EvidenceEnrichmentExecution/PreAcquisitionExecution` (plus `StalenessStatus` and `NoveltyClaim.equivalent_claim_id`) — Phase 5A–5D external novelty validation, incremental revalidation, evidence enrichment, and bounded pre-acquisition (see `docs/novelty.md`)
+- `Benchmark/BenchmarkCase/EvaluationRun/EvaluatorResult/EvaluationCaseResult/EvaluationMetric/EvaluationReport` (plus `EvaluatorCategory`/`EvaluatorStatus`/`EvaluationCaseStatus`/`EvaluationReportStatus`/`EvaluationMetricKind`) — Phase 6A–6C evaluation harness: immutable benchmarks, per-case evaluator results, aggregate reports (see `docs/evaluation.md`)
 
 All of these phases are implemented and compose on the kernel without kernel changes; each entry links its per-phase doc.
 

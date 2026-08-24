@@ -291,6 +291,102 @@ def _create_novelty_validator() -> Plugin:
     return NoveltyValidatorPlugin()
 
 
+def _create_evaluation_harness() -> Plugin:
+    from research_harness.plugins.research.evaluation_harness.plugin import (
+        EvaluationHarnessPlugin,
+    )
+
+    return EvaluationHarnessPlugin()
+
+
+def _create_evaluator_deterministic() -> Plugin:
+    from research_harness.plugins.research.evaluator_deterministic.plugin import (
+        DeterministicEvaluatorPlugin,
+    )
+
+    return DeterministicEvaluatorPlugin()
+
+
+def _create_evaluator_retrieval() -> Plugin:
+    from research_harness.plugins.research.evaluator_retrieval.plugin import (
+        RetrievalEvaluatorPlugin,
+    )
+
+    return RetrievalEvaluatorPlugin()
+
+
+def _create_evaluator_claim_grounding() -> Plugin:
+    from research_harness.plugins.research.evaluator_claim_grounding.plugin import (
+        ClaimGroundingEvaluatorPlugin,
+    )
+
+    return ClaimGroundingEvaluatorPlugin()
+
+
+def _create_evaluator_citation_correctness() -> Plugin:
+    from research_harness.plugins.research.evaluator_citation_correctness.plugin import (
+        CitationCorrectnessEvaluatorPlugin,
+    )
+
+    return CitationCorrectnessEvaluatorPlugin()
+
+
+def _create_evaluator_llm_judge() -> Plugin:
+    from research_harness.plugins.research.evaluator_llm_judge.plugin import (
+        LlmJudgeEvaluatorPlugin,
+    )
+
+    return LlmJudgeEvaluatorPlugin()
+
+
+def _create_evaluator_screening() -> Plugin:
+    from research_harness.plugins.research.evaluator_screening.plugin import (
+        ScreeningEvaluatorPlugin,
+    )
+
+    return ScreeningEvaluatorPlugin()
+
+
+def _create_evaluator_evidence() -> Plugin:
+    from research_harness.plugins.research.evaluator_evidence.plugin import (
+        EvidenceEvaluatorPlugin,
+    )
+
+    return EvidenceEvaluatorPlugin()
+
+
+def _create_evaluator_gap_analysis() -> Plugin:
+    from research_harness.plugins.research.evaluator_gap_analysis.plugin import (
+        GapAnalysisEvaluatorPlugin,
+    )
+
+    return GapAnalysisEvaluatorPlugin()
+
+
+def _create_evaluator_mechanism() -> Plugin:
+    from research_harness.plugins.research.evaluator_mechanism.plugin import (
+        MechanismEvaluatorPlugin,
+    )
+
+    return MechanismEvaluatorPlugin()
+
+
+def _create_evaluator_equilibrium() -> Plugin:
+    from research_harness.plugins.research.evaluator_equilibrium.plugin import (
+        EquilibriumEvaluatorPlugin,
+    )
+
+    return EquilibriumEvaluatorPlugin()
+
+
+def _create_evaluator_numerical() -> Plugin:
+    from research_harness.plugins.research.evaluator_numerical.plugin import (
+        NumericalEvaluatorPlugin,
+    )
+
+    return NumericalEvaluatorPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -369,6 +465,18 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "research.manuscript_critic": _create_manuscript_critic,
     "research.publication_formatter": _create_publication_formatter,
     "research.novelty_validator": _create_novelty_validator,
+    "research.evaluation_harness": _create_evaluation_harness,
+    "evaluator.deterministic": _create_evaluator_deterministic,
+    "evaluator.retrieval": _create_evaluator_retrieval,
+    "evaluator.claim_grounding": _create_evaluator_claim_grounding,
+    "evaluator.citation_correctness": _create_evaluator_citation_correctness,
+    "evaluator.llm_judge": _create_evaluator_llm_judge,
+    "evaluator.screening": _create_evaluator_screening,
+    "evaluator.evidence": _create_evaluator_evidence,
+    "evaluator.gap_analysis": _create_evaluator_gap_analysis,
+    "evaluator.mechanism": _create_evaluator_mechanism,
+    "evaluator.equilibrium": _create_evaluator_equilibrium,
+    "evaluator.numerical": _create_evaluator_numerical,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

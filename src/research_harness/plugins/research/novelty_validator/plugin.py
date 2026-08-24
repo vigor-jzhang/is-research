@@ -1540,10 +1540,10 @@ class NoveltyValidationService:
                 logger.warning("model-assisted novelty evidence extraction failed: %s", e)
         if not item_ids:
             # deterministic relevance extraction: sentences overlapping claim tokens
-            tokens = {w for w in re.findall(r"[a-z0-9]{4,}", claim.claim_text.lower())}
+            tokens = set(re.findall(r"[a-z0-9]{4,}", claim.claim_text.lower()))
             for page in pages[:20]:
                 for sent in _sentences(page.get("text", "")):
-                    sent_tokens = {w for w in re.findall(r"[a-z0-9]{4,}", sent.lower())}
+                    sent_tokens = set(re.findall(r"[a-z0-9]{4,}", sent.lower()))
                     if len(sent_tokens & tokens) >= 2:
                         item = EvidenceItem(
                             statement=sent,

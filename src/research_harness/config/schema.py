@@ -390,6 +390,31 @@ class DocumentsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class EvaluationConfig(BaseModel):
+    """Evaluation harness settings (Phase 6A)."""
+
+    evaluators: list[str] = Field(
+        default_factory=lambda: [
+            "evaluator.deterministic",
+            "evaluator.claim_grounding",
+            "evaluator.citation_correctness",
+            "evaluator.llm_judge",
+        ],
+        description="Evaluator service ids composed for benchmark runs",
+    )
+    judge_role: str = Field(
+        default="critic",
+        description="Model role used by model-assisted evaluators "
+        "(independent of the artifact-generating role)",
+    )
+    cost_per_million_tokens: dict[str, float] = Field(
+        default_factory=lambda: {"prompt": 0.0, "completion": 0.0},
+        description="USD per 1M tokens for cost estimation",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class AppConfig(BaseModel):
     runtime: RuntimeSection = Field(default_factory=RuntimeSection)
     plugins: list[str] = Field(default_factory=list, description="List of plugin ids to load")
@@ -400,6 +425,7 @@ class AppConfig(BaseModel):
     literature: LiteratureConfig = Field(default_factory=LiteratureConfig)
     documents: DocumentsConfig = Field(default_factory=DocumentsConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
 
     @field_validator("plugins")
     @classmethod
@@ -453,5 +479,17 @@ class AppConfig(BaseModel):
             "documents.fetcher.http": {"documents": self.documents.model_dump()},
             "documents.extractor.pypdf": {"documents": self.documents.model_dump()},
             "documents.acquisition_orchestrator": {"documents": self.documents.model_dump()},
+            "research.evaluation_harness": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.deterministic": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.retrieval": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.claim_grounding": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.citation_correctness": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.llm_judge": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.screening": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.evidence": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.gap_analysis": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.mechanism": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.equilibrium": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.numerical": {"evaluation": self.evaluation.model_dump()},
         }
         return mapping.get(plugin_id, {})

@@ -4,7 +4,7 @@ Plugin-first research harness for Information Systems / analytical-modeling rese
 
 > **Everything that provides an agent capability is a plugin.** The kernel is minimal infrastructure (plugin discovery, lifecycle, services, events, configuration) — all model access, routing, tools, loops, sessions, and autonomy are implemented as plugins.
 
-Inspired by DeepSeek Harness, this is an independent Python implementation of a complete autonomous research pipeline: question → planning → literature → gap → theory → model → analysis → verification → critique → manuscript → publication → novelty validation. Phases 2A–5D are implemented (literature through bounded evidence pre-acquisition); see the [Roadmap](#roadmap).
+Inspired by DeepSeek Harness, this is an independent Python implementation of a complete autonomous research pipeline: question → planning → literature → gap → theory → model → analysis → verification → critique → manuscript → publication → novelty validation → evaluation. Phases 2A–6A are implemented (literature through the evaluation harness); see the [Roadmap](#roadmap).
 
 ## Quick Start
 
@@ -26,7 +26,7 @@ uv run research-agent config validate configs/example.yaml                   # v
 
 ## How to Use It
 
-Configuration lives in `configs/example.yaml` (45 plugins; see
+Configuration lives in `configs/example.yaml` (57 plugins; see
 [docs/configuration.md](docs/configuration.md)). The research pipeline is
 driven by one CLI command per stage; every command writes immutable,
 provenance-linked artifacts to `.research/artifacts.db`:
@@ -56,11 +56,25 @@ uv run research-agent publication package --manuscript <manuscript_id>
 # Submission-risk gate (Phases 5A–5D): external novelty validation
 uv run research-agent novelty validate <submission_package_id>     # report + readiness gate
 uv run research-agent novelty inspect <report-or-gate-id>         # incl. staleness
+
+# Evaluation (Phase 6A-6B): offline benchmarks over production workflows
+uv run research-agent eval run novelty-threat-v1           # 7 cases: novelty + false-clear
+uv run research-agent eval run literature-retrieval-v1      # 6 cases: precision@k, recall@k, MRR
+uv run research-agent eval run citation-correctness-v1      # 10 cases: citations, bibliography, invented fields
+uv run research-agent eval run literature-screening-v1        # 9 cases: screening + review gates + failure handling
+uv run research-agent eval run evidence-extraction-v1         # 9 cases: evidence grounding, locators, categories
+uv run research-agent eval run research-gap-analysis-v1        # 10 cases: gap types, grounding, ranking, hallucination
+uv run research-agent eval run mechanism-development-v1         # 10 cases: mechanism validity, critic, revision
+uv run research-agent eval run equilibrium-correctness-v1       # 10 cases: closed-form equilibria, symbolic verification
+uv run research-agent eval run numerical-analysis-v1             # 9 cases: sweeps, feasibility, robustness, welfare
+uv run research-agent eval inspect <run-id>                 # per-evaluator detail
+uv run research-agent eval list
 ```
 
 The complete command reference (including kernel commands, `run` demo,
 per-phase options, and all live-test markers) is in
-[docs/cli.md](docs/cli.md).
+[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A) is documented
+in [docs/evaluation.md](docs/evaluation.md).
 
 ## Testing
 
@@ -81,7 +95,7 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All gates must pass: `494 passed, 19 skipped` (offline), ruff/format/pyright
+All gates must pass: `605 passed, 19 skipped` (offline), ruff/format/pyright
 clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
@@ -111,12 +125,13 @@ src/research_harness/
     research/    # Phase 3A-3E (mechanisms → numerical_analysis)
                  # Phase 4A-4C (results → publication_formatter)
                  # Phase 5A-5D (novelty_validator)
+                 # Phase 6A-6D (evaluation_harness + evaluator.*)
     documents/   # locator_metadata/unpaywall, fetcher_http, extractor_pypdf,
                  # acquisition_orchestrator
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/            # per-phase + architecture/configuration/cli/plugin-authoring docs
-tests/           # unit/ 50, integration/ 21, live/ 16 (opt-in markers)
+tests/           # unit/ 59, integration/ 30, live/ 16 (opt-in markers)
 ```
 
 ## Documentation
@@ -126,6 +141,7 @@ tests/           # unit/ 50, integration/ 21, live/ 16 (opt-in markers)
 - **CLI reference** — every command + live markers: [docs/cli.md](docs/cli.md)
 - **Research domain** — artifacts, provenance, identity: [docs/research-domain.md](docs/research-domain.md)
 - **Creating a plugin** — [docs/plugin-authoring.md](docs/plugin-authoring.md)
+- **Evaluation** — benchmarks, evaluators, metrics, provenance: [docs/evaluation.md](docs/evaluation.md)
 - **Per-phase docs** — `literature-sources.md`, `search-strategy.md`, `screening.md`, `documents.md`, `evidence.md`, `synthesis.md`, `gaps.md`, `mechanisms.md`, `models.md`, `equilibrium.md`, `propositions.md`, `numerical.md`, `results.md`, `manuscript.md`, `publication.md`, `novelty.md`
 
 ## Roadmap
@@ -140,6 +156,11 @@ tests/           # unit/ 50, integration/ 21, live/ 16 (opt-in markers)
 - **Phase 5B** — incremental revalidation + staleness tracking
 - **Phase 5C** — evidence enrichment for sparse candidates
 - **Phase 5D** — bounded evidence pre-acquisition before assessment
+- **Phase 6A** — evaluation harness: benchmarks, evaluators (deterministic + model-assisted), aggregate reports
+- **Phase 6B** — retrieval + citation benchmarks over the real search orchestrator and Phase 4C formatter
+- **Phase 6C** — screening + evidence-extraction benchmarks over the real Phase 2D/2F pipelines
+- **Phase 6D** — gap-analysis + mechanism-development benchmarks over the real Phase 2H/3A pipelines
+- **Phase 6E** — equilibrium + numerical benchmarks over the real Phase 3C/3E pipelines (SymPy closed forms, deterministic tolerances)
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
 
 Each phase has a per-phase doc under `docs/`; nothing beyond the implemented phases is claimed.

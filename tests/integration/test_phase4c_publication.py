@@ -216,7 +216,7 @@ async def test_phase4c_full_chain(tmp_path: pathlib.Path):
 
     # export all formats -> BlobStore
     export_ids = {fmt: await svc.export(leaf, fmt) for fmt in ("markdown", "latex", "docx", "pdf")}
-    for fmt, eid in export_ids.items():
+    for _fmt, eid in export_ids.items():
         er = (await store.get(eid)).parse_payload(ExportRecord)
         assert er.source_draft_id == d_env.artifact_id
         assert er.profile_id == profile_id

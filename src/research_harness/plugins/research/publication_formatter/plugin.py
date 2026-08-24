@@ -406,10 +406,7 @@ class PublicationFormatterService:
                 verified = True
         if not verified:
             return False
-        for cond in prop.conditions:
-            if not any(cond in c for c in claim.conditions):
-                return False
-        return True
+        return all(any(cond in c for c in claim.conditions) for cond in prop.conditions)
 
     # ------------------------------------------------------------------
     # Front matter (deterministic default + optional reasoning-role generation)

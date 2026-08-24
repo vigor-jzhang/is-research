@@ -786,7 +786,7 @@ async def _run_report_with(
     if critic:
         builders["independently verify"] = critic
     # per-candidate relationships routed by title substring in the prompt
-    for idx, p in enumerate(papers):
+    for _idx, p in enumerate(papers):
         builders[p.title] = {
             "dimensions": [],
             "relationship": relationships.get(p.title, "distinct"),
