@@ -1471,10 +1471,12 @@ async def _put_equilibrium_fixture(
     case: BenchmarkCase,
     run_suffix: str,
     producer: str,
+    mechanism_id: str | None = None,
 ) -> tuple[str, str, str]:
     """Create the run-unique fixture FormalAnalyticalModel + verified
-    EquilibriumCandidate + EquilibriumAnalysis used by the Phase 6F workflows
-    (comparative statics / propositions), returning their artifact ids."""
+    EquilibriumCandidate + EquilibriumAnalysis used by the Phase 6F/6G
+    workflows (comparative statics / propositions / results / manuscript),
+    returning their artifact ids."""
     from research_harness.research.schemas.equilibrium import (
         EquilibriumAnalysis,
         EquilibriumAnalysisStatus,
@@ -1496,7 +1498,7 @@ async def _put_equilibrium_fixture(
 
     model_cfg = case.input.get("model") or {}
     model = FormalAnalyticalModel(
-        selected_mechanism_id=f"{case.id}-mech",
+        selected_mechanism_id=mechanism_id or f"{case.id}-mech",
         title=model_cfg["title"],
         description=model_cfg.get("description") or model_cfg["title"],
         actors=[
@@ -1728,6 +1730,589 @@ async def run_proposition_workflow(
         max_llm_calls=20,
     )
     await generator.generate(cs_analysis_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# Phase 6G shared fixture: run-unique Phase 3 chain + id map for scripted
+# responses (results assembly / manuscript grounding workflows)
+# ---------------------------------------------------------------------------
+
+
+async def _put_phase3_fixture(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    run_suffix: str,
+    producer: str,
+) -> dict[str, Any]:
+    """Create the run-unique fixture Phase 3 chain used by the Phase 6G
+    workflows: model + real mechanism + gap + verified candidate/analysis +
+    propositions/verifications + comparative statics + numerical
+    results/robustness/experiment (+ evidence/synthesis/papers for
+    manuscript grounding). Returns the run-unique ids and the case-scoped ->
+    run-unique id map used to rewrite scripted responses."""
+    from research_harness.research.schemas.evidence import EvidenceItem, Locator
+    from research_harness.research.schemas.gap import GapAnalysis, GapType, ResearchGap
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+    from research_harness.research.schemas.mechanism import SelectedMechanism
+    from research_harness.research.schemas.numerical import (
+        NumericalExperiment,
+        NumericalResult,
+        RobustnessCheck,
+        RobustnessCheckType,
+        RobustnessOutcome,
+    )
+    from research_harness.research.schemas.proposition import (
+        ComparativeStatic,
+        Proposition,
+        PropositionClaimType,
+        PropositionStatus,
+        PropositionVerification,
+        PropositionVerificationStatus,
+        StaticSign,
+    )
+    from research_harness.research.schemas.synthesis import (
+        SynthesisStatement,
+        SynthesisStatementType,
+    )
+
+    gap_cfg = case.input.get("gap") or {}
+    mechanism_cfg = case.input.get("mechanism") or {}
+    gap_id = f"{case.id}-{run_suffix}-gap"
+    mechanism_id = f"{case.id}-{run_suffix}-mechanism"
+
+    model_id, candidate_id, analysis_id = await _put_equilibrium_fixture(
+        artifact_store=artifact_store,
+        case=case,
+        run_suffix=run_suffix,
+        producer=producer,
+        mechanism_id=mechanism_id,
+    )
+    id_map: dict[str, str] = {}
+    id_map[f"{case.id}-model"] = model_id
+    id_map[f"{case.id}-candidate"] = candidate_id
+    id_map[f"{case.id}-analysis"] = analysis_id
+    id_map[f"{case.id}-gap"] = gap_id
+    id_map[f"{case.id}-mechanism"] = mechanism_id
+
+    evidence_ids: list[str] = []
+    for i, ev in enumerate(case.input.get("evidence") or []):
+        eid = f"{case.id}-{run_suffix}-evidence-{i}"
+        id_map[f"{case.id}-evidence-{i}"] = eid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=EvidenceItem(
+                    statement=ev["statement"],
+                    source_artifact_id=ev.get("source_artifact_id") or f"{case.id}-doc-{i}",
+                    category=ev.get("category"),
+                    locator=Locator(page=1, pages=[1]),
+                    extraction_method="model-assisted",
+                    confidence=0.9,
+                ),
+                artifact_type="evidence_item",
+                producer=producer,
+                artifact_id=eid,
+            )
+        )
+        evidence_ids.append(eid)
+
+    paper_ids: list[str] = []
+    for i, _ in enumerate(case.input.get("papers") or []):
+        pid = f"{case.id}-{run_suffix}-paper-{i}"
+        id_map[f"{case.id}-paper-{i}"] = pid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=PaperIdentity(
+                    member_paper_artifact_ids=[f"{case.id}-record-{i}"],
+                    resolution_method=ResolutionMethod.exact_identifier,
+                ),
+                artifact_type="paper_identity",
+                producer=producer,
+                artifact_id=pid,
+            )
+        )
+        paper_ids.append(pid)
+
+    stmt_ids: list[str] = []
+    for i, st in enumerate(case.input.get("synthesis") or []):
+        sid = f"{case.id}-{run_suffix}-stmt-{i}"
+        id_map[f"{case.id}-stmt-{i}"] = sid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=SynthesisStatement(
+                    statement=st["statement"],
+                    type=SynthesisStatementType(st.get("type", "consensus")),
+                    supporting_evidence_ids=[
+                        id_map.get(str(x), str(x)) for x in (st.get("evidence_ids") or [])
+                    ],
+                    supporting_paper_identity_ids=[
+                        id_map.get(str(x), str(x)) for x in (st.get("paper_ids") or [])
+                    ],
+                    evidence_items_supporting=len(st.get("evidence_ids") or []),
+                    papers_supporting=len(st.get("paper_ids") or []),
+                ),
+                artifact_type="synthesis_statement",
+                producer=producer,
+                artifact_id=sid,
+            )
+        )
+        stmt_ids.append(sid)
+
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=ResearchGap(
+                title=gap_cfg["title"],
+                gap_type=GapType(gap_cfg.get("gap_type", "mechanism_gap")),
+                description=gap_cfg.get("description") or gap_cfg["title"],
+                supporting_synthesis_statement_ids=stmt_ids,
+                supporting_evidence_ids=evidence_ids,
+                relevant_paper_identity_ids=paper_ids,
+                supporting_papers=len(paper_ids),
+                supporting_evidence_items=len(evidence_ids),
+                strength=gap_cfg.get("strength", "tentative"),
+            ),
+            artifact_type="research_gap",
+            producer=producer,
+            artifact_id=gap_id,
+        )
+    )
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=GapAnalysis(
+                literature_synthesis_id=f"{case.id}-synthesis",
+                evidence_corpus_id=f"{case.id}-corpus",
+                gap_ids=[gap_id],
+                ranked_gap_ids=[gap_id],
+            ),
+            artifact_type="gap_analysis",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-gapanalysis",
+        )
+    )
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=SelectedMechanism(
+                gap_id=gap_id,
+                gap_selection_id=f"{case.id}-selection",
+                mechanism_candidate_id=f"{case.id}-mechcand",
+                name=mechanism_cfg.get("name", "Fixture mechanism"),
+                description=mechanism_cfg.get(
+                    "description", "Fixture mechanism for benchmark cases."
+                ),
+                causal_logic=mechanism_cfg.get("causal_logic", "fixture causal logic"),
+                actors=list(mechanism_cfg.get("actors") or []),
+            ),
+            artifact_type="selected_mechanism",
+            producer=producer,
+            artifact_id=mechanism_id,
+        )
+    )
+    prop_ids: list[str] = []
+    failed_prop_ids: list[str] = []
+    for i, p in enumerate(case.input.get("propositions") or []):
+        pid = f"{case.id}-{run_suffix}-prop-{i}"
+        id_map[f"{case.id}-prop-{i}"] = pid
+        verification = p.get("verification", "verified")
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=Proposition(
+                    model_id=model_id,
+                    equilibrium_candidate_id=candidate_id,
+                    comparative_statics_analysis_id=f"{case.id}-{run_suffix}-cs",
+                    statement=p["statement"],
+                    claim_type=PropositionClaimType(p.get("claim_type", "monotonicity")),
+                    outcome_variable=p.get("outcome_variable"),
+                    parameter=p.get("parameter"),
+                    expected_sign=p.get("expected_sign"),
+                    conditions=list(p.get("conditions") or []),
+                    supporting_static_ids=[
+                        id_map.get(str(x), str(x)) for x in (p.get("supporting_static_ids") or [])
+                    ],
+                    status=(
+                        PropositionStatus.failed
+                        if verification == "failed"
+                        else PropositionStatus.verified
+                    ),
+                    proposed_by="llm",
+                ),
+                artifact_type="proposition",
+                producer=producer,
+                artifact_id=pid,
+            )
+        )
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=PropositionVerification(
+                    proposition_id=pid,
+                    model_id=model_id,
+                    status=PropositionVerificationStatus(verification),
+                    checks=[],
+                ),
+                artifact_type="proposition_verification",
+                producer=producer,
+                artifact_id=f"{case.id}-{run_suffix}-propv-{i}",
+            )
+        )
+        prop_ids.append(pid)
+        if verification == "failed":
+            failed_prop_ids.append(pid)
+
+    static_ids: list[str] = []
+    for i, s in enumerate(case.input.get("statics") or []):
+        sid = f"{case.id}-{run_suffix}-static-{i}"
+        id_map[f"{case.id}-static-{i}"] = sid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=ComparativeStatic(
+                    model_id=model_id,
+                    equilibrium_candidate_id=candidate_id,
+                    outcome_variable=s["outcome_variable"],
+                    parameter=s["parameter"],
+                    derivative_expression=__import__(
+                        "research_harness.research.schemas.model", fromlist=["Expression"]
+                    ).Expression(expression=s["derivative"], symbols_used=[]),
+                    sign=StaticSign(s["sign"]),
+                    conditions=list(s.get("conditions") or []),
+                    derived_by="sympy",
+                ),
+                artifact_type="comparative_static",
+                producer=producer,
+                artifact_id=sid,
+            )
+        )
+        static_ids.append(sid)
+
+    result_ids: list[str] = []
+    for i, r in enumerate(case.input.get("numerical_results") or []):
+        rid = f"{case.id}-{run_suffix}-result-{i}"
+        id_map[f"{case.id}-result-{i}"] = rid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=NumericalResult(
+                    model_id=model_id,
+                    equilibrium_candidate_id=candidate_id,
+                    experiment_id=f"{case.id}-{run_suffix}-experiment",
+                    scenario=r.get("scenario", "baseline"),
+                    group=r.get("group"),
+                    x_parameter=r.get("x_parameter"),
+                    x_value=r.get("x_value"),
+                    parameter_values=r.get("parameter_values") or {},
+                    outcomes=r.get("outcomes") or {},
+                    feasible=r.get("feasible", True),
+                    conditions=list(r.get("conditions") or []),
+                ),
+                artifact_type="numerical_result",
+                producer=producer,
+                artifact_id=rid,
+            )
+        )
+        result_ids.append(rid)
+
+    robustness_ids: list[str] = []
+    for i, rb in enumerate(case.input.get("robustness") or []):
+        rbid = f"{case.id}-{run_suffix}-robust-{i}"
+        id_map[f"{case.id}-robust-{i}"] = rbid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=RobustnessCheck(
+                    model_id=model_id,
+                    equilibrium_candidate_id=candidate_id,
+                    experiment_id=f"{case.id}-{run_suffix}-experiment",
+                    proposition_id=id_map.get(
+                        str(rb.get("proposition_id")), rb.get("proposition_id")
+                    ),
+                    check_type=RobustnessCheckType(rb.get("check_type", "proposition_support")),
+                    description=rb.get("description", "fixture robustness check"),
+                    outcome=RobustnessOutcome(rb.get("outcome", "supported")),
+                    admissible_points=rb.get("admissible_points", 10),
+                ),
+                artifact_type="robustness_check",
+                producer=producer,
+                artifact_id=rbid,
+            )
+        )
+        robustness_ids.append(rbid)
+
+    experiment_id = f"{case.id}-{run_suffix}-experiment"
+    id_map[f"{case.id}-experiment"] = experiment_id
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=NumericalExperiment(
+                model_id=model_id,
+                equilibrium_candidate_id=candidate_id,
+                results=result_ids,
+                robustness=robustness_ids,
+                welfare=[],
+                status="completed",
+                summary=case.input.get("experiment_summary")
+                or "Fixture deterministic numerical experiment.",
+            ),
+            artifact_type="numerical_experiment",
+            producer=producer,
+            artifact_id=experiment_id,
+        )
+    )
+
+    return {
+        "model_id": model_id,
+        "candidate_id": candidate_id,
+        "analysis_id": analysis_id,
+        "gap_id": gap_id,
+        "mechanism_id": mechanism_id,
+        "experiment_id": experiment_id,
+        "prop_ids": prop_ids,
+        "failed_prop_ids": failed_prop_ids,
+        "static_ids": static_ids,
+        "result_ids": result_ids,
+        "evidence_ids": evidence_ids,
+        "paper_ids": paper_ids,
+        "stmt_ids": stmt_ids,
+        "id_map": id_map,
+    }
+
+
+# ---------------------------------------------------------------------------
+# results_assembly workflow (Phase 6G): real Phase 4A pipeline
+# ---------------------------------------------------------------------------
+
+
+async def run_results_assembly_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 4A pipeline: fixture Phase 3 outputs -> real
+    ResultsAssemblerService (scripted responses; deterministic validation
+    rejects failed-proposition support, unsupported ids, dropped conditions,
+    and normalizes global-novelty claims) -> real ResultsCriticService.
+    Fixtures are run-unique so service idempotency never stales re-runs."""
+    from research_harness.plugins.research.results_assembler.plugin import (
+        ResultsAssemblerService,
+    )
+    from research_harness.plugins.research.results_critic.plugin import (
+        ResultsCriticService,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    fixture = await _put_phase3_fixture(
+        artifact_store=artifact_store,
+        case=case,
+        run_suffix=run_suffix,
+        producer=producer,
+    )
+
+    router = FixtureModelRouter(
+        _rewrite_ids(case.input.get("llm_fixtures") or [], fixture["id_map"])
+    )
+    assembler = ResultsAssemblerService(
+        model_router=router,
+        artifact_store=artifact_store,
+        assembler_role="reasoning",
+        max_findings=12,
+        max_contributions=8,
+        max_implications=12,
+        max_llm_calls=10,
+    )
+    await assembler.assemble(fixture["experiment_id"])
+
+    package_envs = [
+        e
+        for e in await artifact_store.list()
+        if e.artifact_id not in before and e.artifact_type == "results_package"
+    ]
+    if not package_envs:
+        raise BenchmarkError("results assembly produced no results_package")
+    package_env = max(package_envs, key=lambda e: e.created_at)
+
+    critic = ResultsCriticService(
+        model_router=router,
+        artifact_store=artifact_store,
+        critic_role="critic",
+    )
+    await critic.critique(package_env.artifact_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# manuscript_grounding workflow (Phase 6G): real Phase 4B pipeline
+# ---------------------------------------------------------------------------
+
+
+async def run_manuscript_grounding_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 4B pipeline: fixture ResearchResultsPackage +
+    literature artifacts -> real ManuscriptDrafterService (deterministic
+    outline + scripted section drafts; validation rejects unsupported claims,
+    missing/hallucinated citations, failed-proposition grounding, and
+    normalizes novelty) -> real ManuscriptCriticService -> optional real
+    revision (flagged sections re-drafted, others reused)."""
+    from research_harness.plugins.research.manuscript_critic.plugin import (
+        ManuscriptCriticService,
+    )
+    from research_harness.plugins.research.manuscript_drafter.plugin import (
+        ManuscriptDrafterService,
+    )
+    from research_harness.research.schemas.results import (
+        ContributionClaim,
+        ContributionType,
+        FindingType,
+        ImplicationClaimType,
+        ImplicationKind,
+        ResearchFinding,
+        ResearchImplication,
+        ResearchResultsPackage,
+        ResultsPackageStatus,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    fixture = await _put_phase3_fixture(
+        artifact_store=artifact_store,
+        case=case,
+        run_suffix=run_suffix,
+        producer=producer,
+    )
+    id_map = fixture["id_map"]
+
+    finding_ids: list[str] = []
+    for i, f in enumerate(case.input.get("findings") or []):
+        fid = f"{case.id}-{run_suffix}-finding-{i}"
+        id_map[f"{case.id}-finding-{i}"] = fid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=ResearchFinding(
+                    model_id=fixture["model_id"],
+                    equilibrium_candidate_id=fixture["candidate_id"],
+                    statement=f["statement"],
+                    finding_type=FindingType(f.get("finding_type", "analytical_result")),
+                    supporting_proposition_ids=[
+                        id_map.get(str(x), str(x)) for x in (f.get("proposition_ids") or [])
+                    ],
+                    supporting_comparative_static_ids=[
+                        id_map.get(str(x), str(x)) for x in (f.get("static_ids") or [])
+                    ],
+                    supporting_numerical_result_ids=[
+                        id_map.get(str(x), str(x)) for x in (f.get("result_ids") or [])
+                    ],
+                    conditions=list(f.get("conditions") or []),
+                ),
+                artifact_type="research_finding",
+                producer=producer,
+                artifact_id=fid,
+            )
+        )
+        finding_ids.append(fid)
+
+    contribution_ids: list[str] = []
+    for i, c in enumerate(case.input.get("contributions") or []):
+        cid = f"{case.id}-{run_suffix}-contribution-{i}"
+        id_map[f"{case.id}-contribution-{i}"] = cid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=ContributionClaim(
+                    gap_id=c.get("gap_id", fixture["gap_id"]),
+                    finding_ids=[id_map.get(str(x), str(x)) for x in (c.get("finding_ids") or [])],
+                    claim=c["claim"],
+                    contribution_type=ContributionType(c.get("contribution_type", "theoretical")),
+                    advances_literature=c.get("advances_literature", ""),
+                    novelty_claim=c.get("novelty_claim"),
+                    novelty_normalized=bool(c.get("novelty_normalized", False)),
+                ),
+                artifact_type="contribution_claim",
+                producer=producer,
+                artifact_id=cid,
+            )
+        )
+        contribution_ids.append(cid)
+
+    implication_ids: list[str] = []
+    for i, imp in enumerate(case.input.get("implications") or []):
+        iid = f"{case.id}-{run_suffix}-implication-{i}"
+        id_map[f"{case.id}-implication-{i}"] = iid
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=ResearchImplication(
+                    implication_kind=ImplicationKind(imp.get("implication_kind", "theory")),
+                    claim_type=ImplicationClaimType(imp.get("claim_type", "interpretation")),
+                    text=imp["text"],
+                    grounded_in_finding_ids=[
+                        id_map.get(str(x), str(x)) for x in (imp.get("finding_ids") or [])
+                    ],
+                ),
+                artifact_type="research_implication",
+                producer=producer,
+                artifact_id=iid,
+            )
+        )
+        implication_ids.append(iid)
+
+    package_cfg = case.input.get("package") or {}
+    package_id = f"{case.id}-{run_suffix}-package"
+    id_map[f"{case.id}-package"] = package_id
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=ResearchResultsPackage(
+                research_question_id=package_cfg.get("research_question_id"),
+                gap_id=package_cfg.get("gap_id", fixture["gap_id"]),
+                selected_mechanism_id=fixture["mechanism_id"],
+                model_id=fixture["model_id"],
+                equilibrium_analysis_id=fixture["analysis_id"],
+                equilibrium_candidate_id=fixture["candidate_id"],
+                numerical_experiment_id=fixture["experiment_id"],
+                finding_ids=finding_ids,
+                contribution_claim_ids=contribution_ids,
+                implication_ids=implication_ids,
+                limitations=list(package_cfg.get("limitations") or []),
+                status=ResultsPackageStatus.assembled,
+                summary="Fixture results package.",
+                metadata={"robustness_ids": []},
+            ),
+            artifact_type="results_package",
+            producer=producer,
+            artifact_id=package_id,
+        )
+    )
+
+    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+    drafter = ManuscriptDrafterService(
+        model_router=router,
+        artifact_store=artifact_store,
+        drafter_role="reasoning",
+        max_llm_calls=100,
+    )
+    outline_id = await drafter.outline(package_id)
+    draft_sections = case.input.get("sections") or []
+    await drafter.draft(outline_id, section_ids=draft_sections)
+
+    draft_envs = [
+        e
+        for e in await artifact_store.list()
+        if e.artifact_id not in before and e.artifact_type == "manuscript_draft"
+    ]
+    if not draft_envs:
+        raise BenchmarkError("manuscript drafting produced no manuscript_draft")
+    draft_env = max(draft_envs, key=lambda e: e.created_at)
+
+    critic = ManuscriptCriticService(
+        model_router=router,
+        artifact_store=artifact_store,
+        critic_role="critic",
+    )
+    await critic.critique(draft_env.artifact_id)
+
+    if case.input.get("revise"):
+        await drafter.revise(draft_env.artifact_id)
 
     after = await artifact_store.list()
     return [e for e in after if e.artifact_id not in before]

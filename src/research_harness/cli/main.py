@@ -5922,6 +5922,8 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.numerical",
         "evaluator.comparative_statics",
         "evaluator.proposition",
+        "evaluator.results_grounding",
+        "evaluator.manuscript_grounding",
         "storage.blobs_filesystem",
     ):
         if pid not in cfg.plugins:

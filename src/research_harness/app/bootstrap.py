@@ -273,6 +273,8 @@ def _derived_plugin_configs(
         "evaluator.numerical": {"evaluation": config.evaluation.model_dump()},
         "evaluator.comparative_statics": {"evaluation": config.evaluation.model_dump()},
         "evaluator.proposition": {"evaluation": config.evaluation.model_dump()},
+        "evaluator.results_grounding": {"evaluation": config.evaluation.model_dump()},
+        "evaluator.manuscript_grounding": {"evaluation": config.evaluation.model_dump()},
         "documents.locator.metadata": {"documents": config.documents.model_dump()},
         "documents.locator.unpaywall": {"documents": config.documents.model_dump()},
         "documents.fetcher.http": {"documents": config.documents.model_dump()},

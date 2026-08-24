@@ -493,5 +493,7 @@ class AppConfig(BaseModel):
             "evaluator.numerical": {"evaluation": self.evaluation.model_dump()},
             "evaluator.comparative_statics": {"evaluation": self.evaluation.model_dump()},
             "evaluator.proposition": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.results_grounding": {"evaluation": self.evaluation.model_dump()},
+            "evaluator.manuscript_grounding": {"evaluation": self.evaluation.model_dump()},
         }
         return mapping.get(plugin_id, {})

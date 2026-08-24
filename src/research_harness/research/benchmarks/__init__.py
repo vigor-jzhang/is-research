@@ -3154,10 +3154,6 @@ NUMERICAL_ANALYSIS_V1: BenchmarkDefinition = BenchmarkDefinition(
     ],
 )
 
-# ---------------------------------------------------------------------------
-# comparative-statics-v1 (Phase 6F): real Phase 3D ComparativeStaticsService
-# ---------------------------------------------------------------------------
-
 
 def _cs_case(
     case_id: str,
@@ -3806,6 +3802,1220 @@ PROPOSITION_CORRECTNESS_V1: BenchmarkDefinition = BenchmarkDefinition(
     ],
 )
 
+# ---------------------------------------------------------------------------
+# results-assembly-v1 (Phase 6G): real Phase 4A ResultsAssemblerService +
+# ResultsCriticService
+# ---------------------------------------------------------------------------
+
+_RES_GAP = {
+    "title": "Within the reviewed corpus, competition in digital platform "
+    "markets remains under-theorized.",
+    "gap_type": "mechanism_gap",
+}
+
+_RES_MECHANISM = {
+    "name": "Price competition",
+    "description": "Fixtures compete on price; entry barriers shape intensity.",
+    "causal_logic": "Lower prices reduce margins; entry barriers soften rivalry.",
+}
+
+
+def _res_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    propositions: list[dict[str, Any]] | None = None,
+    statics: list[dict[str, Any]] | None = None,
+    numerical_results: list[dict[str, Any]] | None = None,
+    robustness: list[dict[str, Any]] | None = None,
+    llm_fixtures: list[dict[str, Any]],
+    reference: dict[str, Any],
+    model: dict[str, Any] | None = None,
+    candidate: dict[str, Any] | None = None,
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "results_assembly",
+            "model": model or _COURNOT_MODEL,
+            "candidate": candidate or _COURNOT_CANDIDATE,
+            "gap": _RES_GAP,
+            "mechanism": _RES_MECHANISM,
+            "propositions": propositions or [],
+            "statics": statics or [],
+            "numerical_results": numerical_results or [],
+            "robustness": robustness or [],
+            "llm_fixtures": llm_fixtures,
+        },
+        reference=reference,
+        evaluation_dimensions=["results"],
+        tags=["results", "offline"],
+    )
+
+
+def _res_prop(
+    statement: str,
+    *,
+    outcome_variable: str,
+    parameter: str,
+    expected_sign: str,
+    verification: str = "verified",
+    conditions: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "statement": statement,
+        "claim_type": "monotonicity",
+        "outcome_variable": outcome_variable,
+        "parameter": parameter,
+        "expected_sign": expected_sign,
+        "verification": verification,
+        "conditions": conditions or [],
+    }
+
+
+def _res_static(
+    outcome_variable: str,
+    parameter: str,
+    derivative: str,
+    sign: str,
+    conditions: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "outcome_variable": outcome_variable,
+        "parameter": parameter,
+        "derivative": derivative,
+        "sign": sign,
+        "conditions": conditions or [],
+    }
+
+
+def _res_result(outcomes: dict[str, float], **extra: Any) -> dict[str, Any]:
+    return {"outcomes": outcomes, **extra}
+
+
+def _res_finding(
+    statement: str,
+    *,
+    prop_ids: list[str] | None = None,
+    static_ids: list[str] | None = None,
+    result_ids: list[str] | None = None,
+    conditions: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "statement": statement,
+        "finding_type": "analytical_result",
+        "supporting_proposition_ids": prop_ids or [],
+        "supporting_comparative_static_ids": static_ids or [],
+        "supporting_numerical_result_ids": result_ids or [],
+        "conditions": conditions or [],
+    }
+
+
+def _res_assembly_response(
+    findings: list[dict[str, Any]],
+    contributions: list[dict[str, Any]],
+    implications: list[dict[str, Any]],
+    limitations: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "findings": findings,
+        "contributions": contributions,
+        "implications": implications,
+        "limitations": limitations or [],
+    }
+
+
+def _res_contribution(
+    claim: str, finding_refs: list[str], contribution_type: str = "theoretical"
+) -> dict[str, Any]:
+    return {
+        "claim": claim,
+        "contribution_type": contribution_type,
+        "finding_ids": finding_refs,
+        "advances_literature": "Fixture corpus-bounded advance.",
+    }
+
+
+def _res_implication(
+    text: str,
+    finding_refs: list[str],
+    claim_type: str = "interpretation",
+    implication_kind: str = "theory",
+) -> dict[str, Any]:
+    return {
+        "text": text,
+        "implication_kind": implication_kind,
+        "claim_type": claim_type,
+        "grounded_in_finding_ids": finding_refs,
+    }
+
+
+def _res_reference(
+    *,
+    expected_novelty_normalized: int = 0,
+    expected_critique_categories: list[str] | None = None,
+    expected_unsupported: int = 0,
+) -> dict[str, Any]:
+    return {
+        "expected_novelty_normalized": expected_novelty_normalized,
+        "expected_critique_categories": expected_critique_categories or [],
+        "expected_unsupported": expected_unsupported,
+    }
+
+
+def _res_assembly_fixture(
+    case_id: str,
+    response: dict[str, Any],
+    *,
+    retry: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    fixtures: list[dict[str, Any]] = []
+    if retry is not None:
+        fixtures.append(
+            {
+                "match": "REJECTED by deterministic validation",
+                "response": retry,
+            }
+        )
+    fixtures.append(
+        {
+            "match": "Assemble findings, contribution claims, and implications from verified results.",
+            "response": response,
+        }
+    )
+    return fixtures
+
+
+def _res_critic_fixture(
+    *, verdict: str = "approve", issues: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    return {
+        "match": "Critique the following assembled research results package.",
+        "response": {
+            "overall_assessment": "fixture assessment",
+            "verdict": verdict,
+            "recommendations": ["fixture"],
+            "issues": issues or [],
+        },
+    }
+
+
+_RES_PROP_A = _res_prop(
+    "Firm 1's equilibrium quantity increases in the demand intercept a.",
+    outcome_variable="q1",
+    parameter="a",
+    expected_sign="positive",
+)
+_RES_PROP_C = _res_prop(
+    "Firm 1's equilibrium quantity decreases in the marginal cost c.",
+    outcome_variable="q1",
+    parameter="c",
+    expected_sign="negative",
+)
+_PROP_POSITIVE = _RES_PROP_A
+_RES_STATIC_A = _res_static("q1", "a", "1/3", "positive")
+_RES_STATIC_C = _res_static("q1", "c", "-1/3", "negative")
+
+
+def _res_clean_assembly(case_id: str) -> dict[str, Any]:
+    return _res_assembly_response(
+        findings=[
+            _res_finding(
+                "Firm 1's equilibrium quantity increases in the demand intercept.",
+                prop_ids=[f"{case_id}-prop-0"],
+            )
+        ],
+        contributions=[
+            _res_contribution(
+                "Modeling entry barriers explains platform pricing intensity.",
+                ["FINDING0"],
+            )
+        ],
+        implications=[
+            _res_implication(
+                "Platforms facing stronger entry barriers price higher.",
+                ["FINDING0"],
+            )
+        ],
+        limitations=["Fixture limitation: linear demand."],
+    )
+
+
+RESULTS_ASSEMBLY_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="results-assembly-v1",
+    version=1,
+    name="Results Assembly",
+    description=(
+        "Offline benchmark over the real Phase 4A pipeline: fixture verified "
+        "Phase 3 outputs -> real ResultsAssemblerService (deterministic "
+        "validation rejects failed-proposition support, unsupported ids, and "
+        "dropped conditions; normalizes global-novelty claims) -> real "
+        "ResultsCriticService. Ground truth is recomputed by the evaluator "
+        "from the produced artifacts."
+    ),
+    category="results_assembly",
+    config={"evaluators": ["evaluator.results_grounding"]},
+    cases=[
+        _res_case(
+            "res-grounded-analytical-finding",
+            "correctly grounded analytical finding",
+            "A finding citing a verified proposition is assembled with its support intact.",
+            propositions=[_RES_PROP_A],
+            statics=[_RES_STATIC_A],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-grounded-analytical-finding",
+                    _res_clean_assembly("res-grounded-analytical-finding"),
+                ),
+                _res_critic_fixture(),
+            ],
+            reference=_res_reference(),
+        ),
+        _res_case(
+            "res-conditional-conditions-preserved",
+            "conditional proposition with conditions preserved",
+            "A finding citing a conditionally verified proposition carries its "
+            "required conditions verbatim.",
+            model=_COMPARATIVE_SLOPE_MODEL,
+            candidate=_COMPARATIVE_SLOPE_CANDIDATE,
+            propositions=[
+                _res_prop(
+                    "The equilibrium quantity increases in the demand intercept "
+                    "a when the slope parameter b is positive.",
+                    outcome_variable="q",
+                    parameter="a",
+                    expected_sign="positive",
+                    verification="conditionally_verified",
+                    conditions=["b > 0"],
+                )
+            ],
+            statics=[_res_static("q", "a", "1/(2*b)", "ambiguous", ["sign of da depends on: b"])],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-conditional-conditions-preserved",
+                    _res_assembly_response(
+                        findings=[
+                            _res_finding(
+                                "The equilibrium quantity increases in the demand "
+                                "intercept when the slope is positive.",
+                                prop_ids=["res-conditional-conditions-preserved-prop-0"],
+                                conditions=["b > 0"],
+                            )
+                        ],
+                        contributions=[
+                            _res_contribution(
+                                "A positive demand slope preserves the monotonicity.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        implications=[
+                            _res_implication(
+                                "Demand growth is expansionary under positive slopes.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        limitations=["Fixture limitation: linear demand."],
+                    ),
+                ),
+                _res_critic_fixture(),
+            ],
+            reference=_res_reference(),
+        ),
+        _res_case(
+            "res-numerical-robustness-support",
+            "numerical robustness support",
+            "A finding citing a numerical experiment result is assembled.",
+            propositions=[_RES_PROP_A],
+            statics=[_RES_STATIC_A],
+            numerical_results=[_res_result({"q1": 3.0, "q2": 3.0}, scenario="baseline")],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-numerical-robustness-support",
+                    _res_assembly_response(
+                        findings=[
+                            _res_finding(
+                                "The baseline experiment evaluates both firms at three units.",
+                                result_ids=["res-numerical-robustness-support-result-0"],
+                            )
+                        ],
+                        contributions=[
+                            _res_contribution(
+                                "Numerical evaluation corroborates the analytical result.",
+                                ["FINDING0"],
+                                contribution_type="analytical",
+                            )
+                        ],
+                        implications=[
+                            _res_implication(
+                                "Baseline quantities are symmetric.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        limitations=["Fixture limitation: linear demand."],
+                    ),
+                ),
+                _res_critic_fixture(),
+            ],
+            reference=_res_reference(),
+        ),
+        _res_case(
+            "res-symbolic-numerical-contradiction",
+            "symbolic/numerical contradiction surfaced",
+            "A finding citing a proposition whose robustness check is violated "
+            "is persisted, and the critic surfaces the contradiction "
+            "deterministically.",
+            propositions=[_RES_PROP_A],
+            statics=[_RES_STATIC_A],
+            robustness=[
+                {
+                    "proposition_id": "res-symbolic-numerical-contradiction-prop-0",
+                    "outcome": "violated",
+                }
+            ],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-symbolic-numerical-contradiction",
+                    _res_clean_assembly("res-symbolic-numerical-contradiction"),
+                ),
+                _res_critic_fixture(),
+            ],
+            reference=_res_reference(
+                expected_critique_categories=["symbolic_numerical_contradiction"]
+            ),
+        ),
+        _res_case(
+            "res-failed-proposition-rejected",
+            "failed proposition rejected as support",
+            "A finding citing a failed proposition is rejected by deterministic "
+            "validation and retried with a verified proposition.",
+            propositions=[_RES_PROP_A, _RES_PROP_C],
+            statics=[_RES_STATIC_A, _RES_STATIC_C],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-failed-proposition-rejected",
+                    _res_assembly_response(
+                        findings=[
+                            _res_finding(
+                                "Firm 1's equilibrium quantity decreases in the marginal cost.",
+                                prop_ids=["res-failed-proposition-rejected-prop-1"],
+                            )
+                        ],
+                        contributions=[
+                            _res_contribution(
+                                "Cost pass-through shapes platform pricing.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        implications=[
+                            _res_implication(
+                                "Higher costs contract platform output.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        limitations=["Fixture limitation: linear demand."],
+                    ),
+                    retry=_res_clean_assembly("res-failed-proposition-rejected"),
+                ),
+                _res_critic_fixture(),
+            ],
+            reference=_res_reference(),
+        ),
+        _res_case(
+            "res-unsupported-artifact-id-rejected",
+            "unsupported artifact id rejected",
+            "A finding citing a nonexistent comparative static id is rejected and retried.",
+            propositions=[_RES_PROP_A],
+            statics=[_RES_STATIC_A],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-unsupported-artifact-id-rejected",
+                    _res_assembly_response(
+                        findings=[
+                            _res_finding(
+                                "Firm 1's quantity responds to the demand intercept.",
+                                static_ids=["res-unsupported-artifact-id-rejected-static-9"],
+                            )
+                        ],
+                        contributions=[
+                            _res_contribution(
+                                "Demand conditions drive equilibrium outcomes.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        implications=[
+                            _res_implication(
+                                "Demand shocks shift market outcomes.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        limitations=["Fixture limitation: linear demand."],
+                    ),
+                    retry=_res_clean_assembly("res-unsupported-artifact-id-rejected"),
+                ),
+                _res_critic_fixture(),
+            ],
+            reference=_res_reference(),
+        ),
+        _res_case(
+            "res-valid-theoretical-contribution",
+            "valid theoretical contribution",
+            "A theoretical contribution linked to the package gap and a finding is assembled.",
+            propositions=[_RES_PROP_A],
+            statics=[_RES_STATIC_A],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-valid-theoretical-contribution",
+                    _res_clean_assembly("res-valid-theoretical-contribution"),
+                ),
+                _res_critic_fixture(),
+            ],
+            reference=_res_reference(),
+        ),
+        _res_case(
+            "res-weak-gap-contribution-link",
+            "weak gap/contribution link",
+            "A contribution referencing a finding outside the package is "
+            "rejected during assembly; the critic surfaces the weak link.",
+            propositions=[_RES_PROP_A],
+            statics=[_RES_STATIC_A],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-weak-gap-contribution-link",
+                    _res_assembly_response(
+                        findings=[
+                            _res_finding(
+                                "Firm 1's equilibrium quantity increases in the demand intercept.",
+                                prop_ids=["res-weak-gap-contribution-link-prop-0"],
+                            )
+                        ],
+                        contributions=[
+                            _res_contribution(
+                                "Entry barriers explain pricing intensity.",
+                                ["FINDING1"],
+                            )
+                        ],
+                        implications=[
+                            _res_implication(
+                                "Platforms facing stronger entry barriers price higher.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        limitations=["Fixture limitation: linear demand."],
+                    ),
+                    retry=_res_clean_assembly("res-weak-gap-contribution-link"),
+                ),
+                _res_critic_fixture(
+                    issues=[
+                        {
+                            "category": "weak_gap_link",
+                            "description": "contribution weakly tied to the gap",
+                            "severity": "medium",
+                            "location": "contribution",
+                        }
+                    ]
+                ),
+            ],
+            reference=_res_reference(expected_critique_categories=["weak_gap_link"]),
+        ),
+        _res_case(
+            "res-global-novelty-normalized",
+            "global novelty claim normalized",
+            "A sweeping novelty claim in a contribution is stripped during "
+            "assembly and never persisted as fact.",
+            propositions=[_RES_PROP_A],
+            statics=[_RES_STATIC_A],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-global-novelty-normalized",
+                    _res_assembly_response(
+                        findings=[
+                            _res_finding(
+                                "Firm 1's equilibrium quantity increases in the demand intercept.",
+                                prop_ids=["res-global-novelty-normalized-prop-0"],
+                            )
+                        ],
+                        contributions=[
+                            _res_contribution(
+                                "No prior study has examined entry barriers in "
+                                "platform pricing; we model them explicitly.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        implications=[
+                            _res_implication(
+                                "Platforms facing stronger entry barriers price higher.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        limitations=["Fixture limitation: linear demand."],
+                    ),
+                ),
+                _res_critic_fixture(),
+            ],
+            reference=_res_reference(expected_novelty_normalized=1),
+        ),
+        _res_case(
+            "res-unsupported-managerial-implication",
+            "unsupported managerial/causal implication",
+            "A managerial implication with no finding support is persisted; the "
+            "evaluator flags it and the critic surfaces the overstatement. "
+            "Fails by design.",
+            propositions=[_RES_PROP_A],
+            statics=[_RES_STATIC_A],
+            llm_fixtures=[
+                *_res_assembly_fixture(
+                    "res-unsupported-managerial-implication",
+                    _res_assembly_response(
+                        findings=[
+                            _res_finding(
+                                "Firm 1's equilibrium quantity increases in the demand intercept.",
+                                prop_ids=["res-unsupported-managerial-implication-prop-0"],
+                            )
+                        ],
+                        contributions=[
+                            _res_contribution(
+                                "Entry barriers explain pricing intensity.",
+                                ["FINDING0"],
+                            )
+                        ],
+                        implications=[
+                            _res_implication(
+                                "Platforms facing stronger entry barriers will "
+                                "always raise prices.",
+                                [],
+                                claim_type="managerial_implication",
+                                implication_kind="management",
+                            )
+                        ],
+                        limitations=["Fixture limitation: linear demand."],
+                    ),
+                ),
+                _res_critic_fixture(
+                    issues=[
+                        {
+                            "category": "causal_overstatement",
+                            "description": "causal claim beyond the verified result",
+                            "severity": "high",
+                            "location": "implication",
+                        }
+                    ]
+                ),
+            ],
+            reference=_res_reference(expected_unsupported=1),
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# manuscript-grounding-v1 (Phase 6G): real Phase 4B ManuscriptDrafterService +
+# ManuscriptCriticService (+ revision)
+# ---------------------------------------------------------------------------
+
+
+def _ms_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    sections: list[str],
+    llm_fixtures: list[dict[str, Any]],
+    reference: dict[str, Any],
+    propositions: list[dict[str, Any]] | None = None,
+    contributions: list[dict[str, Any]] | None = None,
+    package: dict[str, Any] | None = None,
+    revise: bool = False,
+    model: dict[str, Any] | None = None,
+    candidate: dict[str, Any] | None = None,
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "manuscript_grounding",
+            "model": model or _COURNOT_MODEL,
+            "candidate": candidate or _COURNOT_CANDIDATE,
+            "gap": _RES_GAP,
+            "mechanism": _RES_MECHANISM,
+            "propositions": propositions or [_RES_PROP_A],
+            "statics": [_RES_STATIC_A],
+            "numerical_results": [_res_result({"q1": 3.0}, scenario="baseline")],
+            "evidence": [
+                {
+                    "statement": "Entry barriers shape competition in platform markets.",
+                    "category": "finding",
+                }
+            ],
+            "papers": [{"title": "Fixture paper"}],
+            "synthesis": [
+                {
+                    "statement": "Within the reviewed corpus, entry barriers shape competition.",
+                    "evidence_ids": ["ms-paper-0"],
+                }
+            ],
+            "findings": [
+                {
+                    "statement": "Firm 1's equilibrium quantity increases in the demand intercept.",
+                    "proposition_ids": ["ms-paper-prop-0"],
+                }
+            ],
+            "contributions": contributions
+            or [
+                {
+                    "claim": "Modeling entry barriers explains platform pricing intensity.",
+                    "finding_ids": ["ms-paper-finding-0"],
+                }
+            ],
+            "implications": [
+                {
+                    "text": "Platforms facing stronger entry barriers price higher.",
+                    "finding_ids": ["ms-paper-finding-0"],
+                }
+            ],
+            "package": package or {},
+            "sections": sections,
+            "revise": revise,
+            "llm_fixtures": llm_fixtures,
+        },
+        reference=reference,
+        evaluation_dimensions=["manuscript"],
+        tags=["manuscript", "offline"],
+    )
+
+
+def _ms_section_response(
+    case_id: str,
+    section_title: str,
+    *,
+    claims: list[dict[str, Any]],
+    body: str,
+    citations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "title": section_title,
+        "body": body,
+        "claims": claims,
+        "citations": citations or [],
+    }
+
+
+def _ms_claim(
+    text: str,
+    *,
+    grounding_type: str | None = None,
+    grounding_artifact_id: str | None = None,
+    citation_id: str | None = None,
+    conditions: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "text": text,
+        "grounding_type": grounding_type,
+        "grounding_artifact_id": grounding_artifact_id,
+        "citation_id": citation_id,
+        "conditions": conditions or [],
+    }
+
+
+def _ms_citation(
+    citation_id: str,
+    paper_ref: str,
+    evidence_ref: str,
+) -> dict[str, Any]:
+    return {
+        "citation_id": citation_id,
+        "paper_identity_id": paper_ref,
+        "evidence_item_id": evidence_ref,
+        "page_locator": "p. 214",
+        "claim_context": "fixture claim context",
+    }
+
+
+def _ms_section_fixture(
+    match: str,
+    response: dict[str, Any],
+    *,
+    retry: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    fixtures: list[dict[str, Any]] = []
+    if retry is not None:
+        fixtures.append({"match": "REJECTED by deterministic validation", "response": retry})
+    fixtures.append({"match": match, "response": response})
+    return fixtures
+
+
+def _ms_critic_fixture(
+    *, verdict: str = "approve", issues: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    return {
+        "match": "Critique the following manuscript draft",
+        "response": {
+            "overall_assessment": "fixture assessment",
+            "verdict": verdict,
+            "recommendations": ["fixture"],
+            "issues": issues or [],
+        },
+    }
+
+
+def _ms_reference(
+    *,
+    expected_sections: list[str] | None = None,
+    expected_critique_categories: list[str] | None = None,
+    expected_revision: bool = False,
+    expected_novelty_normalized: int = 0,
+) -> dict[str, Any]:
+    return {
+        "expected_sections": expected_sections or [],
+        "expected_critique_categories": expected_critique_categories or [],
+        "expected_revision": expected_revision,
+        "expected_novelty_normalized": expected_novelty_normalized,
+    }
+
+
+def _ms_lit_review_response(case_id: str) -> dict[str, Any]:
+    return _ms_section_response(
+        case_id,
+        "Literature Review",
+        body=(
+            "Prior work establishes that entry barriers shape competition "
+            "in platform markets [CITE:lit-1]."
+        ),
+        claims=[
+            _ms_claim(
+                "Entry barriers shape competition in platform markets.",
+                grounding_type="evidence_item",
+                grounding_artifact_id=f"{case_id}-evidence-0",
+                citation_id="lit-1",
+            )
+        ],
+        citations=[_ms_citation("lit-1", f"{case_id}-paper-0", f"{case_id}-evidence-0")],
+    )
+
+
+def _ms_prop_section_response(case_id: str) -> dict[str, Any]:
+    return _ms_section_response(
+        case_id,
+        "Propositions",
+        body=("Proposition: firm 1's equilibrium quantity increases in the demand intercept."),
+        claims=[
+            _ms_claim(
+                "Firm 1's equilibrium quantity increases in the demand intercept.",
+                grounding_type="verified_proposition",
+                grounding_artifact_id=f"{case_id}-prop-0",
+            )
+        ],
+    )
+
+
+MANUSCRIPT_GROUNDING_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="manuscript-grounding-v1",
+    version=1,
+    name="Manuscript Grounding",
+    description=(
+        "Offline benchmark over the real Phase 4B pipeline: fixture "
+        "ResearchResultsPackage + literature artifacts -> real "
+        "ManuscriptDrafterService (deterministic outline, scripted section "
+        "drafts; validation rejects unsupported claims, missing/hallucinated "
+        "citations, and failed-proposition grounding; normalizes novelty) -> "
+        "real ManuscriptCriticService -> optional real revision. Ground truth "
+        "is recomputed by the evaluator from the produced artifacts."
+    ),
+    category="manuscript_grounding",
+    config={"evaluators": ["evaluator.manuscript_grounding"]},
+    cases=[
+        _ms_case(
+            "ms-grounded-literature-claim",
+            "grounded literature claim with citation",
+            "A literature claim grounded in evidence with a declared citation "
+            "and [CITE:...] placeholder is drafted.",
+            sections=["literature_review"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Literature Review' section",
+                    _ms_lit_review_response("ms-grounded-literature-claim"),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(expected_sections=["literature_review"]),
+        ),
+        _ms_case(
+            "ms-grounded-mathematical-claim",
+            "grounded mathematical claim",
+            "A claim grounded in a verified proposition is drafted in the Propositions section.",
+            sections=["propositions"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Propositions' section",
+                    _ms_prop_section_response("ms-grounded-mathematical-claim"),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(expected_sections=["propositions"]),
+        ),
+        _ms_case(
+            "ms-proposition-condition-preserved",
+            "proposition condition preserved in prose",
+            "A claim grounded in a conditional proposition carries the condition in the draft.",
+            model=_COMPARATIVE_SLOPE_MODEL,
+            candidate=_COMPARATIVE_SLOPE_CANDIDATE,
+            propositions=[
+                _res_prop(
+                    "The equilibrium quantity increases in the demand intercept "
+                    "a when the slope parameter b is positive.",
+                    outcome_variable="q",
+                    parameter="a",
+                    expected_sign="positive",
+                    verification="conditionally_verified",
+                    conditions=["b > 0"],
+                )
+            ],
+            sections=["propositions"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Propositions' section",
+                    _ms_section_response(
+                        "ms-proposition-condition-preserved",
+                        "Propositions",
+                        body=(
+                            "Proposition: the equilibrium quantity increases in "
+                            "the demand intercept when the slope parameter b is "
+                            "positive (b > 0)."
+                        ),
+                        claims=[
+                            _ms_claim(
+                                "The equilibrium quantity increases in the demand "
+                                "intercept when the slope is positive.",
+                                grounding_type="verified_proposition",
+                                grounding_artifact_id=("ms-proposition-condition-preserved-prop-0"),
+                                conditions=["b > 0"],
+                            )
+                        ],
+                    ),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(expected_sections=["propositions"]),
+        ),
+        _ms_case(
+            "ms-unsupported-literature-claim",
+            "unsupported literature claim",
+            "A literature claim without a citation is rejected by deterministic "
+            "validation and retried with a citation.",
+            sections=["literature_review"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Literature Review' section",
+                    _ms_section_response(
+                        "ms-unsupported-literature-claim",
+                        "Literature Review",
+                        body="Entry barriers shape competition in platform markets.",
+                        claims=[
+                            _ms_claim(
+                                "Entry barriers shape competition in platform markets.",
+                                grounding_type="evidence_item",
+                                grounding_artifact_id=(
+                                    "ms-unsupported-literature-claim-evidence-0"
+                                ),
+                            )
+                        ],
+                    ),
+                    retry=_ms_lit_review_response("ms-unsupported-literature-claim"),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(expected_sections=["literature_review"]),
+        ),
+        _ms_case(
+            "ms-missing-citation",
+            "missing citation",
+            "A [CITE:...] placeholder without a declared citation is rejected and retried.",
+            sections=["literature_review"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Literature Review' section",
+                    _ms_section_response(
+                        "ms-missing-citation",
+                        "Literature Review",
+                        body=("Entry barriers shape competition [CITE:lit-2] in platform markets."),
+                        claims=[
+                            _ms_claim(
+                                "Entry barriers shape competition in platform markets.",
+                                grounding_type="evidence_item",
+                                grounding_artifact_id="ms-missing-citation-evidence-0",
+                                citation_id="lit-1",
+                            )
+                        ],
+                        citations=[
+                            _ms_citation(
+                                "lit-1",
+                                "ms-missing-citation-paper-0",
+                                "ms-missing-citation-evidence-0",
+                            )
+                        ],
+                    ),
+                    retry=_ms_lit_review_response("ms-missing-citation"),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(expected_sections=["literature_review"]),
+        ),
+        _ms_case(
+            "ms-hallucinated-citation-id",
+            "hallucinated citation id",
+            "A citation referencing unknown evidence is rejected and retried.",
+            sections=["literature_review"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Literature Review' section",
+                    _ms_section_response(
+                        "ms-hallucinated-citation-id",
+                        "Literature Review",
+                        body=("Entry barriers shape competition in platform markets [CITE:lit-1]."),
+                        claims=[
+                            _ms_claim(
+                                "Entry barriers shape competition in platform markets.",
+                                grounding_type="evidence_item",
+                                grounding_artifact_id=("ms-hallucinated-citation-id-evidence-0"),
+                                citation_id="lit-1",
+                            )
+                        ],
+                        citations=[
+                            _ms_citation(
+                                "lit-1",
+                                "ms-hallucinated-citation-id-paper-0",
+                                "ghost-evidence",
+                            )
+                        ],
+                    ),
+                    retry=_ms_lit_review_response("ms-hallucinated-citation-id"),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(expected_sections=["literature_review"]),
+        ),
+        _ms_case(
+            "ms-failed-proposition-presented",
+            "failed proposition presented as result",
+            "A claim grounding in a failed proposition is rejected and retried "
+            "with a verified proposition.",
+            propositions=[_RES_PROP_C, _RES_PROP_A],
+            sections=["propositions"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Propositions' section",
+                    _ms_section_response(
+                        "ms-failed-proposition-presented",
+                        "Propositions",
+                        body=(
+                            "Proposition: firm 1's equilibrium quantity decreases "
+                            "in the marginal cost."
+                        ),
+                        claims=[
+                            _ms_claim(
+                                "Firm 1's equilibrium quantity decreases in the marginal cost.",
+                                grounding_type="verified_proposition",
+                                grounding_artifact_id=("ms-failed-proposition-presented-prop-0"),
+                            )
+                        ],
+                    ),
+                    retry=_ms_prop_section_response("ms-failed-proposition-presented"),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(expected_sections=["propositions"]),
+        ),
+        _ms_case(
+            "ms-novelty-overclaim",
+            "novelty overclaim",
+            "A sweeping novelty phrase in the body is normalized during drafting.",
+            sections=["propositions"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Propositions' section",
+                    _ms_section_response(
+                        "ms-novelty-overclaim",
+                        "Propositions",
+                        body=(
+                            "This is the first study of Cournot competition; firm "
+                            "1's equilibrium quantity increases in the demand "
+                            "intercept."
+                        ),
+                        claims=[
+                            _ms_claim(
+                                "Firm 1's equilibrium quantity increases in the demand intercept.",
+                                grounding_type="verified_proposition",
+                                grounding_artifact_id="ms-novelty-overclaim-prop-0",
+                            )
+                        ],
+                    ),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(
+                expected_sections=["propositions"],
+                expected_novelty_normalized=1,
+            ),
+        ),
+        _ms_case(
+            "ms-gap-contribution-inconsistency",
+            "gap/contribution inconsistency",
+            "A contribution referencing a different gap is flagged by the "
+            "critic's deterministic check.",
+            sections=["contributions"],
+            contributions=[
+                {
+                    "claim": "Modeling entry barriers explains platform pricing intensity.",
+                    "finding_ids": ["ms-paper-finding-0"],
+                    "gap_id": "other-gap",
+                }
+            ],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Contributions' section",
+                    _ms_section_response(
+                        "ms-gap-contribution-inconsistency",
+                        "Contributions",
+                        body=(
+                            "This study contributes a mechanism that links entry "
+                            "barriers to platform pricing."
+                        ),
+                        claims=[
+                            _ms_claim(
+                                "The mechanism links entry barriers to platform pricing.",
+                                grounding_type="contribution_claim",
+                                grounding_artifact_id=(
+                                    "ms-gap-contribution-inconsistency-contribution-0"
+                                ),
+                            )
+                        ],
+                    ),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(
+                expected_sections=["contributions"],
+                expected_critique_categories=["gap_contribution_mismatch"],
+            ),
+        ),
+        _ms_case(
+            "ms-limitations-omitted",
+            "limitations omitted",
+            "A draft without a limitations section is flagged by the critic's deterministic check.",
+            sections=["introduction", "conclusion"],
+            llm_fixtures=[
+                *_ms_section_fixture(
+                    "Draft the 'Introduction' section",
+                    _ms_section_response(
+                        "ms-limitations-omitted",
+                        "Introduction",
+                        body=(
+                            "We study competition in digital platform markets "
+                            "through an analytical model."
+                        ),
+                        claims=[
+                            _ms_claim(
+                                "An analytical model links entry barriers to platform pricing.",
+                                grounding_type="contribution_claim",
+                                grounding_artifact_id=("ms-limitations-omitted-contribution-0"),
+                            )
+                        ],
+                    ),
+                ),
+                *_ms_section_fixture(
+                    "Draft the 'Conclusion' section",
+                    _ms_section_response(
+                        "ms-limitations-omitted",
+                        "Conclusion",
+                        body=("Entry barriers shape platform pricing in the reviewed model."),
+                        claims=[
+                            _ms_claim(
+                                "Entry barriers shape platform pricing.",
+                                grounding_type="research_finding",
+                                grounding_artifact_id="ms-limitations-omitted-finding-0",
+                            )
+                        ],
+                    ),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(
+                expected_sections=["introduction", "conclusion"],
+                expected_critique_categories=["missing_limitations"],
+            ),
+        ),
+        _ms_case(
+            "ms-revision-repairs-flagged",
+            "revision fixes flagged section preserving unaffected sections",
+            "A literature review section declaring a citation never used in "
+            "the body is flagged by the critic's deterministic check; the "
+            "revision re-drafts it (repairing the unused citation) while "
+            "reusing the unaffected propositions section by id.",
+            sections=["literature_review", "propositions", "limitations"],
+            revise=True,
+            llm_fixtures=[
+                {
+                    "match": "CRITIQUE FEEDBACK for this section",
+                    "response": _ms_lit_review_response("ms-revision-repairs-flagged"),
+                },
+                *_ms_section_fixture(
+                    "Draft the 'Literature Review' section",
+                    _ms_section_response(
+                        "ms-revision-repairs-flagged",
+                        "Literature Review",
+                        body=("Entry barriers shape competition in platform markets."),
+                        claims=[
+                            _ms_claim(
+                                "Entry barriers shape competition in platform markets.",
+                                grounding_type="evidence_item",
+                                grounding_artifact_id=("ms-revision-repairs-flagged-evidence-0"),
+                                citation_id="lit-1",
+                            )
+                        ],
+                        citations=[
+                            _ms_citation(
+                                "lit-1",
+                                "ms-revision-repairs-flagged-paper-0",
+                                "ms-revision-repairs-flagged-evidence-0",
+                            )
+                        ],
+                    ),
+                ),
+                *_ms_section_fixture(
+                    "Draft the 'Propositions' section",
+                    _ms_prop_section_response("ms-revision-repairs-flagged"),
+                ),
+                *_ms_section_fixture(
+                    "Draft the 'Limitations' section",
+                    _ms_section_response(
+                        "ms-revision-repairs-flagged",
+                        "Limitations",
+                        body=(
+                            "Limitations: the model assumes linear demand and static competition."
+                        ),
+                        claims=[
+                            _ms_claim(
+                                "The model assumes linear demand and static competition.",
+                                grounding_type="research_gap",
+                                grounding_artifact_id="ms-revision-repairs-flagged-gap",
+                            )
+                        ],
+                    ),
+                ),
+                _ms_critic_fixture(),
+            ],
+            reference=_ms_reference(
+                expected_sections=["literature_review", "propositions", "limitations"],
+                expected_critique_categories=["citation_gap"],
+                expected_revision=True,
+            ),
+        ),
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -3818,4 +5028,6 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NUMERICAL_ANALYSIS_V1.benchmark_id: NUMERICAL_ANALYSIS_V1,
     COMPARATIVE_STATICS_V1.benchmark_id: COMPARATIVE_STATICS_V1,
     PROPOSITION_CORRECTNESS_V1.benchmark_id: PROPOSITION_CORRECTNESS_V1,
+    RESULTS_ASSEMBLY_V1.benchmark_id: RESULTS_ASSEMBLY_V1,
+    MANUSCRIPT_GROUNDING_V1.benchmark_id: MANUSCRIPT_GROUNDING_V1,
 }

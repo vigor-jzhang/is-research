@@ -1,4 +1,4 @@
-# Evaluation Harness (Phase 6A–6F)
+# Evaluation Harness (Phase 6A–6G)
 
 Plugin-based evaluation framework that measures research-agent quality
 independently from the production pipeline:
@@ -67,6 +67,8 @@ Evaluators are plugin services registered in the service registry:
 | `evaluator.numerical` | deterministic | Numerical analysis (Phase 6E): value/feasibility/condition/sweep/robustness/welfare/reproducibility |
 | `evaluator.comparative_statics` | deterministic | Comparative statics (Phase 6F): derivative/sign/condition/coverage/ambiguous-sign accuracy, overclaim detection |
 | `evaluator.proposition` | deterministic | Proposition correctness (Phase 6F): verification, monotonicity/equality recomputation, condition/support integrity, rejection justification |
+| `evaluator.results_grounding` | deterministic | Results assembly (Phase 6G): finding/condition/proposition/numerical support, gap alignment, novelty, contradiction detection |
+| `evaluator.manuscript_grounding` | deterministic | Manuscript grounding (Phase 6G): claim/citation grounding, conditions, critique recall, revision success |
 | `evaluator.claim_grounding` | model-assisted | Whether candidate assessments are grounded in cited evidence (deterministic guard: no evidence → ungrounded without a model call) |
 | `evaluator.citation_correctness` | deterministic | Placeholder check (6A) or full `manuscript_citation` mode (6B): resolution, map accuracy, dedup, leftovers, invented fields |
 | `evaluator.llm_judge` | model-assisted | Generic rubric-driven judge with structured output |
@@ -560,13 +562,98 @@ invalid equality accepted; valid equality rejected.
 Known expected: verification 10/10, monotonicity 7/7, equality 2/2,
 conditions 1/1, support 10/10, rejection 5/10 (pooled), pass rate 10/10.
 
-## Known limitations (Phase 6A–6F)
+## Results benchmark (`results-assembly-v1`, Phase 6G)
+
+Drives the REAL Phase 4A pipeline:
+
+```
+verified Phase 3 outputs → ResultsAssemblerService (deterministic validation:
+failed-proposition rejection, unsupported-id rejection, condition
+preservation, global-novelty normalization) → ResearchResultsPackage →
+ResultsCriticService (deterministic contradiction + novelty + gap checks)
+```
+
+Cases (10): correctly grounded analytical finding; conditional proposition
+with conditions preserved; numerical robustness support; symbolic/numerical
+contradiction surfaced by the critic's deterministic check; failed
+proposition rejected as support (validation + retry); unsupported artifact
+id rejected (validation + retry); valid theoretical contribution; weak
+gap/contribution link (out-of-range finding reference rejected; critic
+surfaces the concern); global novelty claim normalized; unsupported
+managerial implication persisted (fails by design).
+
+The evaluator recomputes ground truth: support ids are re-checked against
+the produced verified propositions/statics/results, required conditions are
+re-derived from the cited supports, novelty phrasing is re-scanned, and
+implication grounding is re-verified.
+
+### Results metrics
+
+- `finding_grounding_accuracy`, `condition_preservation_accuracy`
+- `proposition_support_accuracy`, `numerical_support_accuracy`
+- `contribution_gap_alignment_accuracy`, `implication_grounding_accuracy`
+- `novelty_claim_accuracy`, `contradiction_detection_accuracy`
+- `unsupported_claim_rate`
+
+Critical failures: failed proposition used as valid support; unsupported
+finding persisted; required conditions dropped; contradiction hidden;
+global novelty persisted as fact; contribution without valid gap/finding
+support; unsupported implication persisted.
+
+Known expected: grounding 10/10, conditions 10/10, proposition support 9/9,
+numerical support 1/1, alignment 10/10, implications 9/10, novelty 10/10,
+contradiction 1/10 (pooled), unsupported 1/20, pass rate 9/10.
+
+## Manuscript benchmark (`manuscript-grounding-v1`, Phase 6G)
+
+Drives the REAL Phase 4B pipeline:
+
+```
+ResearchResultsPackage + literature artifacts → ManuscriptDrafterService
+(deterministic outline; scripted section drafts; validation rejects
+unsupported claims, missing/hallucinated citations, failed-proposition
+grounding; normalizes novelty) → ManuscriptCriticService (deterministic
+checks) → optional revision (flagged sections re-drafted, others reused)
+```
+
+Cases (11): grounded literature claim with citation; grounded mathematical
+claim; proposition condition preserved in prose; unsupported literature
+claim rejected; missing citation rejected; hallucinated citation id
+rejected; failed proposition presented as result rejected; novelty overclaim
+normalized; gap/contribution inconsistency flagged by the critic; omitted
+limitations flagged by the critic; revision re-drafts the flagged section
+(unused citation repaired) while reusing unaffected sections by id.
+
+The citation boundary stays clear of Phase 6B: 6G verifies
+`ManuscriptClaim → CitationReference → EvidenceItem/research artifact`
+referential integrity only; Phase 6B remains the author-year formatting
+benchmark.
+
+### Manuscript metrics
+
+- `claim_grounding_accuracy`, `literature_citation_coverage`
+- `mathematical_claim_accuracy`, `condition_preservation_accuracy`
+- `unsupported_claim_rate`, `citation_reference_accuracy`
+- `novelty_claim_accuracy`, `section_consistency_accuracy`
+- `critique_issue_recall`, `revision_success_rate`
+
+Critical failures: hallucinated artifact/citation references; unsupported
+literature claim; failed proposition presented as verified; missing
+proposition conditions; unsupported novelty; revision that fails to repair
+a required deterministic issue.
+
+Known expected: grounding 15/15, citations 6/6, mathematical 5/5,
+conditions 5/5, unsupported 0/15, citation references 6/6, novelty 15/15,
+consistency 15/15, critique recall 3/3, revision 1/1, pass rate 11/11.
+
+## Known limitations (Phase 6A–6G)
 
 - Benchmarks so far: novelty threat, retrieval, citation, screening,
   evidence extraction, gap analysis, mechanism development, equilibrium
   correctness, numerical analysis, comparative statics, proposition
-  correctness. Results/contribution assembly and manuscript-grounding
-  benchmarks are not yet implemented.
+  correctness, results assembly, manuscript grounding. Leaderboards, live
+  corpora, model tournaments, and journal-quality scoring are not
+  implemented.
 - Case pass/fail is gated only by deterministic evaluators; a benchmark with
   only model-assisted evaluators cannot fail a case (by design — LLM judges
   never override deterministic verdicts).
@@ -590,8 +677,8 @@ conditions 1/1, support 10/10, rejection 5/10 (pooled), pass rate 10/10.
 
 ## Recommended next increment
 
-Phase 6G: a **results/contribution assembly + manuscript grounding/citation
-integrity benchmark** over the Phase 4 results-package and Phase 4C
-manuscript pipelines (grounded claims, citation integrity, contribution
-coherence), reusing the harness, evaluator contract, and generic
-aggregation end to end.
+Phase 6H (evaluation-completion milestone): a **results/contribution
+assembly + manuscript/citation integrity suite completion** — final
+end-to-end manuscript-grounded submission checks and an evaluation-readiness
+summary (coverage matrix, gap-to-metric mapping, leaderboard opt-in), or the
+first leaderboard/model-tournament increment, reusing the harness unchanged.

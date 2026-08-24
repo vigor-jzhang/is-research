@@ -28,10 +28,12 @@ from research_harness.research.benchmarks.workflows import (
     run_equilibrium_workflow,
     run_evidence_workflow,
     run_gap_workflow,
+    run_manuscript_grounding_workflow,
     run_mechanism_workflow,
     run_novelty_workflow,
     run_numerical_workflow,
     run_proposition_workflow,
+    run_results_assembly_workflow,
     run_retrieval_workflow,
     run_screening_workflow,
 )
@@ -429,6 +431,20 @@ class EvaluationHarnessService:
                 producer=self._producer,
             )
             return produced, None
+        if workflow == "results_assembly":
+            produced = await run_results_assembly_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "manuscript_grounding":
+            produced = await run_manuscript_grounding_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         raise BenchmarkError(f"unsupported benchmark workflow {workflow!r}")
 
     async def _evaluate_case(
@@ -723,6 +739,8 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.numerical",
                 "evaluator.comparative_statics",
                 "evaluator.proposition",
+                "evaluator.results_grounding",
+                "evaluator.manuscript_grounding",
             ],
             optional_requires=["blob_store.default"],
         )
@@ -754,6 +772,8 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.numerical": ctx.require("evaluator.numerical"),
                 "evaluator.comparative_statics": ctx.require("evaluator.comparative_statics"),
                 "evaluator.proposition": ctx.require("evaluator.proposition"),
+                "evaluator.results_grounding": ctx.require("evaluator.results_grounding"),
+                "evaluator.manuscript_grounding": ctx.require("evaluator.manuscript_grounding"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),
