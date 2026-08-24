@@ -63,7 +63,7 @@ The kernel imports **zero** concrete plugins and contains no research behavior. 
 The bootstrap layer (`src/research_harness/app/bootstrap.py`) is the composition root:
 
 - Loads YAML config via `config/loader.py`
-- Discovers **built-in** plugins from `plugins/registry.py:316` (`BUILTIN_PLUGINS`, 43 plugins)
+- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 45 plugins)
 - Discovers **external** plugins via `importlib.metadata.entry_points(group="research_harness.plugins")` — lazy factories, validated on creation, duplicate IDs rejected, clear errors
 - Merges built-in + external deterministically (`get_all_plugin_factories`)
 - Builds per-plugin configs from `AppConfig` (e.g., `models.roles` → `routing.role_router`, `session.root` → `session.jsonl`)
@@ -278,7 +278,7 @@ See `docs/documents.md` for full lifecycle, resolution priority, security, and C
 
 ## Configuration
 
-`AppConfig` (`config/schema.py:312`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX.
+`AppConfig` (`config/schema.py:312`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX. See `docs/configuration.md` for the full example composition and secrets; per-phase docs document their own `research.*` / `literature.*` / `documents.*` blocks.
 
 ## CLI
 
@@ -293,6 +293,10 @@ See `docs/documents.md` for full lifecycle, resolution priority, security, and C
 - `literature` — sources, search, get, plan, execute, discover, identities, screening, documents, evidence, synthesis, gaps (Phases 2A–2H)
 - `research` — gap-select, mechanisms, model, equilibrium, comparative-statics, propositions, numerical, results, findings, contributions (Phases 3A–4A)
 - `manuscript` — outline, draft, inspect, critique, revise (Phase 4B)
+- `publication` — profile-create, format, validate, export, package, inspect (Phase 4C)
+- `novelty` — validate, report, gate, revalidate, enrich, inspect (Phases 5A–5D)
+
+The full command reference (with options and live-test markers) is in `docs/cli.md`.
 
 ## Dependency Direction
 
@@ -312,25 +316,27 @@ Rules enforced by `tests/unit/test_architecture.py`:
 
 ## Testing
 
-Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 45 unit, 16 integration, and 14 opt-in live test files cover every phase:
+Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 50 unit, 21 integration, and 16 opt-in live test files cover every phase:
 
 ```bash
-uv run pytest                # offline: 414 passed, 17 skipped
+uv run pytest                # offline: 494 passed, 19 skipped
 uv run --env-file .env pytest -m live -v          # OpenRouter live
-uv run --env-file .env pytest -m live_manuscript -v  # e.g. Phase 4B live
+uv run --env-file .env pytest -m live_novelty_validation -v  # e.g. Phase 5 live
 ```
 
 Live tests assert structural success with minimal tokens and never log keys.
 
-Coverage: kernel lifecycle, services, events, config, OpenRouter, sessions (including nested secret scrubbing), loops, routing, external discovery, architecture rules, literature phases (2A–2H), research phases (3A–3E), results assembly (4A), and manuscript drafting (4B), plus end-to-end offline integration chains per phase.
+Coverage: kernel lifecycle, services, events, config, OpenRouter, sessions (including nested secret scrubbing), loops, routing, external discovery, architecture rules, literature phases (2A–2H), research phases (3A–3E), results assembly (4A), manuscript drafting (4B), publication formatting (4C), and novelty validation/revalidation/enrichment/pre-acquisition (5A–5D), plus end-to-end offline integration chains per phase.
 
 ## Research Workflows on the Kernel
 
-Phases 2A–4B compose research plugins on the same kernel without modifying it:
+Phases 2A–5D compose research plugins on the same kernel without modifying it:
 
 - **Phase 2A–2H** (`plugins/literature/*`, `plugins/documents/*`) — search strategy, screening, acquisition, evidence, synthesis, gaps
 - **Phase 3A–3E** (`plugins/research/*`) — mechanisms, model, equilibrium, propositions, numerical experiments
 - **Phase 4A** — results assembly (findings, contributions, implications, package)
 - **Phase 4B** — evidence-grounded manuscript drafting, critique, revision
+- **Phase 4C** — publication formatting, citation resolution, bibliography, exports, submission package
+- **Phase 5A–5D** (`plugins/research/novelty_validator`) — external novelty validation, incremental revalidation, evidence enrichment, bounded evidence pre-acquisition
 
 Their schemas live under `src/research_harness/research/schemas/`; provenance flows through the immutable SQLite `ArtifactStore` (`derived_from`, `extracted_from`, `generated_from`, `supersedes`). See `docs/research-domain.md` and the per-phase docs for details.

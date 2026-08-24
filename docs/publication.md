@@ -169,9 +169,9 @@ exports in the BlobStore, package `ready`.
 
 ## Recommendation for post-Phase-4 work
 
-- **Novelty validation phase**: verify global-novelty claims against
-  external corpora before any real submission (the harness currently only
-  normalizes/rejects them).
+- **Novelty validation is implemented** (Phases 5A–5D, `docs/novelty.md`):
+  external literature-based validation of global-novelty claims, incremental
+  revalidation, evidence enrichment, and bounded pre-acquisition.
 - Journal-specific style sheets and template-based DOCX/LaTeX rendering.
 - DOI/Crossref metadata enrichment with explicit provenance for augmented
   fields.

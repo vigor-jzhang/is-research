@@ -385,7 +385,7 @@ uv run research-agent novelty inspect <report-or-gate-id>  # incl. staleness
 
 `novelty validate` runs evidence enrichment automatically when configured.
 
-Inspection of report/gate artifacts is also available via `artifacts get`.
+Inspection of report/gate artifacts is also available via `artifacts inspect`.
 
 ## Configuration
 

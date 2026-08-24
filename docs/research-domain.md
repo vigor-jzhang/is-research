@@ -44,7 +44,7 @@ Payload types live in `src/research_harness/research/schemas/`:
 - `ResearchFinding/ContributionClaim/ResearchImplication/ResearchResultsPackage/ResultsAssemblyExecution/ResultsCritique` — Phase 4A findings and claims (see `docs/results.md`)
 - `ManuscriptOutline/ManuscriptSection/CitationReference/ManuscriptDraft/ManuscriptDraftExecution/ManuscriptCritique` — Phase 4B manuscript drafting (see `docs/manuscript.md`)
 - `PublicationProfile/Bibliography/FormattedManuscript/SubmissionPackage/CoverLetter/PublicationExecution` — Phase 4C publication formatting (see `docs/publication.md`)
-- `NoveltyClaim/NoveltySearchPlan/NoveltySearchExecution/NoveltyCandidateSet/NoveltyCandidateAssessment/NoveltyCriticAssessment/NoveltyClaimAssessment/NoveltyRevisionRecommendation/NoveltyValidationReport/SubmissionReadinessGate/NoveltyValidationExecution` — Phase 5A external novelty validation (see `docs/novelty.md`)
+- `NoveltyClaim/NoveltySearchPlan/NoveltySearchExecution/NoveltyCandidateSet/NoveltyCandidateAssessment/NoveltyCriticAssessment/NoveltyClaimAssessment/NoveltyRevisionRecommendation/NoveltyValidationReport/SubmissionReadinessGate/NoveltyValidationExecution/ManuscriptChangeSet/NoveltyRevalidationPlan/NoveltyRevalidationExecution/EvidenceEnrichmentPlan/EvidenceEnrichmentAttempt/EvidenceEnrichmentExecution/PreAcquisitionExecution` (plus `StalenessStatus` and `NoveltyClaim.equivalent_claim_id`) — Phase 5A–5D external novelty validation, incremental revalidation, evidence enrichment, and bounded pre-acquisition (see `docs/novelty.md`)
 
 All of these phases are implemented and compose on the kernel without kernel changes; each entry links its per-phase doc.
 

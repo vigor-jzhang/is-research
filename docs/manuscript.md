@@ -13,8 +13,9 @@ ResearchResultsPackage
 → ManuscriptDraft V2 (immutable, supersedes V1)
 ```
 
-No journal-specific formatting, bibliography formatting, LaTeX/DOCX/PDF
-export, cover letter, or submission packaging (Phase 4C).
+Journal-specific formatting, bibliography formatting, LaTeX/DOCX/PDF export,
+cover letter, and submission packaging are outside Phase 4B — implemented in
+Phase 4C (see `docs/publication.md`).
 
 ## Schemas (`src/research_harness/research/schemas/manuscript.py`)
 
@@ -169,12 +170,14 @@ artifact ids inside `[CITE:...]`.
   parallelism yet.
 - The free-tier reasoning model intermittently returns empty output; the
   retry loop absorbs this but can take minutes for a full draft.
-- Journal-specific style, final bibliography formatting, LaTeX/DOCX/PDF
-  export, cover letter, and submission packaging are NOT implemented.
+- Journal-specific style sheets remain future work; formatting,
+  bibliography, LaTeX/DOCX/PDF export, cover letter, and submission packaging
+  are implemented in Phase 4C (see `docs/publication.md`).
 
 ## Phase 4C readiness
 
-**Ready.** The structured draft (sections with grounded claims + internal
-citations + critiques + versioned drafts) is the direct input for
-journal-specific formatting, final bibliography generation, LaTeX/DOCX/PDF
-export, and submission packaging. None of Phase 4C was implemented.
+**Ready — Phase 4C is implemented** (see `docs/publication.md`). The
+structured draft (sections with grounded claims + internal citations +
+critiques + versioned drafts) is the direct input for the publication
+formatter: citation resolution, bibliography generation, LaTeX/DOCX/PDF
+export, and the immutable SubmissionPackage.
