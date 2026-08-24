@@ -57,7 +57,7 @@ uv run research-agent publication package --manuscript <manuscript_id>
 uv run research-agent novelty validate <submission_package_id>     # report + readiness gate
 uv run research-agent novelty inspect <report-or-gate-id>         # incl. staleness
 
-# Evaluation (Phase 6A-6B): offline benchmarks over production workflows
+# Evaluation (Phase 6A-6H): offline benchmarks over production workflows
 uv run research-agent eval run novelty-threat-v1           # 7 cases: novelty + false-clear
 uv run research-agent eval run literature-retrieval-v1      # 6 cases: precision@k, recall@k, MRR
 uv run research-agent eval run citation-correctness-v1      # 10 cases: citations, bibliography, invented fields
@@ -80,7 +80,7 @@ uv run research-agent eval list
 
 The complete command reference (including kernel commands, `run` demo,
 per-phase options, and all live-test markers) is in
-[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A) is documented
+[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A-6H) is documented
 in [docs/evaluation.md](docs/evaluation.md).
 
 ## Testing
@@ -132,13 +132,13 @@ src/research_harness/
     research/    # Phase 3A-3E (mechanisms → numerical_analysis)
                  # Phase 4A-4C (results → publication_formatter)
                  # Phase 5A-5D (novelty_validator)
-                 # Phase 6A-6D (evaluation_harness + evaluator.*)
+                 # Phase 6A-6H (evaluation_harness + evaluator.*)
     documents/   # locator_metadata/unpaywall, fetcher_http, extractor_pypdf,
                  # acquisition_orchestrator
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/            # per-phase + architecture/configuration/cli/plugin-authoring docs
-tests/           # unit/ 66, integration/ 35, live/ 16 (opt-in markers)
+tests/           # unit/ 65, integration/ 35, live/ 16 (opt-in markers)
 ```
 
 ## Documentation
@@ -172,6 +172,7 @@ tests/           # unit/ 66, integration/ 35, live/ 16 (opt-in markers)
 - **Phase 6G** — results-assembly + manuscript-grounding benchmarks over the real Phase 4A/4B pipelines (grounded claims, citations, critique/revision)
 - **Phase 6H** — end-to-end pipeline benchmark (retrieval → … → citation formatting), coverage matrix, deterministic readiness report
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
+- **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, model tournaments, publication-quality scoring (see the readiness report's uncovered capabilities)
 
 Each phase has a per-phase doc under `docs/`; nothing beyond the implemented phases is claimed.
 

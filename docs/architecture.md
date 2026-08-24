@@ -63,7 +63,7 @@ The kernel imports **zero** concrete plugins and contains no research behavior. 
 The bootstrap layer (`src/research_harness/app/bootstrap.py`) is the composition root:
 
 - Loads YAML config via `config/loader.py`
-- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 55 plugins)
+- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 62 plugins)
 - Discovers **external** plugins via `importlib.metadata.entry_points(group="research_harness.plugins")` — lazy factories, validated on creation, duplicate IDs rejected, clear errors
 - Merges built-in + external deterministically (`get_all_plugin_factories`)
 - Builds per-plugin configs from `AppConfig` (e.g., `models.roles` → `routing.role_router`, `session.root` → `session.jsonl`)
@@ -295,7 +295,7 @@ See `docs/documents.md` for full lifecycle, resolution priority, security, and C
 - `manuscript` — outline, draft, inspect, critique, revise (Phase 4B)
 - `publication` — profile-create, format, validate, export, package, inspect (Phase 4C)
 - `novelty` — validate, report, gate, revalidate, enrich, inspect (Phases 5A–5D)
-- `eval` — run, inspect, list (Phase 6A-6D evaluation harness: novelty, retrieval, citation, screening, evidence, gap, mechanism benchmarks)
+- `eval` — run, inspect, list, coverage, readiness (Phase 6A-6H harness: 14 offline benchmarks from novelty-threat to research-pipeline-e2e, coverage matrix, deterministic readiness report)
 
 The full command reference (with options and live-test markers) is in `docs/cli.md`.
 
@@ -317,7 +317,7 @@ Rules enforced by `tests/unit/test_architecture.py`:
 
 ## Testing
 
-Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 66 unit, 35 integration, and 16 opt-in live test files cover every phase:
+Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 65 unit, 35 integration, and 16 opt-in live test files cover every phase:
 
 ```bash
 uv run pytest                # offline: 696 passed, 19 skipped
