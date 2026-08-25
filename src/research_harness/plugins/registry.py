@@ -299,6 +299,14 @@ def _create_evaluation_harness() -> Plugin:
     return EvaluationHarnessPlugin()
 
 
+def _create_model_tournament() -> Plugin:
+    from research_harness.plugins.research.evaluation_model_tournament.plugin import (
+        ModelTournamentPlugin,
+    )
+
+    return ModelTournamentPlugin()
+
+
 def _create_evaluator_deterministic() -> Plugin:
     from research_harness.plugins.research.evaluator_deterministic.plugin import (
         DeterministicEvaluatorPlugin,
@@ -570,6 +578,7 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "research.publication_formatter": _create_publication_formatter,
     "research.novelty_validator": _create_novelty_validator,
     "research.evaluation_harness": _create_evaluation_harness,
+    "evaluation.model_tournament": _create_model_tournament,
     "evaluator.deterministic": _create_evaluator_deterministic,
     "evaluator.retrieval": _create_evaluator_retrieval,
     "evaluator.claim_grounding": _create_evaluator_claim_grounding,

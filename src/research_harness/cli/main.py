@@ -46,6 +46,13 @@ app.add_typer(novelty_app, name="novelty")
 evaluation_app = typer.Typer(help="Evaluation harness (Phase 6A)")
 app.add_typer(evaluation_app, name="eval")
 
+model_evaluation_app = typer.Typer(help="Model tournaments + role leaderboards (Phase 7B)")
+tournament_app = typer.Typer(help="Model tournament commands")
+leaderboard_app = typer.Typer(help="Role leaderboard commands")
+model_evaluation_app.add_typer(tournament_app, name="tournament")
+model_evaluation_app.add_typer(leaderboard_app, name="leaderboard")
+app.add_typer(model_evaluation_app, name="evaluation")
+
 console = Console()
 
 
@@ -6179,6 +6186,7 @@ def eval_readiness() -> None:
     console.print(f"  {criteria['provenance_reopen_coverage']}")
     console.print(f"  {criteria['live_test_coverage']}")
     console.print(f"  {criteria['model_assisted_evaluators']}")
+    console.print(f"  {criteria['model_tournament']}")
 
 
 @evaluation_app.command("list")
@@ -6213,6 +6221,243 @@ def eval_list(
                 )
             if not runs:
                 console.print("  (no evaluation runs yet)")
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# evaluation — model tournaments + role leaderboards (Phase 7B)
+# ---------------------------------------------------------------------------
+
+
+def _tournament_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
+    cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
+    if "evaluation.model_tournament" not in cfg.plugins:
+        cfg.plugins.append("evaluation.model_tournament")
+    return cfg
+
+
+@tournament_app.command("run")
+def tournament_run(
+    plan: Annotated[pathlib.Path, typer.Option("--plan", help="Tournament plan YAML path")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Run a model tournament from a plan (Phase 7B).
+
+    Reuses the frozen benchmarks and the generic evaluation harness; the
+    candidate model is bound to the plan's role for the duration of the
+    run. Persists the plan, every EvaluationRun, the TournamentRun and a
+    deterministic RoleLeaderboard. Global config is never modified.
+    """
+    import asyncio
+
+    from research_harness.research.tournament.plan import load_tournament_plan
+
+    async def _run() -> None:
+        tournament_plan = load_tournament_plan(plan)
+        cfg = _tournament_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("model_tournament.default")
+            run = await svc.run_tournament(tournament_plan)
+            console.print(f"[bold]Tournament run {run.id}[/bold]")
+            console.print(f"  plan {run.plan_id}  role {run.role}  status {run.status}")
+            console.print(f"  benchmarks {', '.join(run.benchmark_ids)}")
+            console.print(f"  repetitions {run.repetitions}  plan hash {run.plan_hash[:16]}…")
+            for mr in run.model_results:
+                console.print(f"  [cyan]{mr.candidate_id}[/cyan] ({mr.resolved_model})")
+                console.print(
+                    f"    deterministic_pass_rate "
+                    f"{mr.deterministic_pass_rate if mr.deterministic_pass_rate is not None else 'n/a'}"
+                )
+                console.print(
+                    f"    benchmark_pass_rate "
+                    f"{mr.benchmark_pass_rate if mr.benchmark_pass_rate is not None else 'n/a'}"
+                )
+                console.print(
+                    f"    latency p50 "
+                    f"{mr.latency_ms_p50 if mr.latency_ms_p50 is not None else 'n/a'} ms  "
+                    f"cost {mr.estimated_cost if mr.estimated_cost is not None else 'unknown'}"
+                )
+            if run.leaderboard_id:
+                console.print(f"  leaderboard artifact: {run.leaderboard_id}")
+            console.print(f"  run artifact: {run.id}")
+            for failure in run.failures:
+                console.print(f"  [red]failure: {failure[:160]}[/red]")
+
+    asyncio.run(_run())
+
+
+@tournament_app.command("inspect")
+def tournament_inspect(
+    run: Annotated[str, typer.Argument(help="TournamentRun artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a tournament run (Phase 7B)."""
+    import asyncio
+
+    from research_harness.research.schemas.tournament import TournamentRun
+
+    async def _run() -> None:
+        cfg = _tournament_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            env = await store.get(run)
+            if env.artifact_type != "tournament_run":
+                console.print(f"[red]artifact {run!r} is not a tournament_run[/red]")
+                raise typer.Exit(code=1)
+            r = env.parse_payload(TournamentRun)
+            console.print(f"[bold]TournamentRun {r.id}[/bold]")
+            console.print(f"  plan {r.plan_id}  hash {r.plan_hash[:16]}…  status {r.status}")
+            console.print(
+                f"  role {r.role}  repetitions {r.repetitions}  leaderboard {r.leaderboard_id}"
+            )
+            console.print(f"  benchmarks: {', '.join(r.benchmark_ids)}")
+            console.print(f"  ranking rules: {r.ranking_rules.get('priority', [])}")
+            for mr in r.model_results:
+                console.print(f"  [cyan]{mr.candidate_id}[/cyan] resolved {mr.resolved_model}")
+                console.print(
+                    f"    det {mr.deterministic_pass_rate}  bench {mr.benchmark_pass_rate}  "
+                    f"case {mr.case_pass_rate}  sss {mr.structured_output_success_rate}  "
+                    f"err {mr.model_error_rate}"
+                )
+                console.print(
+                    f"    lat mean {mr.latency_ms_mean} p50 {mr.latency_ms_p50} "
+                    f"p95 {mr.latency_ms_p95} ms  tokens in {mr.input_tokens} out {mr.output_tokens}"
+                )
+                console.print(
+                    f"    cost {mr.estimated_cost}  cost/case {mr.cost_per_successful_case}  "
+                    f"failures {mr.failure_counts}"
+                )
+                for ref in mr.benchmark_runs:
+                    console.print(
+                        f"      eval run {ref.run_id}  {ref.benchmark_id} rep {ref.repetition}  "
+                        f"{ref.report_status}  {ref.cases_passed}/{ref.cases_total}"
+                    )
+
+    asyncio.run(_run())
+
+
+@leaderboard_app.command("list")
+def leaderboard_list(
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """List role leaderboards (Phase 7B)."""
+    import asyncio
+
+    from research_harness.research.schemas.tournament import RoleLeaderboard
+
+    async def _run() -> None:
+        cfg = _tournament_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            boards = [
+                env.parse_payload(RoleLeaderboard)
+                for env in await store.list(artifact_type="role_leaderboard")
+            ]
+            boards.sort(key=lambda b: b.created_at, reverse=True)
+            for b in boards:
+                console.print(
+                    f"  {b.id}  role {b.role}  plan {b.plan_id}  "
+                    f"{b.created_at.isoformat()}  entries {len(b.entries)}"
+                )
+            if not boards:
+                console.print("  (no role leaderboards yet)")
+
+    asyncio.run(_run())
+
+
+@leaderboard_app.command("show")
+def leaderboard_show(
+    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Show the latest leaderboard for a role (Phase 7B)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _tournament_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("model_tournament.default")
+            board = await svc.get_leaderboard_for_role(role)
+            if board is None:
+                console.print(f"[yellow]no leaderboard for role {role!r} yet[/yellow]")
+                return
+            console.print(f"[bold]RoleLeaderboard {board.id}[/bold] role {board.role}")
+            console.print(f"  tournament run {board.tournament_run_id}  plan {board.plan_id}")
+            console.print(f"  ranking: {board.ranking_rules.get('priority', [])}")
+            for entry in board.entries:
+                color = "green" if entry.eligibility == "eligible" else "red"
+                console.print(
+                    f"  [{color}]#{entry.rank}[/] {entry.candidate_id} "
+                    f"({entry.resolved_model})  {entry.eligibility}"
+                )
+                console.print(
+                    f"    det {entry.deterministic_pass_rate}  bench {entry.benchmark_pass_rate}"
+                )
+                console.print(
+                    f"    err {entry.model_error_rate}  lat p50 {entry.latency_ms_p50} ms  "
+                    f"cost {entry.estimated_cost}  tokens {entry.total_tokens}"
+                )
+                for caveat in entry.caveats:
+                    console.print(f"    [yellow]{caveat}[/yellow]")
+
+    asyncio.run(_run())
+
+
+@leaderboard_app.command("inspect")
+def leaderboard_inspect(
+    leaderboard: Annotated[str, typer.Argument(help="RoleLeaderboard artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a role leaderboard (Phase 7B)."""
+    import asyncio
+
+    from research_harness.research.schemas.tournament import RoleLeaderboard
+
+    async def _run() -> None:
+        cfg = _tournament_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            env = await store.get(leaderboard)
+            if env.artifact_type != "role_leaderboard":
+                console.print(f"[red]artifact {leaderboard!r} is not a role_leaderboard[/red]")
+                raise typer.Exit(code=1)
+            board = env.parse_payload(RoleLeaderboard)
+            console.print(f"[bold]RoleLeaderboard {board.id}[/bold] role {board.role}")
+            console.print(
+                f"  tournament run {board.tournament_run_id}  plan {board.plan_id}  "
+                f"hash {board.plan_hash[:16]}…"
+            )
+            for entry in board.entries:
+                console.print(
+                    f"  #{entry.rank} {entry.candidate_id} ({entry.resolved_model})  "
+                    f"[{entry.eligibility}] {entry.eligibility_reason}"
+                )
 
     asyncio.run(_run())
 

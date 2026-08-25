@@ -26,7 +26,7 @@ uv run research-agent config validate configs/example.yaml                   # v
 
 ## How to Use It
 
-Configuration lives in `configs/example.yaml` (70 plugins; see
+Configuration lives in `configs/example.yaml` (71 plugins; see
 [docs/configuration.md](docs/configuration.md)). The research pipeline is
 driven by one CLI command per stage; every command writes immutable,
 provenance-linked artifacts to `.research/artifacts.db`:
@@ -84,12 +84,20 @@ uv run research-agent eval coverage                                 # coverage m
 uv run research-agent eval readiness                               # deterministic evaluation-readiness report
 uv run research-agent eval inspect <run-id>                 # per-evaluator detail
 uv run research-agent eval list
+
+# Model tournaments + role leaderboards (Phase 7B): compare models per role
+uv run research-agent evaluation tournament run --plan configs/tournament/example-reasoning.yaml
+uv run research-agent evaluation tournament inspect <tournament-run-id>
+uv run research-agent evaluation leaderboard show --role reasoning   # latest leaderboard for a role
+uv run research-agent evaluation leaderboard list
+uv run research-agent evaluation leaderboard inspect <leaderboard-id>
 ```
 
 The complete command reference (including kernel commands, `run` demo,
 per-phase options, and all live-test markers) is in
-[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A-7A.1) is documented
-in [docs/evaluation.md](docs/evaluation.md).
+[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A-7A.1) and model
+tournaments (Phase 7B) are documented in
+[docs/evaluation.md](docs/evaluation.md).
 
 ## Testing
 
@@ -110,7 +118,7 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All gates must pass: `774 passed, 19 skipped` (offline), ruff/format/pyright
+All gates must pass: `809 passed, 20 skipped` (offline), ruff/format/pyright
 clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
@@ -141,12 +149,13 @@ src/research_harness/
                  # Phase 4A-4C (results → publication_formatter)
                  # Phase 5A-5D (novelty_validator)
                  # Phase 6A-7A.1 (evaluation_harness + evaluator.*)
+                 # Phase 7B (evaluation_model_tournament: role tournaments + leaderboards)
     documents/   # locator_metadata/unpaywall, fetcher_http, extractor_pypdf,
                  # acquisition_orchestrator
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/            # per-phase + architecture/configuration/cli/plugin-authoring docs
-tests/           # unit/ 73, integration/ 43, live/ 16 (opt-in markers)
+tests/           # unit/ 76, integration/ 44, live/ 17 (opt-in markers)
 ```
 
 ## Documentation
@@ -181,9 +190,11 @@ tests/           # unit/ 73, integration/ 43, live/ 16 (opt-in markers)
 - **Phase 6H** — end-to-end pipeline benchmark (retrieval → … → citation formatting), coverage matrix, deterministic readiness report
 - **Phase 7A** — evaluation gap closure: synthesis, analytical-model specification, document acquisition, and incremental-revalidation benchmarks (deterministic evaluators + coverage/readiness update)
 - **Phase 7A.1** — final evaluation gap closure: ingestion/identity resolution, gap selection, novelty revalidation, and publication/submission-packaging benchmarks (deterministic evaluators + coverage/readiness update)
+- **Phase 7B** — model tournaments + role leaderboards: reproducible per-role model comparison over the frozen benchmarks (correctness-first lexicographic ranking, reliability/latency/token/cost accounting, offline + opt-in live tournaments)
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
-- **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, model tournaments, publication-quality scoring (see the readiness report's uncovered capabilities)
-- **Post-Phase-7A.1 (not implemented)** — evidence-enrichment/pre-acquisition standalone benchmark, live provider-connector/publisher-endpoint coverage, advisory LLM-quality judging, leaderboards/model tournaments
+- **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, publication-quality scoring (see the readiness report's uncovered capabilities)
+- **Post-Phase-7A.1 (not implemented)** — evidence-enrichment/pre-acquisition standalone benchmark, live provider-connector/publisher-endpoint coverage, advisory LLM-quality judging
+- **Post-Phase-7B (not implemented)** — automatic model routing, production model switching, contextual bandits, online learning, self-modifying routing policy, automatic cheapest-model selection, shared leaderboard service (Phase 7C+)
 
 Each phase has a per-phase doc under `docs/`; nothing beyond the implemented phases is claimed.
 

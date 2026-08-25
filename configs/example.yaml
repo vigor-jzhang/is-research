@@ -40,6 +40,7 @@ plugins:
   - research.publication_formatter
   - research.novelty_validator
   - research.evaluation_harness
+  - evaluation.model_tournament
   - evaluator.deterministic
   - evaluator.retrieval
   - evaluator.claim_grounding

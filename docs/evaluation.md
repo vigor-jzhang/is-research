@@ -882,17 +882,121 @@ advisory LLM-quality judging, so `ready` is not forced).
   (abstract generation is disabled via `abstract_required=False`).
 - Cost is estimated from token usage × `evaluation.cost_per_million_tokens`
   (0 for offline fixtures).
-- No live scholarly corpus, leaderboard, model comparison, auto model
-  routing, embedding-based relevance, human annotation UI, or CI quality
-  thresholds.
+- No live scholarly corpus, model comparison, embedding-based relevance,
+  human annotation UI, or CI quality thresholds.
+
+## Model tournaments + role leaderboards (Phase 7B)
+
+Phase 7B adds a reproducible model-comparison layer on top of the frozen
+harness. It answers "which model is best for each logical role" without
+changing a single benchmark definition or evaluator and without automatic
+routing.
+
+### Execution model
+
+```
+TournamentPlan (YAML, no code changes)
+  -> for each candidate model:
+       CandidateModelRouter binds role -> candidate model
+         (all other roles fall back to the production role router)
+       -> run_benchmark over the existing frozen benchmarks x repetitions
+          (generic harness: workflow -> evaluators -> EvaluationReport)
+       -> collect per-call usage/latency at the model boundary + reports
+  -> aggregate TournamentModelResult (dimensions stay visible)
+  -> deterministic RoleLeaderboard (lexicographic, documented ranking)
+```
+
+Candidate binding exists only inside the router instance for the duration of
+the run — the global user config is never modified.
+
+### Schemas
+
+- `TournamentPlan` — plan_id, role, benchmark_ids, candidate models
+  (provider / requested model / temperature / max tokens / structured-output
+  mode / optional pricing), repetitions, timeout/retry policy, deterministic
+  pass threshold, optional evaluator + advisory evaluator ids, ranking rules.
+- `TournamentModelConfig` — exact model identity + config + `TournamentPricing`
+  (pricing source/version, input/output per-million rates).
+- `ModelCallRecord` — one model call measured at the model boundary: resolved
+  model id, latency, prompt/completion/total tokens, cost (+ source), status,
+  failure classification, retries.
+- `TournamentModelResult` — aggregated per candidate across
+  benchmarks × repetitions: every rate plus latency mean/p50/p95, tokens,
+  estimated cost, cost-per-successful case/benchmark, advisory score,
+  failure counts, and the exact `BenchmarkRunRef`s (EvaluationRun ids).
+- `TournamentRun` — immutable record: plan hash + full snapshot, benchmark
+  ids/versions, model ids/config, repetitions, ranking rules, all
+  EvaluationRun ids, runtime/usage metadata.
+- `RoleLeaderboard` / `LeaderboardEntry` — immutable leaderboard exposing every
+  raw dimension (model, eligibility, pass rates, reliability, latency, tokens,
+  cost, advisory score).
+
+### Benchmark → role mapping
+
+| Role | Benchmarks |
+| --- | --- |
+| `fast` | literature-screening-v1 (screener decisions) |
+| `reasoning` | evidence-extraction-v1, literature-synthesis-v1, research-gap-analysis-v1, mechanism-development-v1, analytical-model-specification-v1, proposition-correctness-v1, results-assembly-v1, manuscript-grounding-v1 |
+| `critic` | mechanism-development-v1, analytical-model-specification-v1, proposition-correctness-v1, results-assembly-v1, manuscript-grounding-v1 (the critique passes) |
+
+A benchmark can belong to several roles; a tournament binds the candidate to
+exactly one role and holds every other role at the configured defaults.
+
+### Metrics
+
+- Deterministic: `deterministic_pass_rate` (passed / (passed + failed)),
+  `benchmark_pass_rate`, `case_pass_rate`.
+- Reliability: `structured_output_success_rate`, `model_error_rate`
+  (timeout/provider_error/rate_limit/validation_failure),
+  `retry_rate`.
+- Latency (model boundary only, never fixture/setup time):
+  `latency_ms_mean`, `latency_ms_p50`, `latency_ms_p95`.
+- Tokens: `input_tokens`, `output_tokens`, `total_tokens`.
+- Cost (never invented): provider-returned usage cost wins; else computed from
+  configured pricing (source/version/rates recorded); else `None` + caveat.
+  `estimated_cost`, `cost_per_successful_case`, `cost_per_successful_benchmark`.
+- Advisory: `advisory_score` from optional advisory evaluators.
+
+### Ranking (deterministic, lexicographic)
+
+1. eligibility (deterministic_pass_rate ≥ plan threshold)
+2. deterministic_pass_rate, 3. benchmark_pass_rate
+4. model_error_rate (asc), structured_output_success_rate (desc), retry_rate (asc)
+5. latency_ms_p50 (asc)
+6. cost_per_successful_case (asc), total_tokens (asc)
+7. advisory_score (desc); tie-break by candidate_id.
+
+Cost/latency never outrank deterministic correctness. None = unknown = worst.
+The hierarchy is persisted with every leaderboard as `ranking_rules`.
+
+### Reproducibility
+
+Every TournamentRun preserves the plan id/hash/snapshot, benchmark ids +
+versions, model ids/config, exact EvaluationRun ids, repetitions, runtime and
+usage metadata, and the ranking rules. Historical runs and leaderboards are
+immutable; a later tournament creates a new leaderboard.
+
+### CLI
+
+```bash
+uv run research-agent evaluation tournament run --plan <plan.yaml>
+uv run research-agent evaluation tournament inspect <run-id>
+uv run research-agent evaluation leaderboard show --role reasoning
+uv run research-agent evaluation leaderboard list
+uv run research-agent evaluation leaderboard inspect <leaderboard-id>
+```
+
+Candidates and pricing are defined in the plan YAML — no code changes. See
+`configs/tournament/example-reasoning.yaml`.
 
 ## Recommended next increment
 
-Post-Phase-7A.1: the evaluation program covers every core pipeline stage with
-deterministic gating and the four 7A targeted gaps are closed (ingestion/
-identity, gap selection, novelty revalidation, publication packaging). The
-verdict remains `ready_with_gaps` only because non-blocking gaps remain
-(live provider connectors/publisher endpoints, evidence enrichment (5C-5D)
-standalone, advisory LLM-quality judging). Closing the standalone 5C-5D
-enrichment benchmark is the natural next step; the first
-leaderboard/model-tournament increment would then reuse the frozen harness.
+Post-Phase-7B: the evaluation program covers every core pipeline stage with
+deterministic gating, the four 7A targeted gaps are closed, and Phase 7B adds
+reproducible per-role model comparison over the frozen harness. The verdict
+remains `ready_with_gaps` because non-blocking gaps remain (live provider
+connectors/publisher endpoints, evidence enrichment (5C-5D) standalone,
+advisory LLM-quality judging). Closing the standalone 5C-5D enrichment
+benchmark is the natural next step; Phase 7C would then build automatic model
+routing / production switching on top of the tournament layer (explicitly not
+implemented in 7B).

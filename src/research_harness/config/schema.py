@@ -480,6 +480,7 @@ class AppConfig(BaseModel):
             "documents.extractor.pypdf": {"documents": self.documents.model_dump()},
             "documents.acquisition_orchestrator": {"documents": self.documents.model_dump()},
             "research.evaluation_harness": {"evaluation": self.evaluation.model_dump()},
+            "evaluation.model_tournament": {"evaluation": self.evaluation.model_dump()},
             "evaluator.deterministic": {"evaluation": self.evaluation.model_dump()},
             "evaluator.retrieval": {"evaluation": self.evaluation.model_dump()},
             "evaluator.claim_grounding": {"evaluation": self.evaluation.model_dump()},

@@ -484,7 +484,10 @@ COVERAGE_MATRIX: tuple[CoverageRow, ...] = (
             "cross-stage provenance",
             "citation identity",
         ),
-        gaps=("leaderboards/live corpora/model tournaments not implemented",),
+        gaps=(
+            "model tournaments + role leaderboards implemented (Phase 7B); "
+            "automatic model routing / live corpora / leaderboard service not implemented (7C+)",
+        ),
     ),
 )
 
@@ -493,6 +496,10 @@ KNOWN_COVERAGE_GAPS: tuple[tuple[str, str], ...] = (
     ("Phase 2A provider connectors", "fixture-driven, no benchmark over real provider APIs"),
     ("Phase 5C-5D evidence enrichment / pre-acquisition", "no standalone benchmark"),
     ("Phase 3D proposition critique quality", "advisory-only"),
+    (
+        "Phase 7C+ automatic model routing / production switching",
+        "deliberately not implemented; tournaments compare models, they do not route automatically",
+    ),
 )
 
 

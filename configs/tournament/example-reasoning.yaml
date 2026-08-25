@@ -1,0 +1,49 @@
+# Example model tournament plan — reasoning role (Phase 7B).
+#
+# Defines candidates + configuration without code changes. Reuses the frozen
+# benchmarks and the generic evaluation harness. Global config is never
+# modified: candidate binding exists only for the duration of the run.
+#
+# Run with:
+#   uv run research-agent evaluation tournament run \
+#     --plan configs/tournament/example-reasoning.yaml
+#
+# Cost: provider-returned usage cost is used when present; otherwise cost is
+# calculated from the configured pricing below; otherwise it stays null.
+
+name: example-reasoning-tournament
+role: reasoning
+benchmark_ids:
+  - evidence-extraction-v1
+  - literature-synthesis-v1
+  - research-gap-analysis-v1
+repetitions: 1
+timeout_seconds: 120
+retries: 2
+deterministic_pass_threshold: 0.85
+
+models:
+  - candidate_id: nemotron-reasoning
+    provider: openrouter
+    requested_model: "nvidia/nemotron-3-ultra-550b-a55b:free"
+    temperature: 0.0
+    structured_output: true
+    pricing:
+      source: "openrouter:free"
+      version: "2026-01-01"
+      input_per_million: 0.0
+      output_per_million: 0.0
+
+  - candidate_id: deepseek-flash
+    provider: openrouter
+    requested_model: "deepseek/deepseek-v4-flash-0731"
+    temperature: 0.0
+    structured_output: true
+    pricing:
+      source: "openrouter"
+      version: "2026-01-01"
+      input_per_million: 0.14
+      output_per_million: 0.28
+
+metadata:
+  purpose: "offline-safe example plan; real network calls require OPENROUTER_API_KEY"

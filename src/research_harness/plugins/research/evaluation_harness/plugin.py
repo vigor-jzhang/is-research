@@ -202,6 +202,8 @@ class EvaluationHarnessService:
         benchmark_id: str,
         *,
         evaluator_ids: list[str] | None = None,
+        model_router: Any | None = None,
+        model_roles: dict[str, str] | None = None,
     ) -> tuple[str, str]:
         started = datetime.now(UTC)
         b_env = await self._store.get(benchmark_id)
@@ -225,6 +227,8 @@ class EvaluationHarnessService:
             "judge_role": self._judge_role,
         }
         run_model_roles: dict[str, str] = {"judge": self._judge_role}
+        if model_roles:
+            run_model_roles.update(model_roles)
         run_evaluator_versions: dict[str, str] = {}
         for eid in evaluator_ids:
             run_evaluator_versions[eid] = self._evaluators[eid].evaluator_version
@@ -244,7 +248,9 @@ class EvaluationHarnessService:
             case_hashes[cid] = c_env.content_hash
             workflow_error: str | None = None
             try:
-                produced, workflow_error = await self._run_case(case, benchmark)
+                produced, workflow_error = await self._run_case(
+                    case, benchmark, model_router=model_router
+                )
             except Exception as e:  # noqa: BLE001
                 message = f"{cid}: case run failed: {e}"
                 failures.append(message)
@@ -265,7 +271,7 @@ class EvaluationHarnessService:
 
             produced_ids.extend(e.artifact_id for e in produced)
             results = await self._evaluate_case(
-                case, c_env, produced, eval_config, benchmark, evaluator_ids
+                case, c_env, produced, eval_config, benchmark, evaluator_ids, model_router
             )
             evaluator_result_ids.extend(r.id for r in results)
             for r in results:
@@ -356,7 +362,7 @@ class EvaluationHarnessService:
     # ------------------------------------------------------------------
 
     async def _run_case(
-        self, case: BenchmarkCase, benchmark: Benchmark
+        self, case: BenchmarkCase, benchmark: Benchmark, model_router: Any | None = None
     ) -> tuple[list[ArtifactEnvelope[Any]], str | None]:
         workflow = case.input.get("workflow", "novelty_validation")
         if workflow == "novelty_validation":
@@ -366,6 +372,7 @@ class EvaluationHarnessService:
                 identity_resolver=self._resolver,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "literature_retrieval":
@@ -375,6 +382,7 @@ class EvaluationHarnessService:
                 identity_resolver=self._resolver,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "citation_correctness":
@@ -382,12 +390,14 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
         if workflow == "literature_screening":
             produced = await run_screening_workflow(
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "evidence_extraction":
@@ -396,6 +406,7 @@ class EvaluationHarnessService:
                 blob_store=self._blob_store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "gap_analysis":
@@ -403,6 +414,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "mechanism_development":
@@ -410,6 +422,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "equilibrium_derivation":
@@ -417,6 +430,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "numerical_analysis":
@@ -424,6 +438,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "comparative_statics":
@@ -431,6 +446,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "proposition_generation":
@@ -438,6 +454,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "results_assembly":
@@ -445,6 +462,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "manuscript_grounding":
@@ -452,6 +470,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "research_pipeline_e2e":
@@ -462,6 +481,7 @@ class EvaluationHarnessService:
                 blob_store=self._blob_store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "literature_synthesis":
@@ -469,6 +489,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "analytical_model_specification":
@@ -476,6 +497,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "document_acquisition":
@@ -484,6 +506,7 @@ class EvaluationHarnessService:
                 blob_store=self._blob_store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "incremental_revalidation":
@@ -492,6 +515,7 @@ class EvaluationHarnessService:
                 blob_store=self._blob_store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "literature_ingestion_identity":
@@ -499,6 +523,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "gap_selection":
@@ -506,6 +531,7 @@ class EvaluationHarnessService:
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "novelty_revalidation":
@@ -515,6 +541,7 @@ class EvaluationHarnessService:
                 identity_resolver=self._resolver,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         if workflow == "publication_packaging":
@@ -523,6 +550,7 @@ class EvaluationHarnessService:
                 blob_store=self._blob_store,
                 case=case,
                 producer=self._producer,
+                model_router=model_router,
             )
             return produced, None
         raise BenchmarkError(f"unsupported benchmark workflow {workflow!r}")
@@ -535,9 +563,11 @@ class EvaluationHarnessService:
         eval_config: dict[str, Any],
         benchmark: Benchmark,
         evaluator_ids: list[str],
+        model_router: Any | None = None,
     ) -> list[EvaluatorResult]:
         results: list[EvaluatorResult] = []
         fixture_router = FixtureModelRouter(case.input.get("llm_fixtures") or [])
+        context_router = model_router or fixture_router
         provenance: dict[str, list[Any]] = {}
         for env in produced:
             try:
@@ -555,7 +585,7 @@ class EvaluationHarnessService:
                     **benchmark.config,
                     **(case.input.get("evaluator_config") or {}),
                 },
-                model_router=fixture_router,
+                model_router=context_router,
                 blob_store=self._blob_store,
                 provenance=provenance,
             )

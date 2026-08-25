@@ -245,6 +245,7 @@ uv run --env-file .env pytest -m live_results_assembly -v  # Results assembly li
 uv run --env-file .env pytest -m live_manuscript -v  # Manuscript drafting live
 uv run --env-file .env pytest -m live_publication -v  # Publication formatting live
 uv run --env-file .env pytest -m live_novelty_validation -v  # Novelty validation live
+uv run --env-file .env pytest -m live_model_tournament -v    # Model tournament live (OpenRouter)
 ```
 
 Optional ad-hoc live runs:
@@ -253,3 +254,20 @@ Optional ad-hoc live runs:
 uv run --env-file .env research-agent run --prompt "echo hello"
 uv run --env-file .env research-agent literature search --source crossref --query "test" --limit 2
 ```
+
+## Model tournaments + role leaderboards (Phase 7B)
+
+```bash
+# Run a tournament from a plan (candidates/config live in the plan YAML;
+# reuses the frozen benchmarks + generic harness; never modifies global config)
+uv run research-agent evaluation tournament run --plan configs/tournament/example-reasoning.yaml
+uv run research-agent evaluation tournament inspect <tournament-run-id>   # raw dimensions + eval-run ids
+uv run research-agent evaluation leaderboard show --role reasoning        # latest leaderboard for a role
+uv run research-agent evaluation leaderboard list                         # all leaderboards
+uv run research-agent evaluation leaderboard inspect <leaderboard-id>     # eligibility + ranking detail
+```
+
+The plan defines role, benchmarks, candidate models (provider / requested
+model / temperature / max tokens / structured-output mode / optional pricing),
+repetitions, timeout/retry policy, deterministic pass threshold and optional
+advisory evaluators — no code changes required.

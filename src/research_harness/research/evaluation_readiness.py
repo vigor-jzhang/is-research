@@ -74,6 +74,7 @@ def _known_untested_behaviors() -> tuple[str, ...]:
         "live provider connectors (Phase 2A) over real APIs",
         "evidence enrichment / pre-acquisition (5C-5D) standalone",
         "long-document prose quality (advisory-only critique)",
+        "automatic model routing / production model switching (Phase 7C+, not implemented)",
     )
 
 
@@ -172,5 +173,9 @@ def readiness_report() -> ReadinessResult:
     )
     criteria["live_test_coverage"] = "16 opt-in live tests (excluded by default)"
     criteria["model_assisted_evaluators"] = "evaluator.llm_judge (advisory only)"
+    criteria["model_tournament"] = (
+        "implemented (Phase 7B): role tournaments reuse the frozen benchmarks; "
+        "deterministic correctness-first leaderboards; automatic routing not implemented (7C+)"
+    )
 
     return ReadinessResult(verdict=verdict, criteria=criteria, narrative=narrative)

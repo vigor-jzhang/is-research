@@ -146,6 +146,25 @@ class FixtureModelRouter:
         return {"provider": "fixture", "model": "fixture"}
 
 
+def _case_router(
+    case: BenchmarkCase,
+    model_router: Any | None = None,
+    fixtures: list[dict[str, Any]] | None = None,
+    id_map: dict[str, str] | None = None,
+) -> Any:
+    """Return the caller-provided model router (e.g. a tournament candidate
+    binding) when given, otherwise build the scripted fixture router from the
+    case input (with optional id rewriting). This is how model tournaments
+    reuse the existing benchmark workflows without changing benchmark
+    definitions or evaluators: the same production services run, but the LLM
+    calls are served by the candidate model instead of scripted fixtures."""
+    if model_router is not None:
+        return model_router
+    if fixtures is None:
+        fixtures = case.input.get("llm_fixtures") or []
+    return FixtureModelRouter(_rewrite_ids(fixtures, id_map or {}))
+
+
 class FixtureLiteratureSource:
     """Literature source backed by benchmark fixture paper records. Hits are
     returned in fixture order, which doubles as the provider ranking."""
@@ -229,6 +248,7 @@ def _fixture_sources(
 
 async def run_novelty_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     ingestor: Any,
     identity_resolver: Any,
@@ -280,7 +300,7 @@ async def run_novelty_workflow(
     sources = _fixture_sources(case)
     novelty_config = dict(case.input.get("novelty_config") or {})
     svc = NoveltyValidationService(
-        model_router=FixtureModelRouter(case.input.get("llm_fixtures") or []),
+        model_router=_case_router(case, model_router),
         artifact_store=artifact_store,
         ingestor=ingestor,
         identity_resolver=identity_resolver,
@@ -302,6 +322,7 @@ async def run_novelty_workflow(
 
 async def run_retrieval_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     ingestor: Any,
     identity_resolver: Any,
@@ -379,6 +400,7 @@ async def run_retrieval_workflow(
 
 async def run_citation_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -501,7 +523,7 @@ async def run_citation_workflow(
     )
 
     formatter = PublicationFormatterService(
-        model_router=FixtureModelRouter(case.input.get("llm_fixtures") or []),
+        model_router=_case_router(case, model_router),
         artifact_store=artifact_store,
         blob_store=None,
         formatter_role="reasoning",
@@ -576,6 +598,7 @@ def _strip_created_at(data: Any) -> None:
 
 async def run_screening_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -603,7 +626,7 @@ async def run_screening_workflow(
     from research_harness.research.schemas.project import ResearchQuestion
 
     before = {e.artifact_id for e in await artifact_store.list()}
-    router = FixtureModelRouter(case.input.get("llm_fixtures") or [])
+    router = _case_router(case, model_router)
     autonomy = ConfigurableAutonomyPolicy(mode="high")
     run_suffix = uuid.uuid4().hex[:8]
 
@@ -720,6 +743,7 @@ async def run_screening_workflow(
 
 async def run_evidence_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     blob_store: Any,
     case: BenchmarkCase,
@@ -752,7 +776,7 @@ async def run_evidence_workflow(
             "storage.blobs_filesystem or pass one to the harness)"
         )
     before = {e.artifact_id for e in await artifact_store.list()}
-    router = FixtureModelRouter(case.input.get("llm_fixtures") or [])
+    router = _case_router(case, model_router)
     run_suffix = uuid.uuid4().hex[:8]
 
     doc_ids: list[str] = []
@@ -881,6 +905,7 @@ async def run_evidence_workflow(
 
 async def run_gap_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -1031,7 +1056,7 @@ async def run_gap_workflow(
 
     gap_config = dict(case.input.get("gap_config") or {})
     analyzer = GapAnalyzerService(
-        model_router=FixtureModelRouter(case.input.get("llm_fixtures") or []),
+        model_router=_case_router(case, model_router),
         artifact_store=artifact_store,
         model_role="reasoning",
         max_statements=gap_config.get("max_statements", 200),
@@ -1053,6 +1078,7 @@ async def run_gap_workflow(
 
 async def run_mechanism_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -1086,7 +1112,7 @@ async def run_mechanism_workflow(
     for i in range(len(case.input.get("statements") or [])):
         id_map[f"{case.id}-statement-{i}"] = f"{case.id}-{run_suffix}-statement-{i}"
     id_map[f"{case.id}-gap"] = f"{case.id}-{run_suffix}-gap"
-    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+    router = _case_router(case, model_router, id_map=id_map)
     autonomy = ConfigurableAutonomyPolicy(mode="high")
 
     evidence_ids: list[str] = []
@@ -1221,6 +1247,7 @@ async def run_mechanism_workflow(
 
 async def run_equilibrium_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -1314,7 +1341,7 @@ async def run_equilibrium_workflow(
     deriver_config = dict(case.input.get("equilibrium_config") or {})
     verifier = EquilibriumVerifierService(artifact_store=artifact_store)
     deriver = EquilibriumDeriverService(
-        model_router=FixtureModelRouter(case.input.get("llm_fixtures") or []),
+        model_router=_case_router(case, model_router),
         artifact_store=artifact_store,
         verifier=verifier,
         model_role="reasoning",
@@ -1335,6 +1362,7 @@ async def run_equilibrium_workflow(
 
 async def run_numerical_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -1695,6 +1723,7 @@ async def _put_equilibrium_fixture(
 
 async def run_comparative_statics_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -1730,6 +1759,7 @@ async def run_comparative_statics_workflow(
 
 async def run_proposition_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -1790,7 +1820,7 @@ async def run_proposition_workflow(
             raise BenchmarkError(f"no comparative static produced for {variable}/{param}")
         id_map[f"{case.id}-static-{i}"] = produced_id
 
-    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+    router = _case_router(case, model_router, id_map=id_map)
     verifier = PropositionVerifierService(artifact_store=artifact_store)
     critic = PropositionCriticService(
         model_router=router,
@@ -2159,6 +2189,7 @@ async def _put_phase3_fixture(
 
 async def run_results_assembly_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -2184,9 +2215,7 @@ async def run_results_assembly_workflow(
         producer=producer,
     )
 
-    router = FixtureModelRouter(
-        _rewrite_ids(case.input.get("llm_fixtures") or [], fixture["id_map"])
-    )
+    router = _case_router(case, model_router, id_map=fixture["id_map"])
     assembler = ResultsAssemblerService(
         model_router=router,
         artifact_store=artifact_store,
@@ -2225,6 +2254,7 @@ async def run_results_assembly_workflow(
 
 async def run_manuscript_grounding_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -2362,7 +2392,7 @@ async def run_manuscript_grounding_workflow(
         )
     )
 
-    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+    router = _case_router(case, model_router, id_map=id_map)
     drafter = ManuscriptDrafterService(
         model_router=router,
         artifact_store=artifact_store,
@@ -2405,13 +2435,19 @@ async def run_manuscript_grounding_workflow(
 
 
 def _e2e_router(
-    case: BenchmarkCase, fixtures: list[dict[str, Any]], id_map: dict[str, str]
-) -> FixtureModelRouter:
+    case: BenchmarkCase,
+    fixtures: list[dict[str, Any]],
+    id_map: dict[str, str],
+    model_router: Any | None = None,
+) -> Any:
+    if model_router is not None:
+        return model_router
     return FixtureModelRouter(_rewrite_ids(fixtures, id_map))
 
 
 async def run_e2e_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     ingestor: Any,
     identity_resolver: Any,
@@ -2615,7 +2651,7 @@ async def run_e2e_workflow(
         ),
     )
     protocol_builder = ScreeningProtocolBuilderService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         autonomy_policy=autonomy,
         model_role="reasoning",
@@ -2639,7 +2675,7 @@ async def run_e2e_workflow(
     )
     view_builder = ScreeningViewBuilderService(artifact_store=artifact_store)
     screener = TitleAbstractScreenerService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         model_role="fast",
     )
@@ -2717,7 +2753,7 @@ async def run_e2e_workflow(
         )
     )
     extractor = EvidenceExtractorService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         blob_store=blob_store,
         model_role="reasoning",
@@ -2766,7 +2802,7 @@ async def run_e2e_workflow(
 
     # ---- stage 4: synthesis (real synthesizer) ---------------------------
     synthesizer = LiteratureSynthesizerService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         model_role="reasoning",
         batch_profiles=3,
@@ -2807,7 +2843,7 @@ async def run_e2e_workflow(
 
     # ---- stage 5: gap analysis (real analyzer) ---------------------------
     gap_analyzer = GapAnalyzerService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         model_role="reasoning",
     )
@@ -2834,7 +2870,7 @@ async def run_e2e_workflow(
 
     # ---- stage 6: mechanism (real selection/generation/critic) -----------
     selection_svc = GapSelectionService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         model_role="reasoning",
         autonomy_mode="high",
@@ -2842,7 +2878,7 @@ async def run_e2e_workflow(
     )
     selection_id = await selection_svc.select(gap_analysis_env.artifact_id)
     generator_svc = MechanismGeneratorService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         model_role="reasoning",
         max_candidates=5,
@@ -2856,7 +2892,7 @@ async def run_e2e_workflow(
         if e.artifact_id not in before and e.artifact_type == "mechanism_candidate"
     ]
     critic_svc = MechanismCriticService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         critic_role="critic",
         revision_role="reasoning",
@@ -2878,7 +2914,7 @@ async def run_e2e_workflow(
 
     # ---- stage 7: analytical model (real model builder) ------------------
     model_builder = ModelBuilderService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         model_role="reasoning",
     )
@@ -2898,7 +2934,7 @@ async def run_e2e_workflow(
     # ---- stage 8: equilibrium (real deriver + verifier) ------------------
     verifier = EquilibriumVerifierService(artifact_store=artifact_store)
     deriver = EquilibriumDeriverService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         verifier=verifier,
         model_role="reasoning",
@@ -2938,13 +2974,13 @@ async def run_e2e_workflow(
             id_map[f"{case.id}-static-{key[0]}-{key[1]}"] = env.artifact_id
     prop_verifier = PropositionVerifierService(artifact_store=artifact_store)
     prop_critic = PropositionCriticService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         critic_role="critic",
         interpretation_role="reasoning",
     )
     prop_generator = PropositionGeneratorService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         verifier=prop_verifier,
         critic=prop_critic,
@@ -2995,7 +3031,7 @@ async def run_e2e_workflow(
 
     # ---- stage 11: results assembly (real assembler + critic) ------------
     assembler = ResultsAssemblerService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         assembler_role="reasoning",
         max_findings=12,
@@ -3016,7 +3052,7 @@ async def run_e2e_workflow(
         raise BenchmarkError("results stage produced no results_package")
     id_map[f"{case.id}-package"] = package_env.artifact_id
     results_critic = ResultsCriticService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         critic_role="critic",
     )
@@ -3044,7 +3080,7 @@ async def run_e2e_workflow(
 
     # ---- stage 12: manuscript grounding (real drafter + critic) ----------
     drafter = ManuscriptDrafterService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         drafter_role="reasoning",
         max_llm_calls=100,
@@ -3064,7 +3100,7 @@ async def run_e2e_workflow(
         raise BenchmarkError("manuscript stage produced no manuscript_draft")
     id_map[f"{case.id}-draft"] = draft_env.artifact_id
     manuscript_critic = ManuscriptCriticService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         critic_role="critic",
     )
@@ -3090,7 +3126,7 @@ async def run_e2e_workflow(
         ),
     )
     formatter = PublicationFormatterService(
-        model_router=_e2e_router(case, fixtures, id_map),
+        model_router=_e2e_router(case, fixtures, id_map, model_router),
         artifact_store=artifact_store,
         blob_store=None,
         formatter_role="reasoning",
@@ -3108,6 +3144,7 @@ async def run_e2e_workflow(
 
 async def run_synthesis_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -3132,7 +3169,7 @@ async def run_synthesis_workflow(
         id_map[f"{case.id}-evidence-{i}"] = f"{case.id}-{run_suffix}-evidence-{i}"
     for i in range(len(case.input.get("papers") or [])):
         id_map[f"{case.id}-paper-{i}"] = f"{case.id}-{run_suffix}-paper-{i}"
-    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+    router = _case_router(case, model_router, id_map=id_map)
 
     paper_ids: list[str] = []
     for i in range(len(case.input.get("papers") or [])):
@@ -3232,6 +3269,7 @@ async def run_synthesis_workflow(
 
 async def run_model_specification_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -3261,7 +3299,7 @@ async def run_model_specification_workflow(
     for i in range(len(case.input.get("statements") or [])):
         id_map[f"{case.id}-statement-{i}"] = f"{case.id}-{run_suffix}-statement-{i}"
     id_map[f"{case.id}-mechanism"] = f"{case.id}-{run_suffix}-mechanism"
-    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+    router = _case_router(case, model_router, id_map=id_map)
 
     statement_ids: list[str] = []
     for i, st in enumerate(case.input.get("statements") or []):
@@ -3348,6 +3386,7 @@ async def run_model_specification_workflow(
 
 async def run_acquisition_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     blob_store: Any,
     case: BenchmarkCase,
@@ -3525,6 +3564,7 @@ async def run_acquisition_workflow(
 
 async def run_revalidation_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     blob_store: Any,
     case: BenchmarkCase,
@@ -3593,7 +3633,7 @@ async def run_revalidation_workflow(
     before = {e.artifact_id for e in await artifact_store.list()}
     run_suffix = uuid.uuid4().hex[:8]
     fixtures = case.input.get("llm_fixtures") or []
-    router = FixtureModelRouter(fixtures)
+    router = _case_router(case, model_router, fixtures=fixtures)
     autonomy = ConfigurableAutonomyPolicy(mode="high")
 
     async def _put_model(prefix: str) -> str:
@@ -3808,7 +3848,7 @@ async def run_revalidation_workflow(
             }
         ]
         synthesizer = LiteratureSynthesizerService(
-            model_router=FixtureModelRouter(_rewrite_ids(syn_fixtures, id_map)),
+            model_router=_case_router(case, model_router, fixtures=syn_fixtures, id_map=id_map),
             artifact_store=artifact_store,
             model_role="reasoning",
             batch_profiles=10,
@@ -4036,7 +4076,7 @@ async def run_revalidation_workflow(
                 }
             ]
             extractor = EvidenceExtractorService(
-                model_router=FixtureModelRouter(evidence_fixtures),
+                model_router=_case_router(case, model_router, fixtures=evidence_fixtures),
                 artifact_store=artifact_store,
                 blob_store=blob_store,
                 model_role="reasoning",
@@ -4096,7 +4136,7 @@ async def run_revalidation_workflow(
                 f"{case.id}-{run_suffix}-gapB", "changed", "gapb"
             )
             analyzer = GapAnalyzerService(
-                model_router=FixtureModelRouter(_gap_fixtures()),
+                model_router=_case_router(case, model_router, fixtures=_gap_fixtures()),
                 artifact_store=artifact_store,
                 model_role="reasoning",
             )
@@ -4181,7 +4221,9 @@ async def run_revalidation_workflow(
                 }
             ]
             synthesizer = LiteratureSynthesizerService(
-                model_router=FixtureModelRouter(_rewrite_ids(reuse_fixtures, id_map)),
+                model_router=_case_router(
+                    case, model_router, fixtures=reuse_fixtures, id_map=id_map
+                ),
                 artifact_store=artifact_store,
                 model_role="reasoning",
                 batch_profiles=10,
@@ -4247,6 +4289,7 @@ async def run_revalidation_workflow(
 
 async def run_ingestion_identity_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -4344,6 +4387,7 @@ class _BenchmarkApprovalPolicy:
 
 async def run_gap_selection_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     case: BenchmarkCase,
     producer: str = _DEFAULT_PRODUCER,
@@ -4367,7 +4411,7 @@ async def run_gap_selection_workflow(
     id_map: dict[str, str] = {}
     for i in range(len(case.input.get("gaps") or [])):
         id_map[f"gap-{i}"] = f"{case.id}-{run_suffix}-gap-{i}"
-    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+    router = _case_router(case, model_router, id_map=id_map)
 
     gap_ids: list[str] = []
     for i, g in enumerate(case.input.get("gaps") or []):
@@ -4515,6 +4559,7 @@ def _novelty_revalidation_assess_fixtures(case: BenchmarkCase) -> list[dict[str,
 
 async def run_novelty_revalidation_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     ingestor: Any,
     identity_resolver: Any,
@@ -4582,7 +4627,7 @@ async def run_novelty_revalidation_workflow(
 
     def _service(sources: dict[str, FixtureLiteratureSource]) -> NoveltyValidationService:
         return NoveltyValidationService(
-            model_router=FixtureModelRouter(base_fixtures),
+            model_router=_case_router(case, model_router, fixtures=base_fixtures),
             artifact_store=artifact_store,
             ingestor=ingestor,
             identity_resolver=identity_resolver,
@@ -4657,6 +4702,7 @@ async def run_novelty_revalidation_workflow(
 
 async def run_publication_packaging_workflow(
     *,
+    model_router: Any | None = None,
     artifact_store: Any,
     blob_store: Any,
     case: BenchmarkCase,
@@ -4785,7 +4831,7 @@ async def run_publication_packaging_workflow(
     )
 
     formatter = PublicationFormatterService(
-        model_router=FixtureModelRouter([]),
+        model_router=_case_router(case, model_router),
         artifact_store=artifact_store,
         blob_store=blob_store,
         formatter_role="reasoning",

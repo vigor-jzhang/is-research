@@ -260,6 +260,7 @@ def _derived_plugin_configs(
         "research.publication_formatter": {"research": config.research.model_dump()},
         "research.novelty_validator": {"research": config.research.model_dump()},
         "research.evaluation_harness": {"evaluation": config.evaluation.model_dump()},
+        "evaluation.model_tournament": {"evaluation": config.evaluation.model_dump()},
         "evaluator.deterministic": {"evaluation": config.evaluation.model_dump()},
         "evaluator.retrieval": {"evaluation": config.evaluation.model_dump()},
         "evaluator.claim_grounding": {"evaluation": config.evaluation.model_dump()},
