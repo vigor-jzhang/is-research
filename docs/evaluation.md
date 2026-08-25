@@ -989,14 +989,102 @@ uv run research-agent evaluation leaderboard inspect <leaderboard-id>
 Candidates and pricing are defined in the plan YAML — no code changes. See
 `configs/tournament/example-reasoning.yaml`.
 
+## Evidence enrichment benchmark (`evidence-enrichment-v1`, Phase 7C)
+
+Closes the Phase 5C-5D coverage gap. Drives the real `NoveltyValidationService`
+with `enrichment_enabled=True` and `preacquisition_enabled=True` over fixture
+sources whose `get()` serves acquired abstracts. 7 cases:
+
+- title-only candidate enriched to abstract
+- indexed-metadata candidate enriched to abstract
+- unsupported enrichment rejected (never fabricated evidence)
+- rate-limited source rejected without invention
+- pre-acquisition selects and upgrades sparse candidates
+- original sparse source preserved
+- changed source set does not reuse stale enrichment
+
+### Enrichment metrics (`evaluator.evidence_enrichment`)
+
+- `enrichment_grounding_accuracy`, `enrichment_outcome_accuracy`
+- `source_preservation_accuracy`, `unsupported_rejection_accuracy`
+- `stale_reuse_rate`, `preacquisition_accuracy`, `provenance_version_accuracy`
+
+## Policy-constrained model routing (Phase 7C, shadow mode)
+
+The router answers "given a logical role, quality requirement, budget, latency
+target, and leaderboard evidence, which model should be selected?" It is
+decision support + shadow evaluation only — it never replaces the configured
+production role model and never uses an LLM to choose.
+
+### Selection hierarchy
+
+1. capability compatibility (structured output / context) — reuses provider
+   `ModelCapabilities`
+2. deterministic eligibility threshold
+3. reliability requirements (structured-output success, model-error rate)
+4. explicit constraints (allowed models/providers, max cost, latency limit,
+   min repetitions, leaderboard freshness)
+5. quality → 6. latency → 7. cost → 8. deterministic tie-break.
+
+Correctness is never traded for lower cost unless the request explicitly
+lowers the required quality threshold.
+
+### Policies
+
+`quality_first`, `balanced`, `cost_constrained`, `latency_constrained` — each is
+an explicit, documented policy (gate + rank) persisted with every decision via
+`RoutingDecision.policy_rules`. `cost_constrained` first filters by minimum
+deterministic quality (reliability mandatory) then chooses the lowest expected
+cost among eligible candidates.
+
+### Evidence handling
+
+Missing/stale evidence is never a silent choice: no leaderboard, stale
+(older than `leaderboard_max_age_seconds`), candidate absent, unknown cost,
+insufficient repetitions, or all-below-threshold return
+`insufficient_evidence` / `no_eligible_model` with structured rationale.
+
+### Fallbacks
+
+Every production-capable decision defines a deterministic fallback: the
+next-best eligible candidate satisfying the same gate (or `None` when none
+exists), reported as `fallback_candidate_id`.
+
+### Shadow mode
+
+`routing_mode = shadow` computes the model the router would select, records the
+decision, and compares it against the configured role model: `would_switch`,
+`same_as_current`, `expected_quality_delta`, `expected_cost_delta`,
+`expected_latency_delta`. No production behavior changes.
+
+### Routing schemas
+
+`RoutingPolicy`, `RoutingRequest`, `RoutingCandidateAssessment`,
+`RoutingDecision` (selected/rejected/fallback candidates, leaderboard ids,
+policy id/version + rules, expected quality/latency/cost, structured rationale,
+shadow comparison), `RoutingExecution`.
+
+### Routing benchmark (`model-routing-policy-v1`)
+
+12 cases over synthetic RoleLeaderboard fixtures: quality-first choice,
+cheap-failing rejection, cost-constrained, latency-constrained,
+structured-output capability rejection, missing-cost, stale leaderboard,
+insufficient repetitions, no eligible candidate, deterministic tie-break,
+fallback selection, role isolation. Metrics (`evaluator.model_routing`):
+`routing_decision_accuracy`, `eligibility_filter_accuracy`,
+`constraint_satisfaction_accuracy`, `fallback_accuracy`,
+`role_isolation_accuracy`, `stale_evidence_handling_accuracy`,
+`deterministic_tiebreak_accuracy`, `unsafe_selection_rate` (any selection of a
+deterministically ineligible model is a critical failure).
+
 ## Recommended next increment
 
-Post-Phase-7B: the evaluation program covers every core pipeline stage with
-deterministic gating, the four 7A targeted gaps are closed, and Phase 7B adds
-reproducible per-role model comparison over the frozen harness. The verdict
-remains `ready_with_gaps` because non-blocking gaps remain (live provider
-connectors/publisher endpoints, evidence enrichment (5C-5D) standalone,
-advisory LLM-quality judging). Closing the standalone 5C-5D enrichment
-benchmark is the natural next step; Phase 7C would then build automatic model
-routing / production switching on top of the tournament layer (explicitly not
-implemented in 7B).
+Post-Phase-7C: the evaluation program covers every core pipeline stage with
+deterministic gating, the six targeted gaps are closed (7A + 7A.1 + 5C-5D +
+7C shadow routing), and shadow routing provides decision support over the
+frozen tournaments. The verdict remains `ready_with_gaps` because non-blocking
+gaps remain (live provider connectors/publisher endpoints, advisory LLM-quality
+judging). Phase 7D would add controlled production routing: opt-in automatic
+role switching with hard quality/cost budgets, deterministic fallback, circuit
+breakers, observability, and immediate rollback to static configuration —
+explicitly not implemented in Phase 7C.

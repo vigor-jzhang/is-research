@@ -462,6 +462,7 @@ class ModelTournamentService:
             plan_hash=plan_hash(plan),
             ranking_rules=dict(plan.ranking_rules or RANKING_RULES),
             entries=entries,
+            metadata={"repetitions": plan.repetitions},
         )
 
     async def get_leaderboard_for_role(self, role: str) -> RoleLeaderboard | None:

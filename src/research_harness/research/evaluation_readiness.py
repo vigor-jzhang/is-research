@@ -55,6 +55,8 @@ def _deterministic_evaluators() -> set[str]:
         "evaluator.gap_selection",
         "evaluator.novelty_revalidation",
         "evaluator.publication_packaging",
+        "evaluator.evidence_enrichment",
+        "evaluator.model_routing",
     }
 
 
@@ -72,9 +74,8 @@ def _known_untested_behaviors() -> tuple[str, ...]:
         "LLM candidate/derivation quality for transcendental equilibria (scripted only)",
         "live provider corpora and live publisher/download endpoints",
         "live provider connectors (Phase 2A) over real APIs",
-        "evidence enrichment / pre-acquisition (5C-5D) standalone",
         "long-document prose quality (advisory-only critique)",
-        "automatic model routing / production model switching (Phase 7C+, not implemented)",
+        "automatic production model routing / switching (Phase 7D+, not implemented)",
     )
 
 
@@ -149,13 +150,14 @@ def readiness_report() -> ReadinessResult:
     elif gaps_exist:
         verdict = "ready_with_gaps"
         narrative = (
-            "Deterministic gating is complete across all 22 benchmark families "
-            "(incl. ingestion/identity, gap selection, novelty revalidation, and "
-            "publication packaging) and the e2e pipeline passes; the four "
-            "targeted deterministic gaps are closed. Residual gaps are "
+            "Deterministic gating is complete across all 24 benchmark families "
+            "(incl. ingestion/identity, gap selection, novelty revalidation, "
+            "publication packaging, evidence enrichment, and model routing) and "
+            "the e2e pipeline passes; the six targeted deterministic gaps are "
+            "closed (7A + 7A.1 + 5C-5D + 7C shadow routing). Residual gaps are "
             "non-blocking: live provider connectors/publisher endpoints, "
-            "evidence enrichment (5C-5D) standalone, and advisory LLM-quality "
-            "judging. See uncovered_capabilities."
+            "advisory LLM-quality judging, and automatic production routing "
+            "(Phase 7D+). See uncovered_capabilities."
         )
     else:
         verdict = "ready"

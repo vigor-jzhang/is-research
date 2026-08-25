@@ -263,6 +263,9 @@ class RoleLeaderboard(BaseModel):
     ranking_rules: dict[str, Any] = Field(default_factory=dict)
     entries: list[LeaderboardEntry] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utcnow)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="e.g. repetitions used for this leaderboard"
+    )
 
     @property
     def schema_version(self) -> int:

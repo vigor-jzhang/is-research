@@ -28,12 +28,14 @@ from research_harness.research.benchmarks.workflows import (
     run_comparative_statics_workflow,
     run_e2e_workflow,
     run_equilibrium_workflow,
+    run_evidence_enrichment_workflow,
     run_evidence_workflow,
     run_gap_selection_workflow,
     run_gap_workflow,
     run_ingestion_identity_workflow,
     run_manuscript_grounding_workflow,
     run_mechanism_workflow,
+    run_model_routing_workflow,
     run_model_specification_workflow,
     run_novelty_revalidation_workflow,
     run_novelty_workflow,
@@ -484,6 +486,24 @@ class EvaluationHarnessService:
                 model_router=model_router,
             )
             return produced, None
+        if workflow == "evidence_enrichment":
+            produced = await run_evidence_enrichment_workflow(
+                artifact_store=self._store,
+                ingestor=self._ingestor,
+                identity_resolver=self._resolver,
+                blob_store=self._blob_store,
+                case=case,
+                producer=self._producer,
+                model_router=model_router,
+            )
+            return produced, None
+        if workflow == "model_routing":
+            produced = await run_model_routing_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         if workflow == "literature_synthesis":
             produced = await run_synthesis_workflow(
                 artifact_store=self._store,
@@ -867,6 +887,8 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.gap_selection",
                 "evaluator.novelty_revalidation",
                 "evaluator.publication_packaging",
+                "evaluator.evidence_enrichment",
+                "evaluator.model_routing",
             ],
             optional_requires=["blob_store.default"],
         )
@@ -909,6 +931,8 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.gap_selection": ctx.require("evaluator.gap_selection"),
                 "evaluator.novelty_revalidation": ctx.require("evaluator.novelty_revalidation"),
                 "evaluator.publication_packaging": ctx.require("evaluator.publication_packaging"),
+                "evaluator.evidence_enrichment": ctx.require("evaluator.evidence_enrichment"),
+                "evaluator.model_routing": ctx.require("evaluator.model_routing"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),

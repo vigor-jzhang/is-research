@@ -204,6 +204,8 @@ uv run research-agent eval run literature-ingestion-identity-v1   # 8 cases: DOI
 uv run research-agent eval run gap-selection-v1                   # 8 cases: selection, fallback, autonomy, operator override
 uv run research-agent eval run novelty-revalidation-v1            # 7 cases: re-trigger on new literature, stale-reuse detection
 uv run research-agent eval run publication-packaging-v1           # 8 cases: citations, exports, anonymization, ready gating
+uv run research-agent eval run evidence-enrichment-v1             # 7 cases: 5C-5D enrichment, grounding, rejection, stale reuse
+uv run research-agent eval run model-routing-policy-v1            # 12 cases: routing policies, fallbacks, role isolation
 uv run research-agent eval coverage                                 # coverage matrix: capability -> benchmark -> evaluator
 uv run research-agent eval readiness                               # deterministic evaluation-readiness report
 uv run research-agent eval run <benchmark> [--evaluators evaluator.deterministic,...]
@@ -271,3 +273,18 @@ The plan defines role, benchmarks, candidate models (provider / requested
 model / temperature / max tokens / structured-output mode / optional pricing),
 repetitions, timeout/retry policy, deterministic pass threshold and optional
 advisory evaluators — no code changes required.
+
+## Policy-constrained model routing (Phase 7C, shadow mode)
+
+```bash
+uv run research-agent routing decide --role reasoning --policy quality_first   # decision from leaderboard evidence
+uv run research-agent routing shadow --role reasoning                          # would-switch vs current config (no change)
+uv run research-agent routing inspect <decision-id>                            # full decision + rejected candidates/reasons
+uv run research-agent routing policies list                                    # documented policies (gate + rank)
+```
+
+The router consumes persisted RoleLeaderboard evidence (produced by Phase 7B
+tournaments), applies capability/quality/reliability/constraint gates, and
+selects under an explicit policy. Decision support + shadow only — the
+configured production role model is never changed. The `routing` commands
+require `routing.policy_router` (included in `configs/example.yaml`).

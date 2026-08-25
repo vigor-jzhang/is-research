@@ -440,6 +440,7 @@ class AppConfig(BaseModel):
         """Return dict config for a given plugin id (derived)."""
         mapping: dict[str, dict[str, Any]] = {
             "routing.role_router": {"models": self.models.model_dump()},
+            "routing.policy_router": {"models": self.models.model_dump()},
             "session.jsonl": {"session": self.session.model_dump()},
             "loop.simple_tool_loop": {"loop": self.loop.model_dump()},
             "autonomy.configurable": {"autonomy": self.runtime.autonomy},

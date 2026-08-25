@@ -26,7 +26,7 @@ uv run research-agent config validate configs/example.yaml                   # v
 
 ## How to Use It
 
-Configuration lives in `configs/example.yaml` (71 plugins; see
+Configuration lives in `configs/example.yaml` (74 plugins; see
 [docs/configuration.md](docs/configuration.md)). The research pipeline is
 driven by one CLI command per stage; every command writes immutable,
 provenance-linked artifacts to `.research/artifacts.db`:
@@ -91,12 +91,18 @@ uv run research-agent evaluation tournament inspect <tournament-run-id>
 uv run research-agent evaluation leaderboard show --role reasoning   # latest leaderboard for a role
 uv run research-agent evaluation leaderboard list
 uv run research-agent evaluation leaderboard inspect <leaderboard-id>
+
+# Policy-constrained model routing (Phase 7C, shadow mode): decision support only
+uv run research-agent routing decide --role reasoning --policy quality_first
+uv run research-agent routing shadow --role reasoning            # would-switch vs current config
+uv run research-agent routing inspect <decision-id>
+uv run research-agent routing policies list
 ```
 
 The complete command reference (including kernel commands, `run` demo,
 per-phase options, and all live-test markers) is in
-[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A-7A.1) and model
-tournaments (Phase 7B) are documented in
+[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A-7A.1), model
+tournaments (Phase 7B), and policy routing (Phase 7C) are documented in
 [docs/evaluation.md](docs/evaluation.md).
 
 ## Testing
@@ -118,7 +124,7 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All gates must pass: `809 passed, 20 skipped` (offline), ruff/format/pyright
+All gates must pass: `834 passed, 20 skipped` (offline), ruff/format/pyright
 clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
@@ -150,12 +156,13 @@ src/research_harness/
                  # Phase 5A-5D (novelty_validator)
                  # Phase 6A-7A.1 (evaluation_harness + evaluator.*)
                  # Phase 7B (evaluation_model_tournament: role tournaments + leaderboards)
+                 # Phase 7C (routing/policy_router shadow routing + evaluator.model_routing)
     documents/   # locator_metadata/unpaywall, fetcher_http, extractor_pypdf,
                  # acquisition_orchestrator
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/            # per-phase + architecture/configuration/cli/plugin-authoring docs
-tests/           # unit/ 76, integration/ 44, live/ 17 (opt-in markers)
+tests/           # unit/ 78, integration/ 46, live/ 17 (opt-in markers)
 ```
 
 ## Documentation
@@ -191,10 +198,11 @@ tests/           # unit/ 76, integration/ 44, live/ 17 (opt-in markers)
 - **Phase 7A** — evaluation gap closure: synthesis, analytical-model specification, document acquisition, and incremental-revalidation benchmarks (deterministic evaluators + coverage/readiness update)
 - **Phase 7A.1** — final evaluation gap closure: ingestion/identity resolution, gap selection, novelty revalidation, and publication/submission-packaging benchmarks (deterministic evaluators + coverage/readiness update)
 - **Phase 7B** — model tournaments + role leaderboards: reproducible per-role model comparison over the frozen benchmarks (correctness-first lexicographic ranking, reliability/latency/token/cost accounting, offline + opt-in live tournaments)
+- **Phase 7C** — policy-constrained model routing (shadow): evidence-enrichment benchmark closes the 5C-5D gap; routing policies (quality_first/balanced/cost_constrained/latency_constrained) select from persisted leaderboards with capability/quality/reliability gates, fallbacks, stale-evidence handling, role isolation; shadow mode never switches production models
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
 - **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, publication-quality scoring (see the readiness report's uncovered capabilities)
-- **Post-Phase-7A.1 (not implemented)** — evidence-enrichment/pre-acquisition standalone benchmark, live provider-connector/publisher-endpoint coverage, advisory LLM-quality judging
-- **Post-Phase-7B (not implemented)** — automatic model routing, production model switching, contextual bandits, online learning, self-modifying routing policy, automatic cheapest-model selection, shared leaderboard service (Phase 7C+)
+- **Post-Phase-7A.1 (not implemented)** — live provider-connector/publisher-endpoint coverage, advisory LLM-quality judging
+- **Post-Phase-7C (not implemented)** — automatic production model switching, contextual bandits, online learning, self-modifying routing policy, automatic cheapest-model selection, shared leaderboard service (Phase 7D+)
 
 Each phase has a per-phase doc under `docs/`; nothing beyond the implemented phases is claimed.
 

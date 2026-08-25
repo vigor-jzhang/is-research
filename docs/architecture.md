@@ -63,7 +63,7 @@ The kernel imports **zero** concrete plugins and contains no research behavior. 
 The bootstrap layer (`src/research_harness/app/bootstrap.py`) is the composition root:
 
 - Loads YAML config via `config/loader.py`
-- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 71 plugins)
+- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 74 plugins)
 - Discovers **external** plugins via `importlib.metadata.entry_points(group="research_harness.plugins")` — lazy factories, validated on creation, duplicate IDs rejected, clear errors
 - Merges built-in + external deterministically (`get_all_plugin_factories`)
 - Builds per-plugin configs from `AppConfig` (e.g., `models.roles` → `routing.role_router`, `session.root` → `session.jsonl`)
@@ -295,8 +295,9 @@ See `docs/documents.md` for full lifecycle, resolution priority, security, and C
 - `manuscript` — outline, draft, inspect, critique, revise (Phase 4B)
 - `publication` — profile-create, format, validate, export, package, inspect (Phase 4C)
 - `novelty` — validate, report, gate, revalidate, enrich, inspect (Phases 5A–5D)
-- `eval` — run, inspect, list, coverage, readiness (Phase 6A-7A.1 harness: 22 offline benchmarks from novelty-threat to publication-packaging, coverage matrix, deterministic readiness report)
+- `eval` — run, inspect, list, coverage, readiness (Phase 6A-7A.1/7C harness: 24 offline benchmarks from novelty-threat to model-routing, coverage matrix, deterministic readiness report)
 - `evaluation` — model tournaments + role leaderboards (Phase 7B): `tournament run/inspect`, `leaderboard show/list/inspect` over the frozen benchmarks with correctness-first deterministic ranking
+- `routing` — policy-constrained model routing (Phase 7C, shadow mode): `decide`, `shadow`, `inspect`, `policies list` over persisted role leaderboards; decision support only, production roles never switched
 
 The full command reference (with options and live-test markers) is in `docs/cli.md`.
 
@@ -321,7 +322,7 @@ Rules enforced by `tests/unit/test_architecture.py`:
 Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 73 unit, 43 integration, and 16 opt-in live test files cover every phase:
 
 ```bash
-uv run pytest                # offline: 809 passed, 20 skipped
+uv run pytest                # offline: 834 passed, 20 skipped
 uv run --env-file .env pytest -m live -v          # OpenRouter live
 uv run --env-file .env pytest -m live_novelty_validation -v  # e.g. Phase 5 live
 ```

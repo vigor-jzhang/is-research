@@ -4,6 +4,7 @@ runtime:
 plugins:
   - model.openrouter
   - routing.role_router
+  - routing.policy_router
   - session.jsonl
   - storage.artifacts_sqlite
   - storage.blobs_filesystem
@@ -65,6 +66,8 @@ plugins:
   - evaluator.gap_selection
   - evaluator.novelty_revalidation
   - evaluator.publication_packaging
+  - evaluator.evidence_enrichment
+  - evaluator.model_routing
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http

@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from research_harness.contracts.evaluator import envelope_payload_dict
 from research_harness.contracts.literature import LiteratureSearchHit, LiteratureSearchPage
-from research_harness.contracts.model import Message, ModelResponse
+from research_harness.contracts.model import Message, ModelCapabilities, ModelResponse
 from research_harness.kernel.services import ServiceError
 from research_harness.research.envelope import ArtifactEnvelope
 from research_harness.research.schemas.evaluation import BenchmarkCase
@@ -113,6 +113,29 @@ class PackagingReport(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class EnrichmentRunRecord(BaseModel):
+    """One run of the enrichment workflow against one source set."""
+
+    label: str
+    report_id: str
+    enrichment_execution_ids: list[str] = Field(default_factory=list)
+    preacquisition_execution_ids: list[str] = Field(default_factory=list)
+    candidate_bases: dict[str, str] = Field(
+        default_factory=dict, description="candidate_assessment_id -> evidence_basis"
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class EvidenceEnrichmentReport(BaseModel):
+    """Benchmark-only record of the Phase 5C-5D enrichment run."""
+
+    benchmark_case_id: str
+    runs: list[EnrichmentRunRecord] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
 class BenchmarkError(Exception):
     """Benchmark workflow error (raised by fixture composition, never by
     production code)."""
@@ -167,14 +190,23 @@ def _case_router(
 
 class FixtureLiteratureSource:
     """Literature source backed by benchmark fixture paper records. Hits are
-    returned in fixture order, which doubles as the provider ranking."""
+    returned in fixture order, which doubles as the provider ranking. `get_hits`
+    optionally backs `get(identifier)` for Phase 5C-5D enrichment acquisitions."""
 
-    def __init__(self, provider_name: str, papers: list[dict[str, Any]] | str) -> None:
+    def __init__(
+        self,
+        provider_name: str,
+        papers: list[dict[str, Any]] | str,
+        get_hits: dict[str, dict[str, Any]] | None = None,
+        get_errors: dict[str, str] | None = None,
+    ) -> None:
         self.provider_name = provider_name
         self.fail_all = papers == "fail_all"
         self.papers = (
             [] if self.fail_all else [PaperRecord(**p) for p in papers]  # type: ignore[arg-type]
         )
+        self.get_hits = get_hits or {}
+        self.get_errors = get_errors or {}  # identifier -> "not_found"|"rate_limited"|"failed"
 
     async def search(self, request: Any) -> LiteratureSearchPage:
         if self.fail_all:
@@ -194,7 +226,26 @@ class FixtureLiteratureSource:
         )
 
     async def get(self, identifier: str) -> Any:
-        raise NotImplementedError
+        from research_harness.contracts.literature import (
+            LiteratureNotFoundError,
+            LiteratureRateLimitError,
+        )
+
+        error = self.get_errors.get(identifier)
+        if error == "rate_limited":
+            raise LiteratureRateLimitError(f"fixture rate limited for {identifier}")
+        if error == "failed":
+            raise RuntimeError(f"fixture provider failed for {identifier}")
+        hit = self.get_hits.get(identifier)
+        if hit is None:
+            raise LiteratureNotFoundError(f"no fixture record for {identifier}")
+        record = PaperRecord(**hit)
+        return LiteratureSearchHit(
+            paper=record,
+            raw_payload={"title": record.title},
+            provider=self.provider_name,
+            provider_record_id=record.doi or identifier,
+        )
 
 
 def make_source_lookup(
@@ -235,8 +286,14 @@ def make_retrieval_lookup(
 def _fixture_sources(
     case: BenchmarkCase,
 ) -> dict[str, FixtureLiteratureSource]:
+    get_sources = case.input.get("get_sources") or {}
     return {
-        provider: FixtureLiteratureSource(provider, papers)
+        provider: FixtureLiteratureSource(
+            provider,
+            papers,
+            get_hits=dict((get_sources.get(provider) or {}).get("get_hits") or {}),
+            get_errors=dict((get_sources.get(provider) or {}).get("get_errors") or {}),
+        )
         for provider, papers in (case.input.get("fixture_sources") or {}).items()
     }
 
@@ -4689,6 +4746,247 @@ async def run_novelty_revalidation_workflow(
             artifact_id=f"{case.id}-{run_suffix}-nvr-report",
         )
     )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# evidence_enrichment workflow (Phase 7C): real Phase 5C-5D enrichment +
+# pre-acquisition over fixture sources with a working get() path
+# ---------------------------------------------------------------------------
+
+
+async def run_evidence_enrichment_workflow(
+    *,
+    model_router: Any | None = None,
+    artifact_store: Any,
+    ingestor: Any,
+    identity_resolver: Any,
+    blob_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real NoveltyValidationService.create_report with
+    enrichment_enabled=True and preacquisition_enabled=True over fixture
+    sources whose get() returns acquired abstracts. One fresh submission
+    package per source set (baseline + optional changed) so stale-enrichment
+    reuse and provenance versioning can be verified. Records the produced
+    enrichment/preacquisition executions + candidate evidence bases for the
+    evaluator."""
+    from research_harness.plugins.research.novelty_validator.plugin import (
+        NoveltyValidationService,
+    )
+    from research_harness.research.schemas.novelty import NoveltyCandidateAssessment
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+
+    source_sets = case.input.get("source_sets") or []
+    if not source_sets:
+        source_sets = [{"label": "baseline", "papers": [], "get_hits": {}}]
+
+    novelty_config = dict(case.input.get("novelty_config") or {})
+    as_of = case.input.get("as_of")
+    fixtures = list(case.input.get("llm_fixtures") or [])
+
+    async def _make_package(label: str) -> str:
+        sub: dict[str, Any] = case.input.get("submission") or {}
+        manuscript = FormattedManuscript(
+            draft_id=f"{case.id}-{run_suffix}-{label}-draft",
+            results_package_id=f"{case.id}-results",
+            profile_id=f"{case.id}-profile",
+            profile_name="benchmark",
+            front_matter=FrontMatter(title=sub.get("title", ""), abstract=sub.get("abstract", "")),
+            sections=[
+                FormattedSection(section_id=sid, title=sid, body=body)
+                for sid, body in (sub.get("sections") or {}).items()
+            ],
+        )
+        manuscript_id = f"{case.id}-{run_suffix}-{label}-manuscript"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=manuscript,
+                artifact_type="formatted_manuscript",
+                producer=producer,
+                artifact_id=manuscript_id,
+            )
+        )
+        package = SubmissionPackage(
+            formatted_manuscript_id=manuscript_id,
+            draft_id=manuscript.draft_id,
+            profile_id=manuscript.profile_id,
+        )
+        package_id = f"{case.id}-{run_suffix}-{label}-package"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=package,
+                artifact_type="submission_package",
+                producer=producer,
+                artifact_id=package_id,
+            )
+        )
+        return package_id
+
+    async def _run_set(set_cfg: dict[str, Any]) -> EnrichmentRunRecord:
+        label = str(set_cfg.get("label") or "run")
+        papers = set_cfg.get("papers")
+        get_hits = set_cfg.get("get_hits") or {}
+        get_errors = set_cfg.get("get_errors") or {}
+        run_before = {e.artifact_id for e in await artifact_store.list()}
+        sources = {
+            "semantic_scholar": FixtureLiteratureSource(
+                "semantic_scholar",
+                papers if papers is not None else [],
+                get_hits=get_hits,
+                get_errors=get_errors,
+            )
+        }
+        svc = NoveltyValidationService(
+            model_router=_case_router(case, model_router, fixtures=fixtures),
+            artifact_store=artifact_store,
+            ingestor=ingestor,
+            identity_resolver=identity_resolver,
+            service_lookup=make_source_lookup(sources),
+            blob_store=blob_store,
+            enrichment_enabled=True,
+            preacquisition_enabled=True,
+            **novelty_config,
+        )
+        package_id = await _make_package(label)
+        report_id = await svc.create_report(package_id, as_of=as_of)
+        produced_after = {e.artifact_id for e in await artifact_store.list()} - run_before
+        executions: list[str] = []
+        preacquisitions: list[str] = []
+        for aid in produced_after:
+            try:
+                env = await artifact_store.get(aid)
+            except Exception:  # noqa: BLE001
+                continue
+            if env.artifact_type == "evidence_enrichment_execution":
+                executions.append(aid)
+            elif env.artifact_type == "evidence_preacquisition_execution":
+                preacquisitions.append(aid)
+        bases: dict[str, str] = {}
+        for aid in produced_after:
+            env = await artifact_store.get(aid)
+            if env.artifact_type != "novelty_candidate_assessment":
+                continue
+            try:
+                bases[aid] = env.parse_payload(NoveltyCandidateAssessment).evidence_basis.value
+            except Exception:  # noqa: BLE001
+                continue
+        return EnrichmentRunRecord(
+            label=label,
+            report_id=report_id,
+            enrichment_execution_ids=sorted(executions),
+            preacquisition_execution_ids=sorted(preacquisitions),
+            candidate_bases=bases,
+        )
+
+    runs: list[EnrichmentRunRecord] = []
+    for set_cfg in source_sets:
+        runs.append(await _run_set(set_cfg))
+
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=EvidenceEnrichmentReport(
+                benchmark_case_id=case.id,
+                runs=runs,
+            ),
+            artifact_type="evidence_enrichment_report",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-enrich-report",
+        )
+    )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# model_routing workflow (Phase 7C): the real policy router over synthetic
+# role leaderboards (shadow mode only — production models are never switched)
+# ---------------------------------------------------------------------------
+
+
+class _FakeCapabilityProvider:
+    """Offline provider exposing only capability metadata for the router."""
+
+    def __init__(self, capabilities: ModelCapabilities) -> None:
+        self.capabilities = capabilities
+
+    async def complete(self, request: Any) -> ModelResponse:
+        raise AssertionError("the policy router never calls the model provider")
+
+    async def close(self) -> None:
+        pass
+
+
+def _routing_capability_lookup(capabilities: dict[str, dict[str, Any]]) -> Callable[[str], Any]:
+    def lookup(name: str) -> Any:
+        provider = name[len("model_provider.") :] if name.startswith("model_provider.") else name
+        caps = capabilities.get(provider)
+        if caps is None:
+            raise ServiceError(f"no benchmark capability fixture for provider {provider!r}")
+        return _FakeCapabilityProvider(ModelCapabilities(**caps))
+
+    return lookup
+
+
+async def run_model_routing_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real PolicyModelRouterService over synthetic RoleLeaderboard
+    fixtures (persisted for the case) with a capability lookup backed by case
+    fixtures. Records one RoutingDecision artifact for the evaluator. Shadow
+    mode only — no production role model is ever replaced."""
+    from research_harness.plugins.routing.policy_router.plugin import (
+        PolicyModelRouterService,
+    )
+    from research_harness.research.schemas.routing import RoutingRequest
+    from research_harness.research.schemas.tournament import RoleLeaderboard
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+
+    role = str(case.input.get("role") or "reasoning")
+    policy = str(case.input.get("policy") or "quality_first")
+    use_fallback = bool(case.input.get("use_fallback") or False)
+    shadow = bool(case.input.get("shadow") or False)
+
+    leaderboards: list[RoleLeaderboard] = []
+    for i, lb in enumerate(case.input.get("leaderboards") or []):
+        board = RoleLeaderboard.model_validate({**lb, "id": lb.get("id") or f"{case.id}-lb-{i}"})
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=board,
+                artifact_type="role_leaderboard",
+                producer=producer,
+                artifact_id=board.id,
+            )
+        )
+        leaderboards.append(board)
+
+    request_data = dict(case.input.get("request") or {})
+    request_data.setdefault("role", role)
+    request_data["leaderboard_ids"] = [b.id for b in leaderboards]
+    request = RoutingRequest.model_validate(request_data)
+
+    capabilities = case.input.get("capabilities") or {}
+    current_roles = case.input.get("current_roles") or {}
+
+    service = PolicyModelRouterService(
+        artifact_store=artifact_store,
+        service_lookup=_routing_capability_lookup(capabilities),
+        current_roles=current_roles,
+    )
+    if shadow:
+        await service.shadow(role, policy, request, use_fallback=use_fallback)
+    else:
+        await service.decide(role, policy, request, use_fallback=use_fallback)
 
     after = await artifact_store.list()
     return [e for e in after if e.artifact_id not in before]

@@ -8,6 +8,7 @@ registered benchmark whose content differs).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 
@@ -7862,6 +7863,734 @@ PUBLICATION_PACKAGING_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+def _enrich_assess(relationship: str) -> dict[str, Any]:
+    return {
+        "dimensions": [
+            {"dimension": "focal_phenomenon", "value": "match"},
+            {"dimension": "setting", "value": "match"},
+            {"dimension": "mechanism", "value": "match"},
+            {"dimension": "theoretical_result", "value": "match"},
+        ],
+        "relationship": relationship,
+        "assessment": f"fixture assessment: {relationship}",
+    }
+
+
+def _enrich_fixtures(
+    titles: list[str], relationship: str = "direct_prior_art"
+) -> list[dict[str, Any]]:
+    fixtures: list[dict[str, Any]] = [dict(f) for f in _REV_BASE_FIXTURES]
+    for title in titles:
+        fixtures.append({"match": title, "response": _enrich_assess(relationship)})
+    return fixtures
+
+
+def _sparse_paper(title: str, doi: str) -> dict[str, Any]:
+    """Title-only record: no year/venue/doi fields so the evidence basis is
+    title_only; the DOI rides in external_identifiers so enrichment can still
+    acquire it by identifier."""
+    return {
+        "title": title,
+        "external_identifiers": [{"scheme": "doi", "value": doi}],
+    }
+
+
+def _abstract_paper(title: str, doi: str, abstract: str) -> dict[str, Any]:
+    return {
+        "title": title,
+        "year": 2020,
+        "venue": "Journal of Platform Studies",
+        "doi": doi,
+        "abstract": abstract,
+    }
+
+
+def _enrichment_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    source_sets: list[dict[str, Any]],
+    reference: dict[str, Any],
+) -> BenchmarkCaseDefinition:
+    titles: list[str] = []
+    for set_cfg in source_sets:
+        for p in set_cfg.get("papers") or []:
+            titles.append(str(p.get("title") or ""))
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "evidence_enrichment",
+            "submission": _rev_claim(
+                "Algorithmic Pricing and Consumer Welfare",
+                "We study how algorithmic pricing shapes welfare in online markets.",
+            ),
+            "source_sets": source_sets,
+            "llm_fixtures": _enrich_fixtures([t for t in titles if t]),
+            "providers": ["semantic_scholar"],
+            "as_of": "2026-08-01",
+            "novelty_config": {
+                "providers": ["semantic_scholar"],
+                "max_queries_per_claim": 4,
+                "acquire_abstract": True,
+                "acquire_full_text": False,
+            },
+        },
+        reference=reference,
+        evaluation_dimensions=["evidence_enrichment"],
+        tags=["evidence", "enrichment", "offline"],
+    )
+
+
+EVIDENCE_ENRICHMENT_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="evidence-enrichment-v1",
+    version=1,
+    name="Evidence Enrichment (Phase 5C-5D)",
+    description=(
+        "Offline benchmark over the real Phase 5C-5D evidence enrichment and "
+        "pre-acquisition pipeline: the real NoveltyValidationService runs "
+        "create_report with enrichment_enabled=True and preacquisition_enabled=True "
+        "over fixture sources whose get() serves acquired abstracts. Verifies "
+        "enrichment grounding, source preservation, unsupported-enrichment "
+        "rejection (never fabricated evidence), stale-enrichment handling across "
+        "a changed source set, and provenance/version correctness."
+    ),
+    category="evidence_enrichment",
+    config={"evaluators": ["evaluator.evidence_enrichment"]},
+    cases=[
+        _enrichment_case(
+            "enc-title-only-enriched",
+            "title-only candidate enriched to abstract",
+            "A sparse title-only candidate with a DOI is enriched to abstract "
+            "evidence via the real provider_get_abstract path.",
+            source_sets=[
+                {
+                    "label": "baseline",
+                    "papers": [
+                        _sparse_paper("Demand Dynamics in Platform Markets", "10.7000/enc-title")
+                    ],
+                    "get_hits": {
+                        "10.7000/enc-title": _abstract_paper(
+                            "Demand Dynamics in Platform Markets",
+                            "10.7000/enc-title",
+                            "We model demand-driven platform dynamics and characterize "
+                            "the equilibrium quantities under demand uncertainty.",
+                        )
+                    },
+                }
+            ],
+            reference={
+                "expected_run_count": 1,
+                "expected_outcomes": ["enriched"],
+                "expected_before_basis": ["title_only"],
+                "expected_after_basis": ["abstract"],
+                "expected_attempt_statuses": ["success"],
+                "expected_grounded": True,
+                "expected_source_preserved": True,
+                "expected_no_invented_evidence": False,
+            },
+        ),
+        _enrichment_case(
+            "enc-indexed-metadata-enriched",
+            "indexed-metadata candidate enriched to abstract",
+            "A candidate with indexed metadata (year/venue) but no abstract is "
+            "enriched to abstract evidence.",
+            source_sets=[
+                {
+                    "label": "baseline",
+                    "papers": [
+                        {
+                            "title": "Platforms and Consumer Surplus",
+                            "year": 2019,
+                            "venue": "Journal of Platform Studies",
+                            "doi": "10.7000/enc-meta",
+                        }
+                    ],
+                    "get_hits": {
+                        "10.7000/enc-meta": _abstract_paper(
+                            "Platforms and Consumer Surplus",
+                            "10.7000/enc-meta",
+                            "We show that platform governance shapes consumer surplus.",
+                        )
+                    },
+                }
+            ],
+            reference={
+                "expected_run_count": 1,
+                "expected_outcomes": ["enriched"],
+                "expected_before_basis": ["indexed_metadata"],
+                "expected_after_basis": ["abstract"],
+                "expected_attempt_statuses": ["success"],
+                "expected_grounded": True,
+                "expected_no_invented_evidence": False,
+            },
+        ),
+        _enrichment_case(
+            "enc-unsupported-rejected",
+            "unsupported enrichment rejected without invented evidence",
+            "The source has no record for the DOI; enrichment fails and no "
+            "fabricated evidence is produced.",
+            source_sets=[
+                {
+                    "label": "baseline",
+                    "papers": [
+                        _sparse_paper("Missing Prior Platform Study", "10.7000/enc-missing")
+                    ],
+                    "get_hits": {},
+                }
+            ],
+            reference={
+                "expected_run_count": 1,
+                "expected_outcomes": ["failed"],
+                "expected_before_basis": ["title_only"],
+                "expected_after_basis": ["title_only"],
+                "expected_attempt_statuses": ["not_found"],
+                "expected_no_invented_evidence": True,
+                "expected_grounded": True,
+            },
+        ),
+        _enrichment_case(
+            "enc-restricted-no-invention",
+            "restricted source rejected without invented evidence",
+            "A rate-limited source never yields fabricated evidence.",
+            source_sets=[
+                {
+                    "label": "baseline",
+                    "papers": [
+                        _sparse_paper("Restricted Platform Study", "10.7000/enc-restricted")
+                    ],
+                    "get_hits": {},
+                    "get_errors": {"10.7000/enc-restricted": "rate_limited"},
+                }
+            ],
+            reference={
+                "expected_run_count": 1,
+                "expected_outcomes": ["failed"],
+                "expected_before_basis": ["title_only"],
+                "expected_after_basis": ["title_only"],
+                "expected_attempt_statuses": ["rate_limited"],
+                "expected_no_invented_evidence": True,
+            },
+        ),
+        _enrichment_case(
+            "enc-preacquisition-upgrades",
+            "pre-acquisition selects and upgrades sparse candidates",
+            "Phase 5D pre-acquisition runs for the high-risk claim, selects "
+            "sparse candidates and upgrades them with acquired abstracts.",
+            source_sets=[
+                {
+                    "label": "baseline",
+                    "papers": [
+                        _sparse_paper("Preacquisition Platform Study A", "10.7000/enc-pa-a"),
+                        _sparse_paper("Preacquisition Platform Study B", "10.7000/enc-pa-b"),
+                    ],
+                    "get_hits": {
+                        "10.7000/enc-pa-a": _abstract_paper(
+                            "Preacquisition Platform Study A",
+                            "10.7000/enc-pa-a",
+                            "We characterize equilibrium platform pricing.",
+                        ),
+                        "10.7000/enc-pa-b": _abstract_paper(
+                            "Preacquisition Platform Study B",
+                            "10.7000/enc-pa-b",
+                            "We analyze platform competition and welfare.",
+                        ),
+                    },
+                }
+            ],
+            reference={
+                "expected_run_count": 1,
+                "expected_outcomes": ["enriched"],
+                "expected_attempt_statuses": ["success"],
+                "expected_grounded": True,
+                "expected_preacquisition": True,
+                "expected_no_invented_evidence": False,
+            },
+        ),
+        _enrichment_case(
+            "enc-source-preservation",
+            "enrichment preserves the original sparse source",
+            "The original sparse paper record remains intact alongside the "
+            "acquired abstract record; provenance links the execution to its "
+            "plan/attempts/identity.",
+            source_sets=[
+                {
+                    "label": "baseline",
+                    "papers": [_sparse_paper("Preserved Sparse Study", "10.7000/enc-preserve")],
+                    "get_hits": {
+                        "10.7000/enc-preserve": _abstract_paper(
+                            "Preserved Sparse Study",
+                            "10.7000/enc-preserve",
+                            "We preserve the original record while enriching it.",
+                        )
+                    },
+                }
+            ],
+            reference={
+                "expected_run_count": 1,
+                "expected_outcomes": ["enriched"],
+                "expected_attempt_statuses": ["success"],
+                "expected_grounded": True,
+                "expected_source_preserved": True,
+            },
+        ),
+        _enrichment_case(
+            "enc-stale-not-reused",
+            "changed source set does not reuse stale enrichment",
+            "When the source set changes so enrichment can no longer succeed, "
+            "a fresh enrichment run fails instead of reusing the previous run's "
+            "enriched execution.",
+            source_sets=[
+                {
+                    "label": "baseline",
+                    "papers": [_sparse_paper("Stale Enrichment Study", "10.7000/enc-stale-a")],
+                    "get_hits": {
+                        "10.7000/enc-stale-a": _abstract_paper(
+                            "Stale Enrichment Study",
+                            "10.7000/enc-stale-a",
+                            "We characterize equilibrium platform pricing.",
+                        )
+                    },
+                },
+                {
+                    "label": "changed",
+                    "papers": [_sparse_paper("Stale Enrichment Study", "10.7000/enc-stale-b")],
+                    "get_hits": {},
+                },
+            ],
+            reference={
+                "expected_run_count": 2,
+                "expected_outcomes": ["enriched", "failed"],
+                "expected_attempt_statuses": ["success", "not_found"],
+                "expected_grounded": True,
+                "expected_executions_differ": True,
+                "expected_no_invented_evidence": False,
+            },
+        ),
+    ],
+)
+
+
+def _routing_entry(
+    candidate_id: str,
+    *,
+    det: float | None = 1.0,
+    benchmark: float = 1.0,
+    cost: float | None = None,
+    cost_per: float | None = None,
+    latency: float | None = None,
+    structured: float | None = 1.0,
+    error: float | None = 0.0,
+    eligibility: str = "eligible",
+    provider: str = "openrouter",
+) -> dict[str, Any]:
+    return {
+        "candidate_id": candidate_id,
+        "model": {
+            "candidate_id": candidate_id,
+            "provider": provider,
+            "requested_model": f"m-{candidate_id}",
+            "structured_output": True,
+        },
+        "resolved_model": f"m-{candidate_id}",
+        "rank": 0,
+        "eligibility": eligibility,
+        "deterministic_pass_rate": det,
+        "benchmark_pass_rate": benchmark,
+        "case_pass_rate": det,
+        "structured_output_success_rate": structured,
+        "model_error_rate": error,
+        "retry_rate": 0.0,
+        "latency_ms_p50": latency,
+        "latency_ms_mean": latency,
+        "latency_ms_p95": latency,
+        "estimated_cost": cost,
+        "cost_per_successful_case": cost_per,
+        "cost_per_successful_benchmark": cost_per,
+        "advisory_score": None,
+        "caveats": [],
+    }
+
+
+def _routing_leaderboard(
+    role: str,
+    entries: list[dict[str, Any]],
+    *,
+    repetitions: int = 1,
+    age_seconds: float | None = None,
+) -> dict[str, Any]:
+    created = (
+        datetime.now(UTC) - timedelta(seconds=age_seconds) if age_seconds else datetime.now(UTC)
+    )
+    return {
+        "id": None,
+        "role": role,
+        "plan_id": "routing-plan",
+        "tournament_run_id": "routing-run",
+        "plan_hash": "routing-hash",
+        "ranking_rules": {},
+        "entries": entries,
+        "created_at": created.isoformat(),
+        "metadata": {"repetitions": repetitions},
+    }
+
+
+def _routing_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    role: str,
+    policy: str,
+    leaderboards: list[dict[str, Any]],
+    reference: dict[str, Any],
+    request: dict[str, Any] | None = None,
+    capabilities: dict[str, Any] | None = None,
+    current_roles: dict[str, Any] | None = None,
+    use_fallback: bool = False,
+    shadow: bool = False,
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "model_routing",
+            "role": role,
+            "policy": policy,
+            "use_fallback": use_fallback,
+            "shadow": shadow,
+            "request": request or {},
+            "leaderboards": leaderboards,
+            "capabilities": capabilities
+            or {"openrouter": {"structured_output": True, "context_length": None}},
+            "current_roles": current_roles or {},
+        },
+        reference=reference,
+        evaluation_dimensions=["model_routing"],
+        tags=["routing", "policy", "offline"],
+    )
+
+
+MODEL_ROUTING_POLICY_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="model-routing-policy-v1",
+    version=1,
+    name="Model Routing Policy (Phase 7C)",
+    description=(
+        "Offline benchmark over the real policy-constrained router (shadow mode "
+        "only). Synthetic RoleLeaderboard fixtures drive decide()/shadow() under "
+        "quality_first / balanced / cost_constrained / latency_constrained "
+        "policies. Verifies eligibility gates, capability compatibility, "
+        "constraint satisfaction, stale/insufficient-evidence handling, "
+        "fallbacks, deterministic tie-breaking, role isolation, and that "
+        "unsafe (ineligible) selections never happen."
+    ),
+    category="model_routing",
+    config={"evaluators": ["evaluator.model_routing"]},
+    cases=[
+        _routing_case(
+            "route-quality-first",
+            "quality-first chooses highest eligible correctness",
+            "Among eligible candidates the quality-first policy selects the "
+            "highest deterministic quality, ignoring a cheaper lower-quality model.",
+            role="reasoning",
+            policy="quality_first",
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("good", det=0.98, latency=120.0, cost=0.01, cost_per=0.02),
+                        _routing_entry(
+                            "cheap", det=0.86, latency=5.0, cost=0.0001, cost_per=0.0002
+                        ),
+                    ],
+                )
+            ],
+            reference={
+                "expected_status": "selected",
+                "expected_selected": "good",
+                "expected_role": "reasoning",
+                "expected_policy": "quality_first",
+                "expected_eligible_count": 2,
+                "expected_no_unsafe": True,
+            },
+        ),
+        _routing_case(
+            "route-cheap-failing-rejected",
+            "cheaper failing model rejected",
+            "A cheap model below the required deterministic quality is rejected "
+            "even though it is far cheaper.",
+            role="reasoning",
+            policy="cost_constrained",
+            request={"required_deterministic_pass_rate": 0.9},
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("good", det=0.95, latency=100.0, cost=0.05, cost_per=0.06),
+                        _routing_entry(
+                            "failing", det=0.7, latency=3.0, cost=0.0001, cost_per=0.0002
+                        ),
+                    ],
+                )
+            ],
+            reference={
+                "expected_status": "selected",
+                "expected_selected": "good",
+                "expected_role": "reasoning",
+                "expected_rejected": ["failing"],
+                "expected_eligible_count": 1,
+            },
+        ),
+        _routing_case(
+            "route-cost-constrained",
+            "cost-constrained chooses cheapest quality-qualified model",
+            "With cost_constrained, the cheapest model that still clears the "
+            "minimum quality gate is selected.",
+            role="reasoning",
+            policy="cost_constrained",
+            request={"required_deterministic_pass_rate": 0.85},
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("premium", det=0.99, latency=200.0, cost=0.1, cost_per=0.12),
+                        _routing_entry("mid", det=0.9, latency=80.0, cost=0.01, cost_per=0.02),
+                        _routing_entry(
+                            "cheap-low", det=0.82, latency=10.0, cost=0.001, cost_per=0.002
+                        ),
+                    ],
+                )
+            ],
+            reference={
+                "expected_status": "selected",
+                "expected_selected": "mid",
+                "expected_rejected": ["cheap-low"],
+                "expected_eligible_count": 2,
+            },
+        ),
+        _routing_case(
+            "route-latency-constrained",
+            "latency-constrained chooses fastest eligible model",
+            "With latency_constrained, the fastest model that clears the quality gate is selected.",
+            role="reasoning",
+            policy="latency_constrained",
+            request={"required_deterministic_pass_rate": 0.85},
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("fast", det=0.87, latency=12.0, cost=0.02, cost_per=0.03),
+                        _routing_entry("slow", det=0.99, latency=400.0, cost=0.1, cost_per=0.12),
+                    ],
+                )
+            ],
+            reference={
+                "expected_status": "selected",
+                "expected_selected": "fast",
+                "expected_eligible_count": 2,
+            },
+        ),
+        _routing_case(
+            "route-structured-output-rejected",
+            "model without structured-output capability rejected",
+            "A candidate whose provider lacks structured-output capability is "
+            "rejected when the request requires structured output.",
+            role="reasoning",
+            policy="quality_first",
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("good", det=0.97, latency=50.0, cost=0.02, cost_per=0.03),
+                        _routing_entry(
+                            "no-so",
+                            det=0.99,
+                            latency=1.0,
+                            cost=0.0001,
+                            cost_per=0.0002,
+                            provider="legacy",
+                        ),
+                    ],
+                )
+            ],
+            capabilities={
+                "openrouter": {"structured_output": True, "context_length": None},
+                "legacy": {"structured_output": False, "context_length": None},
+            },
+            reference={
+                "expected_status": "selected",
+                "expected_selected": "good",
+                "expected_rejected": ["no-so"],
+                "expected_eligible_count": 1,
+            },
+        ),
+        _routing_case(
+            "route-missing-cost",
+            "missing cost handled without invention",
+            "A candidate with unknown cost cannot satisfy a max-cost constraint "
+            "and is rejected (cost is never invented); a priced eligible model "
+            "is selected.",
+            role="reasoning",
+            policy="cost_constrained",
+            request={"max_estimated_cost": 0.05},
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("priced", det=0.9, latency=60.0, cost=0.01, cost_per=0.02),
+                        _routing_entry(
+                            "unknown-cost", det=0.98, latency=30.0, cost=None, cost_per=None
+                        ),
+                    ],
+                )
+            ],
+            reference={
+                "expected_status": "selected",
+                "expected_selected": "priced",
+                "expected_rejected": ["unknown-cost"],
+                "expected_eligible_count": 1,
+            },
+        ),
+        _routing_case(
+            "route-stale-leaderboard",
+            "stale leaderboard rejected",
+            "Evidence older than the configured freshness threshold is treated "
+            "as insufficient evidence, never a silent choice.",
+            role="reasoning",
+            policy="quality_first",
+            request={"leaderboard_max_age_seconds": 100},
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [_routing_entry("old", det=0.98, latency=50.0)],
+                    age_seconds=5000,
+                )
+            ],
+            reference={
+                "expected_status": "insufficient_evidence",
+                "expected_selected": None,
+                "expected_eligible_count": 0,
+            },
+        ),
+        _routing_case(
+            "route-insufficient-repetitions",
+            "insufficient repetitions rejected",
+            "Evidence built from too few repetitions is insufficient evidence.",
+            role="reasoning",
+            policy="quality_first",
+            request={"min_repetitions": 3},
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [_routing_entry("only-one", det=0.98, latency=50.0)],
+                    repetitions=1,
+                )
+            ],
+            reference={
+                "expected_status": "insufficient_evidence",
+                "expected_selected": None,
+                "expected_eligible_count": 0,
+            },
+        ),
+        _routing_case(
+            "route-no-eligible",
+            "no eligible candidate",
+            "When every candidate is below the required quality threshold, no model is selected.",
+            role="reasoning",
+            policy="quality_first",
+            request={"required_deterministic_pass_rate": 0.95},
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("a", det=0.6, latency=10.0),
+                        _routing_entry("b", det=0.7, latency=20.0),
+                    ],
+                )
+            ],
+            reference={
+                "expected_status": "no_eligible_model",
+                "expected_selected": None,
+                "expected_eligible_count": 0,
+                "expected_rejected": ["a", "b"],
+            },
+        ),
+        _routing_case(
+            "route-deterministic-tiebreak",
+            "deterministic tie-breaking",
+            "Identical quality/latency/cost candidates break ties "
+            "deterministically by candidate_id.",
+            role="reasoning",
+            policy="quality_first",
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("beta", det=1.0, latency=10.0, cost=0.01, cost_per=0.02),
+                        _routing_entry("alpha", det=1.0, latency=10.0, cost=0.01, cost_per=0.02),
+                    ],
+                )
+            ],
+            reference={
+                "expected_status": "selected",
+                "expected_selected": "alpha",
+                "expected_tiebreak": "alpha",
+                "expected_eligible_count": 2,
+            },
+        ),
+        _routing_case(
+            "route-fallback",
+            "fallback selection",
+            "With use_fallback, the second-best eligible model is returned as "
+            "the approved fallback and the primary is preserved.",
+            role="reasoning",
+            policy="quality_first",
+            use_fallback=True,
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [
+                        _routing_entry("best", det=0.99, latency=100.0, cost=0.1, cost_per=0.12),
+                        _routing_entry("second", det=0.95, latency=50.0, cost=0.02, cost_per=0.03),
+                        _routing_entry("worst", det=0.5, latency=5.0, cost=0.001, cost_per=0.002),
+                    ],
+                )
+            ],
+            reference={
+                "expected_status": "fallback",
+                "expected_selected": "second",
+                "expected_fallback": "best",
+                "expected_eligible_count": 2,
+            },
+        ),
+        _routing_case(
+            "route-role-isolation",
+            "role isolation: reasoning evidence cannot route a critic task",
+            "A critic routing request must never use reasoning-leaderboard "
+            "evidence; with no critic leaderboard the decision is "
+            "insufficient_evidence.",
+            role="critic",
+            policy="quality_first",
+            leaderboards=[
+                _routing_leaderboard(
+                    "reasoning",
+                    [_routing_entry("reasoning-win", det=0.99, latency=50.0)],
+                )
+            ],
+            reference={
+                "expected_status": "insufficient_evidence",
+                "expected_selected": None,
+                "expected_role": "critic",
+                "expected_eligible_count": 0,
+            },
+        ),
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -7885,4 +8614,6 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     GAP_SELECTION_V1.benchmark_id: GAP_SELECTION_V1,
     NOVELTY_REVALIDATION_V1.benchmark_id: NOVELTY_REVALIDATION_V1,
     PUBLICATION_PACKAGING_V1.benchmark_id: PUBLICATION_PACKAGING_V1,
+    EVIDENCE_ENRICHMENT_V1.benchmark_id: EVIDENCE_ENRICHMENT_V1,
+    MODEL_ROUTING_POLICY_V1.benchmark_id: MODEL_ROUTING_POLICY_V1,
 }

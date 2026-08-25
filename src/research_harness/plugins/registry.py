@@ -499,6 +499,30 @@ def _create_evaluator_publication_packaging() -> Plugin:
     return PublicationPackagingEvaluatorPlugin()
 
 
+def _create_evaluator_evidence_enrichment() -> Plugin:
+    from research_harness.plugins.research.evaluator_evidence_enrichment.plugin import (
+        EvidenceEnrichmentEvaluatorPlugin,
+    )
+
+    return EvidenceEnrichmentEvaluatorPlugin()
+
+
+def _create_evaluator_model_routing() -> Plugin:
+    from research_harness.plugins.research.evaluator_model_routing.plugin import (
+        ModelRoutingEvaluatorPlugin,
+    )
+
+    return ModelRoutingEvaluatorPlugin()
+
+
+def _create_policy_router() -> Plugin:
+    from research_harness.plugins.routing.policy_router.plugin import (
+        PolicyModelRouterPlugin,
+    )
+
+    return PolicyModelRouterPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -603,6 +627,9 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "evaluator.gap_selection": _create_evaluator_gap_selection,
     "evaluator.novelty_revalidation": _create_evaluator_novelty_revalidation,
     "evaluator.publication_packaging": _create_evaluator_publication_packaging,
+    "evaluator.evidence_enrichment": _create_evaluator_evidence_enrichment,
+    "evaluator.model_routing": _create_evaluator_model_routing,
+    "routing.policy_router": _create_policy_router,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

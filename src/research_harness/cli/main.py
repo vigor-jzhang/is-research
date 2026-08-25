@@ -53,6 +53,11 @@ model_evaluation_app.add_typer(tournament_app, name="tournament")
 model_evaluation_app.add_typer(leaderboard_app, name="leaderboard")
 app.add_typer(model_evaluation_app, name="evaluation")
 
+routing_app = typer.Typer(help="Policy-constrained model routing (Phase 7C, shadow mode)")
+routing_policies_app = typer.Typer(help="Routing policies")
+routing_app.add_typer(routing_policies_app, name="policies")
+app.add_typer(routing_app, name="routing")
+
 console = Console()
 
 
@@ -5940,6 +5945,8 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.gap_selection",
         "evaluator.novelty_revalidation",
         "evaluator.publication_packaging",
+        "evaluator.evidence_enrichment",
+        "evaluator.model_routing",
         "storage.blobs_filesystem",
     ):
         if pid not in cfg.plugins:
@@ -6460,6 +6467,152 @@ def leaderboard_inspect(
                 )
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# routing — policy-constrained model routing (Phase 7C, shadow mode)
+# ---------------------------------------------------------------------------
+
+
+def _routing_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
+    cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
+    for pid in ("routing.policy_router",):
+        if pid not in cfg.plugins:
+            cfg.plugins.append(pid)
+    return cfg
+
+
+@routing_app.command("decide")
+def routing_decide(
+    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    policy: Annotated[
+        str,
+        typer.Option(
+            help="Policy id: quality_first | balanced | cost_constrained | latency_constrained"
+        ),
+    ] = "quality_first",
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Compute a routing decision from persisted leaderboard evidence (Phase 7C).
+    Decision support only — the production role model is never changed."""
+    import asyncio
+
+    from research_harness.research.schemas.routing import RoutingRequest
+
+    async def _run() -> None:
+        cfg = _routing_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("policy_model_router.default")
+            decision = await svc.decide(role, policy, RoutingRequest(role=role))
+            console.print(f"[bold]RoutingDecision {decision.id}[/bold]")
+            console.print(
+                f"  role {decision.role}  policy {decision.policy_id}  status [bold]{decision.status.value}[/bold]"
+            )
+            console.print(
+                f"  leaderboard {decision.leaderboard_id}  age {decision.leaderboard_age_seconds}"
+            )
+            console.print(
+                f"  selected: {decision.selected_candidate_id}  fallback: {decision.fallback_candidate_id}"
+            )
+            console.print(
+                f"  expected quality {decision.expected_quality}  latency {decision.expected_latency_ms}  cost {decision.expected_cost}"
+            )
+            console.print(f"  rationale: {decision.rationale}")
+            for a in decision.rejected_candidates:
+                console.print(f"  [yellow]rejected {a.candidate_id}: {a.rejection_reason}[/yellow]")
+
+    asyncio.run(_run())
+
+
+@routing_app.command("shadow")
+def routing_shadow(
+    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    policy: Annotated[str, typer.Option(help="Policy id")] = "quality_first",
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Shadow-mode routing: compute what WOULD be selected and compare against
+    the currently configured role model. No production change happens."""
+    import asyncio
+
+    from research_harness.research.schemas.routing import RoutingRequest
+
+    async def _run() -> None:
+        cfg = _routing_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("policy_model_router.default")
+            decision = await svc.shadow(role, policy, RoutingRequest(role=role))
+            console.print(f"[bold]RoutingDecision {decision.id} (shadow)[/bold]")
+            console.print(
+                f"  role {decision.role}  policy {decision.policy_id}  status {decision.status.value}"
+            )
+            console.print(f"  selected: {decision.selected_candidate_id}")
+            console.print(f"  shadow: {decision.shadow}")
+
+    asyncio.run(_run())
+
+
+@routing_app.command("inspect")
+def routing_inspect(
+    decision: Annotated[str, typer.Argument(help="RoutingDecision artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a persisted routing decision (Phase 7C)."""
+    import asyncio
+
+    from research_harness.research.schemas.routing import RoutingDecision
+
+    async def _run() -> None:
+        cfg = _routing_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            env = await store.get(decision)
+            if env.artifact_type != "routing_decision":
+                console.print(f"[red]artifact {decision!r} is not a routing_decision[/red]")
+                raise typer.Exit(code=1)
+            d = env.parse_payload(RoutingDecision)
+            console.print(f"[bold]RoutingDecision {d.id}[/bold]")
+            console.print(
+                f"  role {d.role}  policy {d.policy_id} (v{d.policy_version})  status {d.status.value}"
+            )
+            console.print(f"  leaderboard {d.leaderboard_id}  policy rules {d.policy_rules}")
+            console.print(
+                f"  selected {d.selected_candidate_id}  fallback {d.fallback_candidate_id}"
+            )
+            console.print(f"  eligible: {[a.candidate_id for a in d.eligible_candidates]}")
+            console.print(f"  rejected: {[a.candidate_id for a in d.rejected_candidates]}")
+            for a in d.rejected_candidates:
+                console.print(f"    - {a.candidate_id}: {a.rejection_reason}")
+            if d.shadow:
+                console.print(f"  shadow: {d.shadow}")
+
+    asyncio.run(_run())
+
+
+@routing_policies_app.command("list")
+def routing_policies_list() -> None:
+    """List the documented routing policies (Phase 7C)."""
+    from research_harness.research.routing.policies import list_policies
+
+    for spec in list_policies():
+        console.print(f"[bold]{spec.policy_id}[/bold] — {spec.name}")
+        console.print(f"  {spec.description}")
+        console.print(f"  gate: {spec.selection_rules.get('gate')}")
+        console.print(f"  rank: {spec.selection_rules.get('rank')}")
 
 
 if __name__ == "__main__":

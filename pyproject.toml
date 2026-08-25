@@ -60,6 +60,7 @@ markers = [
   "live_manuscript: marks tests as live manuscript drafting (requires OPENROUTER_API_KEY + a results package, run with `uv run --env-file .env pytest -m live_manuscript`)",
   "live_publication: marks tests as live publication formatting (requires a manuscript draft; exports are deterministic, run with `uv run --env-file .env pytest -m live_publication`)",
   "live_novelty_validation: marks tests as live novelty validation (requires a submission package + OPENROUTER_API_KEY + provider access, run with `uv run --env-file .env pytest -m live_novelty_validation`)",
+    "live_model_tournament: marks tests as live model tournament (requires OPENROUTER_API_KEY, run with `uv run --env-file .env pytest -m live_model_tournament`)",
 ]
 
 [tool.ruff]

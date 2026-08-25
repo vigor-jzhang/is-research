@@ -54,6 +54,8 @@ ALL_EVALUATORS = [
     "evaluator.gap_selection",
     "evaluator.novelty_revalidation",
     "evaluator.publication_packaging",
+    "evaluator.evidence_enrichment",
+    "evaluator.model_routing",
 ]
 
 
