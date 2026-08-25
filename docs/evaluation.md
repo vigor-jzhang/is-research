@@ -1,4 +1,4 @@
-# Evaluation Harness (Phase 6A–6H)
+# Evaluation Harness (Phase 6A–7A)
 
 Plugin-based evaluation framework that measures research-agent quality
 independently from the production pipeline:
@@ -70,6 +70,10 @@ Evaluators are plugin services registered in the service registry:
 | `evaluator.results_grounding` | deterministic | Results assembly (Phase 6G): finding/condition/proposition/numerical support, gap alignment, novelty, contradiction detection |
 | `evaluator.manuscript_grounding` | deterministic | Manuscript grounding (Phase 6G): claim/citation grounding, conditions, critique recall, revision success |
 | `evaluator.pipeline_integrity` | deterministic | End-to-end pipeline integrity (Phase 6H): stage completion, provenance, grounding, conditions, citations, bibliography fidelity |
+| `evaluator.synthesis` | deterministic | Literature synthesis (Phase 7A): statement grounding, consensus/contradiction/mixed accuracy, multi-paper support, support counts, unsupported-statement rate, hallucinated references |
+| `evaluator.model_specification` | deterministic | Analytical model specification (Phase 7A): symbol table, payoff completeness, decision ownership, timing, information structure, assumption grounding, structural validity, critic issue recall |
+| `evaluator.document_acquisition` | deterministic | Document acquisition (Phase 7A): acquisition/extraction success, failure classification, fallback usage, duplicate-blob reuse, corpus availability |
+| `evaluator.revalidation` | deterministic | Incremental revalidation (Phase 7A): stale-reuse rate, required recomputation, unchanged reuse, provenance-version accuracy |
 | `evaluator.claim_grounding` | model-assisted | Whether candidate assessments are grounded in cited evidence (deterministic guard: no evidence → ungrounded without a model call) |
 | `evaluator.citation_correctness` | deterministic | Placeholder check (6A) or full `manuscript_citation` mode (6B): resolution, map accuracy, dedup, leftovers, invented fields |
 | `evaluator.llm_judge` | model-assisted | Generic rubric-driven judge with structured output |
@@ -672,15 +676,97 @@ numerical disagreement with known expectations.
 - `citation_integrity_rate` 1/1, `bibliography_fidelity_rate` 1/1
 - `deterministic_failure_count` 0, `end_to_end_pass` 1.0
 
+## Literature synthesis benchmark (`literature-synthesis-v1`, Phase 7A)
+
+Drives the real Phase 2G synthesizer over a fixture `EvidenceCorpus` (papers +
+`EvidenceItem` + `PaperResearchProfile`):
+
+```
+EvidenceCorpus → LiteratureSynthesizerService → SynthesisStatement →
+SynthesisTheme → LiteratureSynthesis
+```
+
+8 cases: multi-paper consensus; contradiction preserved with both sides;
+mixed evidence; single-paper observation not treated as consensus;
+boundary-condition pattern; methodological pattern; hallucinated evidence id
+rejected; unsupported (no-paper-mapping) statement rejected. The synthesizer
+deterministically rejects hallucinated ids and paper-less statements, and
+computes support metrics (`support_type`, `papers_supporting`) itself.
+
+### Synthesis metrics (`evaluator.synthesis`)
+
+- `statement_grounding_accuracy` — every supporting/conflicting evidence id exists in the corpus
+- `consensus_accuracy`, `contradiction_accuracy` — expected typed statements produced with the expected type
+- `multi_paper_support_accuracy` — ≥2-paper statements marked `multi_paper`
+- `support_count_accuracy` — `papers_supporting` / `papers_conflicting` match
+- `unsupported_statement_rate` — statements referencing missing evidence ids
+- `hallucinated_reference_count` — distinct missing ids referenced
+
+## Analytical model specification benchmark (`analytical-model-specification-v1`, Phase 7A)
+
+Drives the real Phase 3B pipeline:
+
+```
+SelectedMechanism → ModelBuilderService → FormalAnalyticalModel →
+ModelSpecificationCriticService
+```
+
+9 cases: valid strategic model; undefined symbol; duplicate symbol; invalid
+decision ownership; invalid timing; invalid information structure;
+unsupported literature-backed assumption; missing payoff for a strategic
+actor (by-design deterministic failure detected by `payoff_completeness`);
+critic-detected mechanism/model mismatch.
+
+### Model-specification metrics (`evaluator.model_specification`)
+
+- `symbol_table_accuracy`, `payoff_completeness`, `decision_ownership_accuracy`
+- `timing_accuracy`, `information_structure_accuracy`, `assumption_grounding_accuracy`
+- `structural_validity_accuracy` — produced created/rejected matches the reference
+- `critic_issue_recall` — expected critique issue categories detected
+
+## Document acquisition benchmark (`document-acquisition-v1`, Phase 7A)
+
+Drives the real Phase 2E pipeline with a mocked `httpx` transport (no
+network): metadata locator → HTTP fetcher → blob store → pypdf extractor →
+acquisition orchestrator → `FullTextCorpus`. 8 cases: valid OA PDF; fallback
+location; no location; HTML masquerading as PDF; oversized document;
+restricted/unavailable document; duplicate-blob reuse; insufficient extracted
+text.
+
+### Acquisition metrics (`evaluator.document_acquisition`)
+
+- `acquisition_success_rate`, `extraction_success_rate`
+- `failure_classification_accuracy` — per-paper status matches the reference
+- `fallback_usage_accuracy` — successful acquisition used a non-first location
+- `duplicate_blob_reuse_accuracy` — same location+bytes reuse one acquisition
+- `corpus_availability_accuracy` — available/unavailable/restricted/failed
+
+## Incremental revalidation benchmark (`incremental-revalidation-v1`, Phase 7A)
+
+Drives REAL production services twice per stage (baseline + changed upstream)
+and records whether the downstream execution was recomputed or deterministically
+reused. 7 cases: new ScreeningProtocol → new decisions; superseding
+PaperIdentity → new screening view; model role/config change → new evidence
+execution; changed EvidenceCorpus → new synthesis; changed synthesis → new gap
+analysis; changed model specification → new equilibrium analysis; unchanged
+inputs → deterministic reuse. Any stale reuse of incompatible upstream state is
+a deterministic failure.
+
+### Revalidation metrics (`evaluator.revalidation`)
+
+- `stale_reuse_rate` — changed-upstream stages that reused incompatible state
+- `required_recomputation_accuracy` — changed stages that produced new artifacts
+- `unchanged_reuse_accuracy` — identical stages that reused deterministically
+- `provenance_version_accuracy` — new downstream derived (transitively) from the changed upstream
+
 ## Coverage matrix
 
 `research_harness/research/evaluation_coverage.py` maps every production
 capability → benchmark → evaluator → metrics → deterministic/advisory gating
-→ covered edge cases → known gaps, across all of 6A-6H. Missing coverage is
-explicit: `uncovered_capabilities()` lists capabilities with no dedicated
-benchmark (Phase 3B model builder and Phase 2G synthesis are covered only
-end-to-end; incremental revalidation, packaging, acquisition, and gap
-selection have no benchmark).
+→ covered edge cases → known gaps, across all of 6A-7A (18 benchmarks). Missing
+coverage is explicit: `uncovered_capabilities()` lists capabilities with no
+dedicated benchmark (incremental novelty revalidation, submission packaging,
+ingestion/identity resolution, and gap-selection heuristics).
 
 ## Evaluation readiness
 
@@ -690,16 +776,20 @@ coverage, deterministic gating per benchmark, by-design failing cases, known
 untested behaviors, uncovered capabilities, reproducibility status,
 provenance/reopen coverage, live-test coverage, model-assisted evaluator
 usage) and a deterministic verdict: `ready` / `ready_with_gaps` /
-`not_ready` — never an LLM judgment. Current verdict: `ready_with_gaps`.
+`not_ready` — never an LLM judgment. Current verdict: `ready_with_gaps`
+(all 18 benchmark families deterministically gated; residual gaps are
+non-core, so `ready` is not forced).
 
-## Known limitations (Phase 6A–6H)
+## Known limitations (Phase 6A–7A)
 
-- Benchmarks so far: novelty threat, retrieval, citation, screening,
-  evidence extraction, gap analysis, mechanism development, equilibrium
-  correctness, numerical analysis, comparative statics, proposition
-  correctness, results assembly, manuscript grounding, research-pipeline
-  e2e. Leaderboards, live corpora, model tournaments, automated model
-  selection, and publication-quality scoring are not implemented.
+- Benchmarks: novelty threat, retrieval, citation, screening, evidence
+  extraction, gap analysis, mechanism development, equilibrium correctness,
+  numerical analysis, comparative statics, proposition correctness, results
+  assembly, manuscript grounding, research-pipeline e2e, literature
+  synthesis, analytical model specification, document acquisition, and
+  incremental revalidation. Leaderboards, live corpora, model tournaments,
+  automated model selection, and publication-quality scoring are not
+  implemented.
 - Case pass/fail is gated only by deterministic evaluators; a benchmark with
   only model-assisted evaluators cannot fail a case (by design — LLM judges
   never override deterministic verdicts).
@@ -723,9 +813,10 @@ usage) and a deterministic verdict: `ready` / `ready_with_gaps` /
 
 ## Recommended next increment
 
-Post-Phase-6: the evaluation program is complete with a deterministic
-readiness verdict (`ready_with_gaps`). Recommended work: standalone
-model-builder and synthesis benchmarks (currently e2e-only), incremental
-novelty revalidation coverage, and — once opted in — the first
-leaderboard/model-tournament increment, reusing the frozen harness
+Post-Phase-7A: the evaluation program covers every core pipeline stage with
+deterministic gating; the verdict remains `ready_with_gaps` because
+submission packaging, ingestion/identity resolution, gap-selection heuristics,
+and incremental novelty revalidation still lack dedicated benchmarks. Closing
+those would move the verdict to `ready`; the first leaderboard/model-tournament
+increment would then reuse the frozen harness.
 unchanged.

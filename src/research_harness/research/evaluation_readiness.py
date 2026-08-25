@@ -47,6 +47,10 @@ def _deterministic_evaluators() -> set[str]:
         "evaluator.results_grounding",
         "evaluator.manuscript_grounding",
         "evaluator.pipeline_integrity",
+        "evaluator.synthesis",
+        "evaluator.model_specification",
+        "evaluator.document_acquisition",
+        "evaluator.revalidation",
     }
 
 
@@ -55,14 +59,15 @@ def _known_by_design_failures() -> tuple[str, ...]:
         "research-gap-analysis-v1: gap-unsupported-global-novelty",
         "comparative-statics-v1: cs-incorrect-expected-derivative",
         "results-assembly-v1: res-unsupported-managerial-implication",
+        "analytical-model-specification-v1: model-missing-payoff",
     )
 
 
 def _known_untested_behaviors() -> tuple[str, ...]:
     return (
         "LLM candidate/derivation quality for transcendental equilibria (scripted only)",
-        "live provider corpora and document acquisition",
-        "incremental novelty revalidation",
+        "live provider corpora and live publisher/download endpoints",
+        "incremental novelty revalidation (generic idempotency is benchmarked)",
         "long-document prose quality (advisory-only critique)",
         "publication packaging beyond citation formatting",
     )
@@ -140,9 +145,11 @@ def readiness_report() -> ReadinessResult:
         verdict = "ready_with_gaps"
         narrative = (
             "Deterministic gating is complete across all benchmark families "
-            "and the e2e pipeline passes; known gaps remain (standalone "
-            "model/synthesis coverage, live corpora, revalidation, "
-            "packaging). See uncovered_capabilities."
+            "(18 benchmarks incl. synthesis, model specification, document "
+            "acquisition, and incremental revalidation) and the e2e pipeline "
+            "passes; residual gaps are non-core (submission packaging, "
+            "ingestion/identity resolution, gap-selection heuristics, novelty "
+            "revalidation, live corpora). See uncovered_capabilities."
         )
     else:
         verdict = "ready"

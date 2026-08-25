@@ -77,9 +77,10 @@ def test_readiness_inventories():
 
 def test_readiness_by_design_failures_documented():
     by_design = _known_by_design_failures()
-    assert len(by_design) == 3
+    assert len(by_design) == 4
     assert any("comparative-statics-v1" in c for c in by_design)
     assert any("results-assembly-v1" in c for c in by_design)
+    assert any("analytical-model-specification-v1" in c for c in by_design)
 
 
 def test_readiness_verdict_not_ready_when_e2e_missing():

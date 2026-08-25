@@ -5603,6 +5603,1316 @@ RESEARCH_PIPELINE_E2E_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+# ---------------------------------------------------------------------------
+# literature-synthesis-v1 (Phase 7A): real Phase 2G synthesizer
+# ---------------------------------------------------------------------------
+# The workflow builds a fixture EvidenceCorpus (PaperIdentity + EvidenceItem +
+# PaperResearchProfile + EvidenceCorpus) and drives the REAL
+# LiteratureSynthesizerService. Scripted responses reference case-scoped
+# evidence ids that the workflow rewrites to run-unique ids. The synthesizer
+# deterministically rejects hallucinated evidence ids and statements with no
+# paper mapping, and computes support metrics (support_type, papers_supporting)
+# itself.
+
+_SYN_PROMPT_MARKER = "produce cross-paper synthesis themes and statements"
+
+
+def _syn_evidence(statement: str, *, category: str = "finding") -> dict[str, Any]:
+    return {"statement": statement, "category": category}
+
+
+def _syn_statement(
+    statement: str,
+    stype: str,
+    evidence_ids: list[str],
+    *,
+    conflicting_ids: list[str] | None = None,
+    confidence: float = 0.9,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "statement": statement,
+        "type": stype,
+        "supporting_evidence_ids": evidence_ids,
+        "confidence": confidence,
+    }
+    if conflicting_ids:
+        item["conflicting_evidence_ids"] = conflicting_ids
+    return item
+
+
+def _syn_fixture(
+    statements: list[dict[str, Any]], *, title: str = "synthesis theme"
+) -> dict[str, Any]:
+    return {
+        "match": _SYN_PROMPT_MARKER,
+        "response": {"themes": [{"title": title, "statements": statements}]},
+    }
+
+
+def _synthesis_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    evidence: list[dict[str, Any]],
+    profiles: list[dict[str, Any]],
+    fixtures: list[dict[str, Any]],
+    reference: dict[str, Any],
+) -> BenchmarkCaseDefinition:
+    # rewrite fixture evidence ids `syn-ev-{i}` -> `{case_id}-evidence-{i}` so
+    # the workflow's id map rewrites them to run-unique ids at execution time
+
+    def _scope_ids(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: _scope_ids(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_scope_ids(v) for v in value]
+        if isinstance(value, str):
+            return value.replace("syn-ev-", f"{case_id}-evidence-")
+        return value
+
+    scoped_fixtures = _scope_ids(fixtures)
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "literature_synthesis",
+            "papers": [{"title": p.get("title", f"Paper {i}")} for i, p in enumerate(profiles)],
+            "evidence": evidence,
+            "profiles": profiles,
+            "llm_fixtures": scoped_fixtures,
+            "synthesis_config": {
+                "batch_profiles": 10,
+                "max_batches": 20,
+                "max_model_calls": 100,
+            },
+        },
+        reference=reference,
+        evaluation_dimensions=["synthesis"],
+        tags=["synthesis", "offline"],
+    )
+
+
+LITERATURE_SYNTHESIS_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="literature-synthesis-v1",
+    version=1,
+    name="Literature Synthesis",
+    description=(
+        "Offline benchmark over the real Phase 2G synthesizer: fixture "
+        "EvidenceCorpus (papers + EvidenceItem + PaperResearchProfile) -> "
+        "LiteratureSynthesizerService -> SynthesisStatement / SynthesisTheme / "
+        "LiteratureSynthesis. Metrics: statement grounding, consensus/contradiction/"
+        "mixed accuracy, multi-paper support, support counts, unsupported-statement "
+        "rate, hallucinated references. Hallucinated evidence ids and statements "
+        "with no paper mapping are deterministically rejected."
+    ),
+    category="literature_synthesis",
+    config={"evaluators": ["evaluator.synthesis"]},
+    cases=[
+        _synthesis_case(
+            "syn-multi-paper-consensus",
+            "multi-paper consensus",
+            "Three papers agree; the synthesizer produces a multi-paper consensus "
+            "statement grounded in evidence from all three.",
+            evidence=[
+                _syn_evidence(
+                    "Algorithmic pricing significantly reduces consumer welfare in platform markets."
+                ),
+                _syn_evidence(
+                    "Empirical analysis shows algorithmic pricing lowers consumer welfare."
+                ),
+                _syn_evidence("Consumer welfare declines when sellers deploy algorithmic pricing."),
+            ],
+            profiles=[
+                {"paper_index": 0, "evidence_indexes": [0]},
+                {"paper_index": 1, "evidence_indexes": [1]},
+                {"paper_index": 2, "evidence_indexes": [2]},
+            ],
+            fixtures=[
+                _syn_fixture(
+                    [
+                        _syn_statement(
+                            "Algorithmic pricing consistently reduces consumer welfare across studies.",
+                            "consensus",
+                            ["syn-ev-0", "syn-ev-1", "syn-ev-2"],
+                        )
+                    ],
+                    title="algorithmic pricing and welfare",
+                )
+            ],
+            reference={
+                "expected_statements": [
+                    {
+                        "statement": "Algorithmic pricing consistently reduces consumer welfare across studies.",
+                        "type": "consensus",
+                        "support_type": "multi_paper",
+                        "papers_supporting": 3,
+                    }
+                ],
+                "expected_rejections": 0,
+            },
+        ),
+        _synthesis_case(
+            "syn-contradiction",
+            "contradiction preserved with both sides",
+            "Two papers disagree; the synthesizer must produce a contradiction "
+            "statement citing conflicting evidence from BOTH sides.",
+            evidence=[
+                _syn_evidence(
+                    "Dynamic pricing increases seller collusion in concentrated markets."
+                ),
+                _syn_evidence(
+                    "Dynamic pricing reduces collusion by lowering information symmetry."
+                ),
+            ],
+            profiles=[
+                {"paper_index": 0, "evidence_indexes": [0]},
+                {"paper_index": 1, "evidence_indexes": [1]},
+            ],
+            fixtures=[
+                _syn_fixture(
+                    [
+                        _syn_statement(
+                            "Studies disagree on whether dynamic pricing facilitates collusion.",
+                            "contradiction",
+                            ["syn-ev-0"],
+                            conflicting_ids=["syn-ev-1"],
+                        )
+                    ],
+                    title="dynamic pricing and collusion",
+                )
+            ],
+            reference={
+                "expected_statements": [
+                    {
+                        "statement": "Studies disagree on whether dynamic pricing facilitates collusion.",
+                        "type": "contradiction",
+                        "support_type": "single_paper",
+                        "papers_supporting": 1,
+                        "papers_conflicting": 1,
+                    }
+                ],
+                "expected_rejections": 0,
+            },
+        ),
+        _synthesis_case(
+            "syn-mixed-evidence",
+            "mixed evidence",
+            "Two papers support and one opposes; the synthesizer produces a mixed "
+            "statement citing evidence from both camps.",
+            evidence=[
+                _syn_evidence("Recommendation systems amplify price dispersion in e-commerce."),
+                _syn_evidence("Recommendation systems increase price dispersion across sellers."),
+                _syn_evidence("Recommendation systems dampen price dispersion in large markets."),
+            ],
+            profiles=[
+                {"paper_index": 0, "evidence_indexes": [0]},
+                {"paper_index": 1, "evidence_indexes": [1]},
+                {"paper_index": 2, "evidence_indexes": [2]},
+            ],
+            fixtures=[
+                _syn_fixture(
+                    [
+                        _syn_statement(
+                            "Evidence on recommendation systems and price dispersion is mixed.",
+                            "mixed",
+                            ["syn-ev-0", "syn-ev-1"],
+                            conflicting_ids=["syn-ev-2"],
+                        )
+                    ],
+                    title="recommendation systems and dispersion",
+                )
+            ],
+            reference={
+                "expected_statements": [
+                    {
+                        "statement": "Evidence on recommendation systems and price dispersion is mixed.",
+                        "type": "mixed",
+                        "support_type": "multi_paper",
+                        "papers_supporting": 2,
+                        "papers_conflicting": 1,
+                    }
+                ],
+                "expected_rejections": 0,
+            },
+        ),
+        _synthesis_case(
+            "syn-single-paper-not-consensus",
+            "single-paper observation not treated as consensus",
+            "One paper's observation must not be labeled consensus; the "
+            "deterministic support type stays single_paper.",
+            evidence=[
+                _syn_evidence("A single study documents ad-targeting effects on content diversity.")
+            ],
+            profiles=[
+                {"paper_index": 0, "evidence_indexes": [0]},
+            ],
+            fixtures=[
+                _syn_fixture(
+                    [
+                        _syn_statement(
+                            "Ad targeting reduces content diversity in news platforms.",
+                            "pattern",
+                            ["syn-ev-0"],
+                        )
+                    ],
+                    title="ad targeting and content diversity",
+                )
+            ],
+            reference={
+                "expected_statements": [
+                    {
+                        "statement": "Ad targeting reduces content diversity in news platforms.",
+                        "type": "pattern",
+                        "support_type": "single_paper",
+                        "papers_supporting": 1,
+                    }
+                ],
+                "expected_not_consensus": True,
+                "expected_rejections": 0,
+            },
+        ),
+        _synthesis_case(
+            "syn-boundary-condition-pattern",
+            "boundary-condition pattern",
+            "Two papers observe the same boundary condition; the synthesizer "
+            "produces a boundary_condition statement.",
+            evidence=[
+                _syn_evidence("Platform pricing effects attenuate when switching costs are high."),
+                _syn_evidence("The welfare effect reverses under high switching costs."),
+            ],
+            profiles=[
+                {"paper_index": 0, "evidence_indexes": [0]},
+                {"paper_index": 1, "evidence_indexes": [1]},
+            ],
+            fixtures=[
+                _syn_fixture(
+                    [
+                        _syn_statement(
+                            "Pricing effects depend on the level of consumer switching costs.",
+                            "boundary_condition",
+                            ["syn-ev-0", "syn-ev-1"],
+                        )
+                    ],
+                    title="switching costs boundary",
+                )
+            ],
+            reference={
+                "expected_statements": [
+                    {
+                        "statement": "Pricing effects depend on the level of consumer switching costs.",
+                        "type": "boundary_condition",
+                        "support_type": "multi_paper",
+                        "papers_supporting": 2,
+                    }
+                ],
+                "expected_rejections": 0,
+            },
+        ),
+        _synthesis_case(
+            "syn-methodological-pattern",
+            "methodological pattern",
+            "Two papers share a method; the synthesizer produces a "
+            "methodological_pattern statement.",
+            evidence=[
+                _syn_evidence("The field experiment measures willingness to pay directly."),
+                _syn_evidence(
+                    "A field experiment estimates reservation prices in the same setting."
+                ),
+            ],
+            profiles=[
+                {"paper_index": 0, "evidence_indexes": [0]},
+                {"paper_index": 1, "evidence_indexes": [1]},
+            ],
+            fixtures=[
+                _syn_fixture(
+                    [
+                        _syn_statement(
+                            "Both studies rely on field experiments to elicit willingness to pay.",
+                            "methodological_pattern",
+                            ["syn-ev-0", "syn-ev-1"],
+                        )
+                    ],
+                    title="field experiment methodology",
+                )
+            ],
+            reference={
+                "expected_statements": [
+                    {
+                        "statement": "Both studies rely on field experiments to elicit willingness to pay.",
+                        "type": "methodological_pattern",
+                        "support_type": "multi_paper",
+                        "papers_supporting": 2,
+                    }
+                ],
+                "expected_rejections": 0,
+            },
+        ),
+        _synthesis_case(
+            "syn-hallucinated-evidence-rejected",
+            "hallucinated evidence id rejected",
+            "A statement cites an evidence id not present in the corpus; the "
+            "synthesizer must reject it while keeping valid statements.",
+            evidence=[
+                _syn_evidence(
+                    "Subscription fatigue reduces platform switching in streaming markets."
+                ),
+                _syn_evidence("Platforms offset churn with loyalty bundles."),
+            ],
+            profiles=[
+                {"paper_index": 0, "evidence_indexes": [0]},
+                {"paper_index": 1, "evidence_indexes": [1]},
+            ],
+            fixtures=[
+                _syn_fixture(
+                    [
+                        _syn_statement(
+                            "Subscription fatigue reduces platform switching in streaming markets.",
+                            "consensus",
+                            ["syn-ev-0", "syn-ev-1"],
+                        ),
+                        _syn_statement(
+                            "A fabricated claim citing no real evidence.",
+                            "consensus",
+                            ["syn-ev-0", "syn-ev-999"],
+                        ),
+                    ],
+                    title="subscription fatigue",
+                )
+            ],
+            reference={
+                "expected_statements": [
+                    {
+                        "statement": "Subscription fatigue reduces platform switching in streaming markets.",
+                        "type": "consensus",
+                        "support_type": "multi_paper",
+                        "papers_supporting": 2,
+                    }
+                ],
+                "expected_absent_statements": ["A fabricated claim citing no real evidence."],
+                "expected_rejections": 1,
+            },
+        ),
+        _synthesis_case(
+            "syn-unsupported-statement-rejected",
+            "unsupported synthesis statement rejected",
+            "A statement cites an evidence item that exists in the corpus but is "
+            "attached to no paper profile; the synthesizer must reject it as "
+            "having no paper mapping.",
+            evidence=[
+                _syn_evidence("Personalized pricing lowers consumer trust in online retail."),
+                _syn_evidence("Trust rebounds when firms disclose pricing practices."),
+                _syn_evidence("An orphaned evidence item attached to no profile."),
+            ],
+            profiles=[
+                {"paper_index": 0, "evidence_indexes": [0]},
+                {"paper_index": 1, "evidence_indexes": [1]},
+            ],
+            fixtures=[
+                _syn_fixture(
+                    [
+                        _syn_statement(
+                            "Personalized pricing lowers consumer trust in online retail.",
+                            "consensus",
+                            ["syn-ev-0", "syn-ev-1"],
+                        ),
+                        _syn_statement(
+                            "An unsupported claim anchored only to orphaned evidence.",
+                            "pattern",
+                            ["syn-ev-2"],
+                        ),
+                    ],
+                    title="personalized pricing and trust",
+                )
+            ],
+            reference={
+                "expected_statements": [
+                    {
+                        "statement": "Personalized pricing lowers consumer trust in online retail.",
+                        "type": "consensus",
+                        "support_type": "multi_paper",
+                        "papers_supporting": 2,
+                    }
+                ],
+                "expected_absent_statements": [
+                    "An unsupported claim anchored only to orphaned evidence."
+                ],
+                "expected_rejections": 1,
+            },
+        ),
+    ],
+)
+
+
+# ---------------------------------------------------------------------------
+# analytical-model-specification-v1 (Phase 7A): real Phase 3B builder + critic
+# ---------------------------------------------------------------------------
+# The workflow builds a fixture SelectedMechanism with literature-supported
+# grounding (real synthesis statements) and drives the REAL ModelBuilderService
+# (deterministic structural validation rejects undefined/duplicate symbols,
+# bad decision ownership, invalid timing, invalid information structure,
+# unsupported literature-backed assumptions) plus the REAL
+# ModelSpecificationCriticService. Scripted specs use case-scoped source ids
+# rewritten to run-unique ids.
+
+_MODEL_BUILD_MARKER = "Specify a formal analytical model for the selected mechanism."
+_MODEL_CRITIQUE_MARKER = "Critique the following formal analytical model"
+
+
+def _model_spec_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    spec: dict[str, Any],
+    assumptions_literature: bool = False,
+    expected_rejected: bool = False,
+    expected_failure: str | None = None,
+    expected_model_created: bool = True,
+    expected_payoff_actors: list[str] | None = None,
+    expected_symbols: list[str] | None = None,
+    expected_decision_owners: dict[str, str] | None = None,
+    expected_critique_issues: list[str] | None = None,
+) -> BenchmarkCaseDefinition:
+    fixtures: list[dict[str, Any]] = [
+        {"match": _MODEL_BUILD_MARKER, "response": spec},
+        {
+            "match": _MODEL_CRITIQUE_MARKER,
+            "response": {
+                "issues": [
+                    {
+                        "category": "mechanism_model_mismatch",
+                        "description": "The model's actors do not match the mechanism.",
+                        "severity": "high",
+                        "location": "actors",
+                    }
+                ],
+                "overall_assessment": "fixture critique",
+                "verdict": "revise",
+                "revision_recommendations": ["Align the model actors with the mechanism."],
+            },
+        },
+    ]
+    reference: dict[str, Any] = {
+        "expected_model_created": expected_model_created,
+        "expected_rejected": expected_rejected,
+    }
+    if expected_failure:
+        reference["expected_failure_substring"] = expected_failure
+    if expected_symbols is not None:
+        reference["expected_symbols"] = expected_symbols
+    if expected_payoff_actors is not None:
+        reference["expected_payoff_actors"] = expected_payoff_actors
+    if expected_decision_owners is not None:
+        reference["expected_decision_owners"] = expected_decision_owners
+    if expected_critique_issues is not None:
+        reference["expected_critique_issues"] = expected_critique_issues
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "analytical_model_specification",
+            "spec": spec,
+            "assumptions_literature": assumptions_literature,
+            "mechanism": {
+                "name": "Strategic Pricing Mechanism",
+                "description": "Platforms set prices and consumers respond.",
+                "causal_logic": "A higher price reduces demand and raises margin.",
+                "actors": ["firm"],
+                "strategic_interactions": ["firm price setting"],
+                "information_structure": "complete information",
+                "incentives": ["profit maximization"],
+                "boundary_conditions": ["positive demand"],
+            },
+            "statements": [
+                {
+                    "statement": "Prior work establishes that demand decreases in price for platform markets."
+                }
+            ],
+            "llm_fixtures": fixtures,
+            "model_config": {"max_actors": 8, "max_variables": 40, "max_parameters": 40},
+        },
+        reference=reference,
+        evaluation_dimensions=["model_specification"],
+        tags=["model", "offline"],
+    )
+
+
+def _valid_spec() -> dict[str, Any]:
+    return {
+        "title": "Strategic Pricing and Welfare",
+        "description": "A strategic model of algorithmic pricing and consumer welfare.",
+        "game_type": "static complete information",
+        "actors": [
+            {"actor_id": "firm", "name": "Platform Firm", "role": "pricer", "strategic": True}
+        ],
+        "variables": [
+            {
+                "symbol": "p",
+                "name": "price",
+                "meaning": "platform price",
+                "domain": "R_+",
+                "kind": "decision_variable",
+                "owner_actor_id": "firm",
+            }
+        ],
+        "parameters": [
+            {"symbol": "c", "name": "cost", "meaning": "marginal cost", "domain": "R_+"},
+            {
+                "symbol": "a",
+                "name": "demand intercept",
+                "meaning": "maximum willingness to pay",
+                "domain": "R_+",
+            },
+        ],
+        "assumptions": [
+            {
+                "statement": "Demand decreases linearly in price.",
+                "mathematical_form": {
+                    "expression": "a - p",
+                    "symbols_used": ["p", "a"],
+                    "latex": "a - p",
+                },
+                "knowledge_basis": "modeling_assumption",
+                "restrictiveness": "low",
+            }
+        ],
+        "timing": [
+            {
+                "stage_number": 0,
+                "name": "pricing",
+                "description": "the firm chooses price",
+                "actor_ids": ["firm"],
+            }
+        ],
+        "information_structure": {
+            "items": [
+                {
+                    "actor_id": "firm",
+                    "variable_symbols": [],
+                    "available_at_stage": 0,
+                    "visibility": "public",
+                }
+            ],
+            "uncertainty": [],
+            "summary": "complete information",
+        },
+        "payoffs": [
+            {
+                "actor_id": "firm",
+                "objective_type": "profit",
+                "expression": {
+                    "expression": "(p - c) * (a - p)",
+                    "symbols_used": ["p", "c", "a"],
+                    "latex": "(p-c)(a-p)",
+                },
+                "decision_variables": ["p"],
+                "parameters": ["c", "a"],
+                "constraints": [],
+            }
+        ],
+    }
+
+
+def _adjust_spec(spec: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    updated = json_copy(spec)
+    for key, value in overrides.items():
+        updated[key] = value
+    return updated
+
+
+def json_copy(value: Any) -> Any:
+    import copy
+
+    return copy.deepcopy(value)
+
+
+def _set_payoff_variables(spec: dict[str, Any], variables: list[dict[str, Any]]) -> dict[str, Any]:
+    spec = json_copy(spec)
+    spec["variables"] = variables
+    return spec
+
+
+def _set_timing(spec: dict[str, Any], timing: list[dict[str, Any]]) -> dict[str, Any]:
+    spec = json_copy(spec)
+    spec["timing"] = timing
+    return spec
+
+
+def _set_information(spec: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
+    spec = json_copy(spec)
+    spec["information_structure"] = {
+        "items": items,
+        "uncertainty": [],
+        "summary": "fixture information structure",
+    }
+    return spec
+
+
+def _set_assumptions(spec: dict[str, Any], assumptions: list[dict[str, Any]]) -> dict[str, Any]:
+    spec = json_copy(spec)
+    spec["assumptions"] = assumptions
+    return spec
+
+
+ANALYTICAL_MODEL_SPECIFICATION_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="analytical-model-specification-v1",
+    version=1,
+    name="Analytical Model Specification",
+    description=(
+        "Offline benchmark over the real Phase 3B pipeline: fixture "
+        "SelectedMechanism -> ModelBuilderService -> FormalAnalyticalModel -> "
+        "ModelSpecificationCriticService. Deterministic structural validation "
+        "rejects undefined/duplicate symbols, invalid decision ownership, "
+        "invalid timing, invalid information structures, and unsupported "
+        "literature-backed assumptions; the critic flags mechanism/model "
+        "mismatches."
+    ),
+    category="analytical_model_specification",
+    config={"evaluators": ["evaluator.model_specification"]},
+    cases=[
+        _model_spec_case(
+            "model-valid-strategic",
+            "valid strategic model",
+            "A structurally valid model with grounded assumptions and complete payoffs is created.",
+            spec=_valid_spec(),
+            expected_symbols=["p", "c", "a"],
+            expected_payoff_actors=["firm"],
+            expected_decision_owners={"p": "firm"},
+            expected_critique_issues=["mechanism_model_mismatch"],
+        ),
+        _model_spec_case(
+            "model-undefined-symbol",
+            "undefined symbol",
+            "A payoff expression uses a symbol not declared in variables or "
+            "parameters; the builder must reject the spec.",
+            spec=_adjust_spec(
+                _valid_spec(),
+                payoffs=[
+                    {
+                        "actor_id": "firm",
+                        "objective_type": "profit",
+                        "expression": {
+                            "expression": "(p - c) * (a - p) - t",
+                            "symbols_used": ["p", "c", "a", "t"],
+                            "latex": "(p-c)(a-p)-t",
+                        },
+                        "decision_variables": ["p"],
+                        "parameters": ["c", "a", "t"],
+                        "constraints": [],
+                    }
+                ],
+            ),
+            expected_rejected=True,
+            expected_failure="undefined symbol",
+            expected_model_created=False,
+        ),
+        _model_spec_case(
+            "model-duplicate-symbol",
+            "duplicate symbol",
+            "A variable and a parameter share a symbol; the builder must reject the duplicate.",
+            spec=_set_payoff_variables(
+                _valid_spec(),
+                [
+                    {
+                        "symbol": "c",
+                        "name": "chosen price",
+                        "meaning": "price choice",
+                        "domain": "R_+",
+                        "kind": "decision_variable",
+                        "owner_actor_id": "firm",
+                    }
+                ],
+            ),
+            expected_rejected=True,
+            expected_failure="duplicate symbol",
+            expected_model_created=False,
+        ),
+        _model_spec_case(
+            "model-invalid-decision-ownership",
+            "invalid decision ownership",
+            "A decision variable has no owner actor; the builder must reject it.",
+            spec=_set_payoff_variables(
+                _valid_spec(),
+                [
+                    {
+                        "symbol": "p",
+                        "name": "price",
+                        "meaning": "platform price",
+                        "domain": "R_+",
+                        "kind": "decision_variable",
+                        "owner_actor_id": None,
+                    }
+                ],
+            ),
+            expected_rejected=True,
+            expected_failure="no owner_actor_id",
+            expected_model_created=False,
+        ),
+        _model_spec_case(
+            "model-invalid-timing",
+            "invalid timing",
+            "Timing stages are not sequential from 0; the builder must reject them.",
+            spec=_set_timing(
+                _valid_spec(),
+                [
+                    {
+                        "stage_number": 1,
+                        "name": "pricing",
+                        "description": "wrong start stage",
+                        "actor_ids": ["firm"],
+                    }
+                ],
+            ),
+            expected_rejected=True,
+            expected_failure="sequential",
+            expected_model_created=False,
+        ),
+        _model_spec_case(
+            "model-invalid-information-structure",
+            "invalid information structure",
+            "An information item observes a symbol that is not defined; the "
+            "builder must reject it.",
+            spec=_set_information(
+                _valid_spec(),
+                [
+                    {
+                        "actor_id": "firm",
+                        "variable_symbols": ["ghost"],
+                        "available_at_stage": 0,
+                        "visibility": "public",
+                    }
+                ],
+            ),
+            expected_rejected=True,
+            expected_failure="undefined symbol",
+            expected_model_created=False,
+        ),
+        _model_spec_case(
+            "model-unsupported-literature-assumption",
+            "unsupported literature-backed assumption",
+            "A literature_supported assumption cites an artifact outside the "
+            "mechanism's grounding; the builder must reject it.",
+            spec=_set_assumptions(
+                _valid_spec(),
+                [
+                    {
+                        "statement": "Prior work establishes this demand structure.",
+                        "mathematical_form": {
+                            "expression": "a - p",
+                            "symbols_used": ["p", "a"],
+                            "latex": "a - p",
+                        },
+                        "knowledge_basis": "literature_supported",
+                        "source_ids": ["model-unknown-source"],
+                        "restrictiveness": "low",
+                    }
+                ],
+            ),
+            assumptions_literature=True,
+            expected_rejected=True,
+            expected_failure="unknown artifacts",
+            expected_model_created=False,
+        ),
+        _model_spec_case(
+            "model-missing-payoff",
+            "missing payoff for a strategic actor",
+            "A strategic actor has no payoff function; the model is structurally "
+            "accepted but the payoff-completeness defect is deterministic and "
+            "must be detected.",
+            spec=_adjust_spec(
+                _valid_spec(),
+                actors=[
+                    {
+                        "actor_id": "firm",
+                        "name": "Platform Firm",
+                        "role": "pricer",
+                        "strategic": True,
+                    },
+                    {
+                        "actor_id": "rival",
+                        "name": "Rival Firm",
+                        "role": "pricer",
+                        "strategic": True,
+                    },
+                ],
+                variables=[
+                    {
+                        "symbol": "p",
+                        "name": "price",
+                        "meaning": "platform price",
+                        "domain": "R_+",
+                        "kind": "decision_variable",
+                        "owner_actor_id": "firm",
+                    },
+                    {
+                        "symbol": "r",
+                        "name": "rival price",
+                        "meaning": "rival price",
+                        "domain": "R_+",
+                        "kind": "decision_variable",
+                        "owner_actor_id": "rival",
+                    },
+                ],
+            ),
+            expected_symbols=["p", "c", "a", "r"],
+            expected_payoff_actors=["firm", "rival"],
+            expected_decision_owners={"p": "firm", "r": "rival"},
+            expected_critique_issues=["mechanism_model_mismatch"],
+        ),
+        _model_spec_case(
+            "model-critic-detects-mismatch",
+            "critic detects mechanism/model mismatch",
+            "The critic identifies a mechanism/model mismatch issue on an otherwise valid model.",
+            spec=_valid_spec(),
+            expected_symbols=["p", "c", "a"],
+            expected_payoff_actors=["firm"],
+            expected_decision_owners={"p": "firm"},
+            expected_critique_issues=["mechanism_model_mismatch"],
+        ),
+    ],
+)
+
+
+# ---------------------------------------------------------------------------
+# document-acquisition-v1 (Phase 7A): real Phase 2E acquisition pipeline
+# ---------------------------------------------------------------------------
+# The workflow builds fixture PaperIdentity + PaperRecord (with OA URLs),
+# a ScreenedLiteratureSet, and drives the REAL MetadataLocatorService +
+# HttpFetcherService (mocked HTTP) + PypdfExtractorService +
+# DocumentAcquisitionOrchestratorService -> FullTextCorpus. Case ids are
+# scoped to paper indexes (paper-0, paper-1, ...).
+
+
+def _acq_paper(
+    title: str,
+    *,
+    open_access_url: str | None = None,
+    pdf_url: str | None = None,
+) -> dict[str, Any]:
+    paper: dict[str, Any] = {"title": title}
+    if open_access_url:
+        paper["open_access_url"] = open_access_url
+    if pdf_url:
+        paper["pdf_url"] = pdf_url
+    return paper
+
+
+def _acq_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    papers: list[dict[str, Any]],
+    pdf_body: str = (
+        "This study documents the welfare effects of algorithmic pricing in "
+        "platform markets. We measure consumer surplus, seller profits, and "
+        "total welfare across a range of market conditions, and we report "
+        "robustness checks against alternative demand specifications."
+    ),
+    http_status: int = 200,
+    content_type: str = "application/pdf",
+    content_length: int | None = None,
+    fetch_error: str | None = None,
+    routes: list[dict[str, Any]] | None = None,
+    reference: dict[str, Any],
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "document_acquisition",
+            "papers": papers,
+            "pdf_body": pdf_body,
+            "http_status": http_status,
+            "content_type": content_type,
+            "content_length": content_length,
+            "fetch_error": fetch_error,
+            "routes": routes or [],
+            "acquisition_config": {
+                "max_locations_per_paper": 5,
+                "max_bytes": 52428800,
+                "max_candidates": 100,
+            },
+        },
+        reference=reference,
+        evaluation_dimensions=["acquisition"],
+        tags=["acquisition", "offline"],
+    )
+
+
+DOCUMENT_ACQUISITION_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="document-acquisition-v1",
+    version=1,
+    name="Document Acquisition",
+    description=(
+        "Offline benchmark over the real Phase 2E pipeline with mocked HTTP: "
+        "PaperIdentity -> metadata locator -> HttpFetcherService -> BlobStore -> "
+        "PypdfExtractorService -> FullTextDocument -> DocumentAcquisitionOrchestrator "
+        "-> FullTextCorpus. Deterministic metrics cover acquisition success, "
+        "text extraction, failure classification (HTML-as-PDF, oversized, "
+        "restricted/unavailable, no location), fallback usage, duplicate-blob "
+        "reuse, and corpus availability."
+    ),
+    category="document_acquisition",
+    config={"evaluators": ["evaluator.document_acquisition"]},
+    cases=[
+        _acq_case(
+            "acq-valid-oa-pdf",
+            "valid open-access PDF",
+            "A single paper with a direct OA PDF URL is located, fetched, "
+            "extracted, and added to the corpus.",
+            papers=[
+                _acq_paper(
+                    "Open Access Pricing Study",
+                    open_access_url="https://repository.example.com/paper-oa.pdf",
+                )
+            ],
+            reference={
+                "expected_statuses": {"acq-paper-0": "downloaded"},
+                "expected_corpus_available": ["acq-paper-0"],
+                "expected_corpus_unavailable": [],
+                "expected_corpus_restricted": [],
+            },
+        ),
+        _acq_case(
+            "acq-fallback-location",
+            "fallback location",
+            "The first location returns an invalid document; the pipeline must "
+            "fall back to the second location and succeed.",
+            papers=[
+                _acq_paper(
+                    "Fallback Study",
+                    open_access_url="https://a.example.com/broken.pdf",
+                    pdf_url="https://b.example.com/fallback.pdf",
+                )
+            ],
+            routes=[{"url": "https://a.example.com/broken.pdf", "content_type": "text/html"}],
+            reference={
+                "expected_statuses": {"acq-paper-0": "downloaded"},
+                "expected_corpus_available": ["acq-paper-0"],
+                "expected_corpus_unavailable": [],
+                "expected_corpus_restricted": [],
+                "expected_fallback_used": True,
+            },
+        ),
+        _acq_case(
+            "acq-no-location",
+            "no location",
+            "A paper with no OA URL yields a not_available acquisition and no corpus entry.",
+            papers=[_acq_paper("Closed Access Study")],
+            reference={
+                "expected_statuses": {"acq-paper-0": "not_available"},
+                "expected_corpus_available": [],
+                "expected_corpus_unavailable": ["acq-paper-0"],
+                "expected_corpus_restricted": [],
+            },
+        ),
+        _acq_case(
+            "acq-html-masquerading-as-pdf",
+            "HTML masquerading as PDF",
+            "A location returns an HTML page (login wall) instead of a PDF; the "
+            "fetcher must classify it invalid_content.",
+            papers=[
+                _acq_paper(
+                    "Login Wall Study",
+                    open_access_url="https://publisher.example.com/paper.pdf",
+                )
+            ],
+            content_type="text/html",
+            reference={
+                "expected_statuses": {"acq-paper-0": "invalid_content"},
+                "expected_corpus_available": [],
+                "expected_corpus_unavailable": [],
+                "expected_corpus_restricted": [],
+                "expected_corpus_failed": ["acq-paper-0"],
+            },
+        ),
+        _acq_case(
+            "acq-oversized-document",
+            "oversized document",
+            "The server declares a Content-Length above the budget; the fetcher "
+            "must classify the acquisition too_large without downloading.",
+            papers=[
+                _acq_paper(
+                    "Oversized Study",
+                    open_access_url="https://repository.example.com/huge.pdf",
+                )
+            ],
+            content_length=90000000,
+            reference={
+                "expected_statuses": {"acq-paper-0": "too_large"},
+                "expected_corpus_available": [],
+                "expected_corpus_unavailable": [],
+                "expected_corpus_restricted": [],
+                "expected_corpus_failed": ["acq-paper-0"],
+            },
+        ),
+        _acq_case(
+            "acq-restricted-unavailable",
+            "restricted / unavailable document",
+            "The server responds 404; the fetcher must classify the acquisition not_available.",
+            papers=[
+                _acq_paper(
+                    "Missing Study",
+                    open_access_url="https://repository.example.com/missing.pdf",
+                )
+            ],
+            http_status=404,
+            reference={
+                "expected_statuses": {"acq-paper-0": "not_available"},
+                "expected_corpus_available": [],
+                "expected_corpus_unavailable": ["acq-paper-0"],
+                "expected_corpus_restricted": [],
+            },
+        ),
+        _acq_case(
+            "acq-duplicate-blob",
+            "duplicate blob reuse",
+            "Fetching the same location twice with identical bytes reuses the "
+            "same acquisition (no duplicate blob is created).",
+            papers=[
+                _acq_paper(
+                    "Duplicate Blob Study",
+                    open_access_url="https://repository.example.com/dup.pdf",
+                )
+            ],
+            reference={
+                "expected_statuses": {"acq-paper-0": "downloaded"},
+                "expected_corpus_available": ["acq-paper-0"],
+                "expected_corpus_unavailable": [],
+                "expected_corpus_restricted": [],
+                "expected_duplicate_reuse": True,
+            },
+        ),
+        _acq_case(
+            "acq-insufficient-extracted-text",
+            "insufficient extracted text",
+            "A fetched PDF extracts almost no text; the extractor marks the "
+            "document insufficient_text and it is excluded from the available "
+            "corpus.",
+            papers=[
+                _acq_paper(
+                    "Sparse Text Study",
+                    open_access_url="https://repository.example.com/sparse.pdf",
+                )
+            ],
+            pdf_body="Tiny",
+            reference={
+                "expected_statuses": {"acq-paper-0": "downloaded"},
+                "expected_text_status": {"acq-paper-0": "insufficient_text"},
+                "expected_corpus_available": [],
+                "expected_corpus_unavailable": ["acq-paper-0"],
+                "expected_corpus_restricted": [],
+            },
+        ),
+    ],
+)
+
+
+# ---------------------------------------------------------------------------
+# incremental-revalidation-v1 (Phase 7A): immutable downstream recomputation
+# ---------------------------------------------------------------------------
+# The workflow drives REAL production services twice per stage — once with a
+# baseline input, once with a materially-changed upstream input — and records
+# for each stage whether the downstream execution was recomputed (new artifact)
+# or reused (idempotent). References declare which stages MUST recompute and
+# which MUST reuse, plus the provenance versions involved.
+
+# Stages: screening_protocol, screening_identity, evidence_config, synthesis,
+# gap, equilibrium, unchanged_reuse.
+
+
+def _reval_screening_fixture(decision: str = "include") -> dict[str, Any]:
+    return {
+        "match": "screening papers for a literature review",
+        "response": {
+            "decision": decision,
+            "matched_inclusion_criteria": ["I1"] if decision == "include" else [],
+            "matched_exclusion_criteria": [],
+            "reason_codes": [],
+            "rationale_summary": "fixture screening decision",
+            "confidence": 0.9,
+            "information_sufficiency": "sufficient",
+        },
+    }
+
+
+def _reval_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    stages: list[dict[str, Any]],
+    reference: dict[str, Any],
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "incremental_revalidation",
+            "stages": stages,
+            "llm_fixtures": [
+                {
+                    "match": "designing a title/abstract screening protocol",
+                    "response": {
+                        "objective": "Select studies on algorithmic pricing in digital markets.",
+                        "inclusion_criteria": [
+                            {
+                                "criterion_id": "I1",
+                                "description": "Studies algorithmic pricing effects in digital markets",
+                                "rationale": "Core focus of the review",
+                                "required": True,
+                            }
+                        ],
+                        "exclusion_criteria": [
+                            {
+                                "criterion_id": "E1",
+                                "description": "Purely technical or non-scholarly work",
+                                "rationale": "Out of scope",
+                                "required": False,
+                            }
+                        ],
+                        "decision_rules": "Include if I1 is satisfied and no exclusion criterion matches.",
+                    },
+                },
+                _reval_screening_fixture(),
+                {
+                    "match": "produce cross-paper synthesis themes and statements",
+                    "response": {
+                        "themes": [
+                            {
+                                "title": "synthesis theme",
+                                "statements": [
+                                    {
+                                        "statement": "Algorithmic pricing affects welfare.",
+                                        "type": "consensus",
+                                        "supporting_evidence_ids": ["rev-ev-0", "rev-ev-1"],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                },
+                {
+                    "match": "identify candidate research gaps",
+                    "response": {
+                        "gaps": [
+                            {
+                                "title": "No analytical model links algorithmic pricing to welfare",
+                                "gap_type": "mechanism_gap",
+                                "description": "No included study models how algorithmic pricing affects welfare.",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "match": "Propose a candidate equilibrium for the following game.",
+                    "response": {
+                        "expressions": [
+                            {"variable": "p", "expression": "(10 + c)/2", "symbols_used": ["c"]}
+                        ]
+                    },
+                },
+                {
+                    "match": "The following equilibrium candidate FAILED symbolic verification.",
+                    "response": {
+                        "expressions": [
+                            {"variable": "p", "expression": "(10 + c)/2", "symbols_used": ["c"]}
+                        ]
+                    },
+                },
+            ],
+            "revalidation_config": {"max_model_calls": 500},
+        },
+        reference=reference,
+        evaluation_dimensions=["revalidation"],
+        tags=["revalidation", "offline"],
+    )
+
+
+INCREMENTAL_REVALIDATION_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="incremental-revalidation-v1",
+    version=1,
+    name="Incremental Revalidation",
+    description=(
+        "Offline benchmark verifying immutable downstream invalidation and "
+        "recomputation when upstream artifacts change: a new ScreeningProtocol "
+        "must yield new decisions, a superseding PaperIdentity must yield a new "
+        "screening view, a changed model role/config must yield a new evidence "
+        "execution, a changed EvidenceCorpus must yield new synthesis, a changed "
+        "synthesis must yield new gap analysis, a changed model specification "
+        "must yield new equilibrium analysis, and unchanged inputs must reuse "
+        "deterministically. Any stale reuse of incompatible upstream state is a "
+        "deterministic failure."
+    ),
+    category="incremental_revalidation",
+    config={"evaluators": ["evaluator.revalidation"]},
+    cases=[
+        _reval_case(
+            "rev-new-protocol-new-decisions",
+            "new ScreeningProtocol -> new decisions",
+            "Screening the same candidates with a different approved protocol "
+            "must produce new decisions rather than reuse the old ones.",
+            stages=[{"kind": "screening_protocol"}],
+            reference={"expected_recomputed": ["screening_protocol"], "expected_reused": []},
+        ),
+        _reval_case(
+            "rev-superseding-identity-new-view",
+            "superseding PaperIdentity -> new screening view",
+            "A PaperIdentity superseded by a new identity with different members "
+            "must yield a new screening view for the current identity.",
+            stages=[{"kind": "screening_identity"}],
+            reference={"expected_recomputed": ["screening_identity"], "expected_reused": []},
+        ),
+        _reval_case(
+            "rev-model-config-new-evidence",
+            "model role/config change -> new evidence execution",
+            "Re-running evidence extraction with a materially different model "
+            "role must not reuse the prior execution.",
+            stages=[{"kind": "evidence_config"}],
+            reference={"expected_recomputed": ["evidence_config"], "expected_reused": []},
+        ),
+        _reval_case(
+            "rev-changed-corpus-new-synthesis",
+            "changed EvidenceCorpus -> new synthesis",
+            "Synthesizing a changed EvidenceCorpus must produce a new synthesis, "
+            "not reuse the prior run.",
+            stages=[{"kind": "synthesis"}],
+            reference={"expected_recomputed": ["synthesis"], "expected_reused": []},
+        ),
+        _reval_case(
+            "rev-changed-synthesis-new-gap",
+            "changed synthesis -> new gap analysis",
+            "Analyzing a changed LiteratureSynthesis must produce a new gap "
+            "analysis, not reuse the prior run.",
+            stages=[{"kind": "gap"}],
+            reference={"expected_recomputed": ["gap"], "expected_reused": []},
+        ),
+        _reval_case(
+            "rev-changed-model-new-equilibrium",
+            "changed model specification -> new equilibrium analysis",
+            "Deriving equilibrium from a changed model specification must produce "
+            "a new equilibrium analysis, not reuse the prior run.",
+            stages=[{"kind": "equilibrium"}],
+            reference={"expected_recomputed": ["equilibrium"], "expected_reused": []},
+        ),
+        _reval_case(
+            "rev-unchanged-deterministic-reuse",
+            "unchanged inputs -> deterministic reuse",
+            "Re-running a stage with identical inputs must reuse the prior "
+            "execution deterministically (no duplicate recomputation).",
+            stages=[{"kind": "unchanged_reuse"}],
+            reference={"expected_recomputed": [], "expected_reused": ["unchanged_reuse"]},
+        ),
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -5618,4 +6928,8 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     RESULTS_ASSEMBLY_V1.benchmark_id: RESULTS_ASSEMBLY_V1,
     MANUSCRIPT_GROUNDING_V1.benchmark_id: MANUSCRIPT_GROUNDING_V1,
     RESEARCH_PIPELINE_E2E_V1.benchmark_id: RESEARCH_PIPELINE_E2E_V1,
+    LITERATURE_SYNTHESIS_V1.benchmark_id: LITERATURE_SYNTHESIS_V1,
+    ANALYTICAL_MODEL_SPECIFICATION_V1.benchmark_id: ANALYTICAL_MODEL_SPECIFICATION_V1,
+    DOCUMENT_ACQUISITION_V1.benchmark_id: DOCUMENT_ACQUISITION_V1,
+    INCREMENTAL_REVALIDATION_V1.benchmark_id: INCREMENTAL_REVALIDATION_V1,
 }

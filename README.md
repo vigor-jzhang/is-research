@@ -26,7 +26,7 @@ uv run research-agent config validate configs/example.yaml                   # v
 
 ## How to Use It
 
-Configuration lives in `configs/example.yaml` (62 plugins; see
+Configuration lives in `configs/example.yaml` (66 plugins; see
 [docs/configuration.md](docs/configuration.md)). The research pipeline is
 driven by one CLI command per stage; every command writes immutable,
 provenance-linked artifacts to `.research/artifacts.db`:
@@ -57,7 +57,7 @@ uv run research-agent publication package --manuscript <manuscript_id>
 uv run research-agent novelty validate <submission_package_id>     # report + readiness gate
 uv run research-agent novelty inspect <report-or-gate-id>         # incl. staleness
 
-# Evaluation (Phase 6A-6H): offline benchmarks over production workflows
+# Evaluation (Phase 6A-7A): offline benchmarks over production workflows
 uv run research-agent eval run novelty-threat-v1           # 7 cases: novelty + false-clear
 uv run research-agent eval run literature-retrieval-v1      # 6 cases: precision@k, recall@k, MRR
 uv run research-agent eval run citation-correctness-v1      # 10 cases: citations, bibliography, invented fields
@@ -72,6 +72,10 @@ uv run research-agent eval run proposition-correctness-v1        # 10 cases: mon
 uv run research-agent eval run results-assembly-v1               # 10 cases: findings, contributions, implications, novelty
 uv run research-agent eval run manuscript-grounding-v1           # 11 cases: claims, citations, critique, revision
 uv run research-agent eval run research-pipeline-e2e-v1           # 1 case: the full production chain end to end
+uv run research-agent eval run literature-synthesis-v1            # 8 cases: consensus, contradiction, mixed, patterns, rejection
+uv run research-agent eval run analytical-model-specification-v1  # 9 cases: symbol/timing/ownership validation, critic
+uv run research-agent eval run document-acquisition-v1            # 8 cases: OA PDFs, fallback, HTML-as-PDF, oversized, dedup
+uv run research-agent eval run incremental-revalidation-v1        # 7 cases: recompute-on-change, deterministic reuse
 uv run research-agent eval coverage                                 # coverage matrix: capability -> benchmark -> evaluator
 uv run research-agent eval readiness                               # deterministic evaluation-readiness report
 uv run research-agent eval inspect <run-id>                 # per-evaluator detail
@@ -80,7 +84,7 @@ uv run research-agent eval list
 
 The complete command reference (including kernel commands, `run` demo,
 per-phase options, and all live-test markers) is in
-[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A-6H) is documented
+[docs/cli.md](docs/cli.md). The evaluation harness (Phase 6A-7A) is documented
 in [docs/evaluation.md](docs/evaluation.md).
 
 ## Testing
@@ -102,7 +106,7 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All gates must pass: `696 passed, 19 skipped` (offline), ruff/format/pyright
+All gates must pass: `736 passed, 19 skipped` (offline), ruff/format/pyright
 clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
@@ -132,13 +136,13 @@ src/research_harness/
     research/    # Phase 3A-3E (mechanisms → numerical_analysis)
                  # Phase 4A-4C (results → publication_formatter)
                  # Phase 5A-5D (novelty_validator)
-                 # Phase 6A-6H (evaluation_harness + evaluator.*)
+                 # Phase 6A-7A (evaluation_harness + evaluator.*)
     documents/   # locator_metadata/unpaywall, fetcher_http, extractor_pypdf,
                  # acquisition_orchestrator
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/            # per-phase + architecture/configuration/cli/plugin-authoring docs
-tests/           # unit/ 65, integration/ 35, live/ 16 (opt-in markers)
+tests/           # unit/ 69, integration/ 39, live/ 16 (opt-in markers)
 ```
 
 ## Documentation
@@ -171,6 +175,7 @@ tests/           # unit/ 65, integration/ 35, live/ 16 (opt-in markers)
 - **Phase 6F** — comparative-statics + proposition-correctness benchmarks over the real Phase 3D pipelines (scripted proposition responses, symbolic sign/condition preservation)
 - **Phase 6G** — results-assembly + manuscript-grounding benchmarks over the real Phase 4A/4B pipelines (grounded claims, citations, critique/revision)
 - **Phase 6H** — end-to-end pipeline benchmark (retrieval → … → citation formatting), coverage matrix, deterministic readiness report
+- **Phase 7A** — evaluation gap closure: synthesis, analytical-model specification, document acquisition, and incremental-revalidation benchmarks (deterministic evaluators + coverage/readiness update)
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
 - **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, model tournaments, publication-quality scoring (see the readiness report's uncovered capabilities)
 

@@ -427,6 +427,38 @@ def _create_evaluator_pipeline_integrity() -> Plugin:
     return PipelineIntegrityEvaluatorPlugin()
 
 
+def _create_evaluator_synthesis() -> Plugin:
+    from research_harness.plugins.research.evaluator_synthesis.plugin import (
+        SynthesisEvaluatorPlugin,
+    )
+
+    return SynthesisEvaluatorPlugin()
+
+
+def _create_evaluator_model_specification() -> Plugin:
+    from research_harness.plugins.research.evaluator_model_specification.plugin import (
+        ModelSpecificationEvaluatorPlugin,
+    )
+
+    return ModelSpecificationEvaluatorPlugin()
+
+
+def _create_evaluator_document_acquisition() -> Plugin:
+    from research_harness.plugins.research.evaluator_document_acquisition.plugin import (
+        DocumentAcquisitionEvaluatorPlugin,
+    )
+
+    return DocumentAcquisitionEvaluatorPlugin()
+
+
+def _create_evaluator_revalidation() -> Plugin:
+    from research_harness.plugins.research.evaluator_revalidation.plugin import (
+        RevalidationEvaluatorPlugin,
+    )
+
+    return RevalidationEvaluatorPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -522,6 +554,10 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "evaluator.results_grounding": _create_evaluator_results_grounding,
     "evaluator.manuscript_grounding": _create_evaluator_manuscript_grounding,
     "evaluator.pipeline_integrity": _create_evaluator_pipeline_integrity,
+    "evaluator.synthesis": _create_evaluator_synthesis,
+    "evaluator.model_specification": _create_evaluator_model_specification,
+    "evaluator.document_acquisition": _create_evaluator_document_acquisition,
+    "evaluator.revalidation": _create_evaluator_revalidation,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

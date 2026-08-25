@@ -19,6 +19,9 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from pydantic import BaseModel, Field, field_validator
+
+from research_harness.contracts.evaluator import envelope_payload_dict
 from research_harness.contracts.literature import LiteratureSearchHit, LiteratureSearchPage
 from research_harness.contracts.model import Message, ModelResponse
 from research_harness.kernel.services import ServiceError
@@ -33,6 +36,23 @@ from research_harness.research.schemas.publication import (
 )
 
 _DEFAULT_PRODUCER = "research.evaluation_harness"
+
+
+class RevalidationReportRecord(BaseModel):
+    """Benchmark-only record of per-stage recomputation state (Phase 7A)."""
+
+    benchmark_case_id: str
+    stages: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("benchmark_case_id")
+    @classmethod
+    def validate_non_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("benchmark_case_id must be non-empty")
+        return v
+
+    model_config = {"extra": "forbid"}
 
 
 class BenchmarkError(Exception):
@@ -3019,5 +3039,1144 @@ async def run_e2e_workflow(
     )
     await formatter.format(draft_env.artifact_id, profile_id)
 
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# literature_synthesis workflow (Phase 7A): real Phase 2G synthesizer
+# ---------------------------------------------------------------------------
+
+
+async def run_synthesis_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 2G synthesizer: fixture papers + EvidenceItem +
+    PaperResearchProfile + EvidenceCorpus -> LiteratureSynthesizerService ->
+    SynthesisStatement / SynthesisTheme / LiteratureSynthesis. Evidence ids are
+    run-unique and scripted responses are rewritten so grounding checks always
+    see the fixture context."""
+    from research_harness.plugins.literature.synthesis.plugin import (
+        LiteratureSynthesizerService,
+    )
+    from research_harness.research.schemas.evidence import EvidenceItem, Locator
+    from research_harness.research.schemas.evidence_extraction import EvidenceCorpus
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+    from research_harness.research.schemas.research_profile import PaperResearchProfile
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    id_map: dict[str, str] = {}
+    for i in range(len(case.input.get("evidence") or [])):
+        id_map[f"{case.id}-evidence-{i}"] = f"{case.id}-{run_suffix}-evidence-{i}"
+    for i in range(len(case.input.get("papers") or [])):
+        id_map[f"{case.id}-paper-{i}"] = f"{case.id}-{run_suffix}-paper-{i}"
+    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+
+    paper_ids: list[str] = []
+    for i in range(len(case.input.get("papers") or [])):
+        pid = id_map[f"{case.id}-paper-{i}"]
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=PaperIdentity(
+                    member_paper_artifact_ids=[f"{case.id}-record-{i}"],
+                    canonical_identifiers=[],
+                    resolution_method=ResolutionMethod.manual,
+                    resolution_evidence=[],
+                ),
+                artifact_type="paper_identity",
+                producer=producer,
+                artifact_id=pid,
+            )
+        )
+        paper_ids.append(pid)
+
+    evidence_ids: list[str] = []
+    for i, ev in enumerate(case.input.get("evidence") or []):
+        eid = id_map[f"{case.id}-evidence-{i}"]
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=EvidenceItem(
+                    statement=ev["statement"],
+                    source_artifact_id=f"{case.id}-{run_suffix}-doc-{i}",
+                    category=ev.get("category"),
+                    locator=Locator(page=1, pages=[1]),
+                    extraction_method="model-assisted",
+                    confidence=0.9,
+                ),
+                artifact_type="evidence_item",
+                producer=producer,
+                artifact_id=eid,
+            )
+        )
+        evidence_ids.append(eid)
+
+    profile_ids: list[str] = []
+    for i, prof in enumerate(case.input.get("profiles") or []):
+        paper_id = paper_ids[prof["paper_index"]]
+        pids = [evidence_ids[j] for j in (prof.get("evidence_indexes") or [])]
+        pid = f"{case.id}-{run_suffix}-profile-{i}"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=PaperResearchProfile(
+                    paper_identity_id=paper_id,
+                    full_text_document_id=f"{case.id}-{run_suffix}-doc-{prof['paper_index']}",
+                    evidence_item_ids=pids,
+                    extraction_method="model-assisted",
+                ),
+                artifact_type="paper_research_profile",
+                producer=producer,
+                artifact_id=pid,
+            )
+        )
+        profile_ids.append(pid)
+
+    corpus = EvidenceCorpus(
+        evidence_extraction_execution_id=f"{case.id}-acq-exec",
+        full_text_corpus_id=f"{case.id}-corpus",
+        paper_profile_ids=profile_ids,
+        evidence_item_ids=evidence_ids,
+        documents_without_evidence=[],
+        failed_document_ids=[],
+    )
+    corpus_id = f"{case.id}-{run_suffix}-corpus"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=corpus,
+            artifact_type="evidence_corpus",
+            producer=producer,
+            artifact_id=corpus_id,
+        )
+    )
+
+    synth_config = dict(case.input.get("synthesis_config") or {})
+    synthesizer = LiteratureSynthesizerService(
+        model_router=router,
+        artifact_store=artifact_store,
+        model_role="reasoning",
+        batch_profiles=int(synth_config.get("batch_profiles", 3)),
+        max_batches=int(synth_config.get("max_batches", 20)),
+        max_model_calls=int(synth_config.get("max_model_calls", 100)),
+    )
+    await synthesizer.run(corpus_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# analytical_model_specification workflow (Phase 7A): real Phase 3B pipeline
+# ---------------------------------------------------------------------------
+
+
+async def run_model_specification_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 3B pipeline: fixture SelectedMechanism with
+    literature-supported grounding (real SynthesisStatements) ->
+    ModelBuilderService (deterministic structural validation) ->
+    ModelSpecificationCriticService (scripted critique). Mechanism/statement ids
+    are run-unique and scripted responses are rewritten."""
+    from research_harness.plugins.research.model_builder.plugin import ModelBuilderService
+    from research_harness.plugins.research.model_specification_critic.plugin import (
+        ModelSpecificationCriticService,
+    )
+    from research_harness.research.schemas.mechanism import (
+        GroundingElement,
+        KnowledgeBasis,
+        SelectedMechanism,
+    )
+    from research_harness.research.schemas.synthesis import (
+        SynthesisStatement,
+        SynthesisStatementType,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    id_map: dict[str, str] = {}
+    for i in range(len(case.input.get("statements") or [])):
+        id_map[f"{case.id}-statement-{i}"] = f"{case.id}-{run_suffix}-statement-{i}"
+    id_map[f"{case.id}-mechanism"] = f"{case.id}-{run_suffix}-mechanism"
+    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+
+    statement_ids: list[str] = []
+    for i, st in enumerate(case.input.get("statements") or []):
+        sid = id_map[f"{case.id}-statement-{i}"]
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=SynthesisStatement(
+                    statement=st["statement"],
+                    type=SynthesisStatementType.consensus,
+                    supporting_evidence_ids=[f"{case.id}-evidence-0"],
+                    supporting_paper_identity_ids=[f"{case.id}-paper-0"],
+                    evidence_items_supporting=1,
+                    papers_supporting=1,
+                ),
+                artifact_type="synthesis_statement",
+                producer=producer,
+                artifact_id=sid,
+            )
+        )
+        statement_ids.append(sid)
+
+    mechanism_cfg = case.input.get("mechanism") or {}
+    mechanism = SelectedMechanism(
+        gap_id=f"{case.id}-gap",
+        gap_selection_id=f"{case.id}-selection",
+        mechanism_candidate_id=f"{case.id}-candidate",
+        name=mechanism_cfg.get("name", "Mechanism"),
+        description=mechanism_cfg.get("description", "mechanism description"),
+        causal_logic=mechanism_cfg.get("causal_logic", "causal logic"),
+        actors=list(mechanism_cfg.get("actors") or []),
+        strategic_interactions=list(mechanism_cfg.get("strategic_interactions") or []),
+        information_structure=mechanism_cfg.get("information_structure"),
+        incentives=list(mechanism_cfg.get("incentives") or []),
+        boundary_conditions=list(mechanism_cfg.get("boundary_conditions") or []),
+        grounding=[
+            GroundingElement(
+                element="demand decreases in price",
+                basis=KnowledgeBasis.literature_supported,
+                source_ids=statement_ids,
+            )
+        ],
+    )
+    mechanism_id = id_map[f"{case.id}-mechanism"]
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=mechanism,
+            artifact_type="selected_mechanism",
+            producer=producer,
+            artifact_id=mechanism_id,
+        )
+    )
+
+    builder = ModelBuilderService(
+        model_router=router,
+        artifact_store=artifact_store,
+        model_role="reasoning",
+    )
+    await builder.build(mechanism_id)
+
+    model_envs = [
+        e
+        for e in await artifact_store.list()
+        if e.artifact_id not in before and e.artifact_type == "formal_analytical_model"
+    ]
+    if model_envs:
+        model_env = max(model_envs, key=lambda e: e.created_at)
+        critic = ModelSpecificationCriticService(
+            model_router=router,
+            artifact_store=artifact_store,
+            builder=builder,
+            critic_role="critic",
+            revision_role="reasoning",
+        )
+        await critic.critique(model_env.artifact_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# document_acquisition workflow (Phase 7A): real Phase 2E pipeline (mocked HTTP)
+# ---------------------------------------------------------------------------
+
+
+async def run_acquisition_workflow(
+    *,
+    artifact_store: Any,
+    blob_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 2E pipeline with mocked HTTP: fixture PaperIdentity
+    + PaperRecord (OA URLs) + ScreenedLiteratureSet -> MetadataLocatorService ->
+    HttpFetcherService (mocked httpx) -> PypdfExtractorService ->
+    DocumentAcquisitionOrchestratorService -> FullTextCorpus. All fetches go
+    through a deterministic mocked httpx transport keyed by URL."""
+    import httpx
+
+    from research_harness.plugins.documents.acquisition_orchestrator.plugin import (
+        DocumentAcquisitionOrchestratorService,
+    )
+    from research_harness.plugins.documents.extractor_pypdf.plugin import (
+        PypdfExtractorService,
+    )
+    from research_harness.plugins.documents.fetcher_http.plugin import HttpFetcherService
+    from research_harness.plugins.documents.locator_metadata.plugin import (
+        MetadataLocatorService,
+    )
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+    from research_harness.research.schemas.paper import PaperRecord
+    from research_harness.research.schemas.screening_execution import ScreenedLiteratureSet
+
+    if blob_store is None:
+        raise BenchmarkError(
+            "document_acquisition requires a blob store (compose "
+            "storage.blobs_filesystem or pass one to the harness)"
+        )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+
+    # deterministic mocked HTTP: returns a real (reportlab-generated) PDF for
+    # matching URLs, HTML for routes declared as HTML, and honors declared
+    # sizes / statuses. Per-route overrides win over case-level defaults.
+    def _make_pdf_bytes(body: str) -> bytes:
+        import io
+
+        from reportlab.pdfgen import canvas
+
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf)
+        c.drawString(100, 750, body)
+        c.showPage()
+        c.save()
+        return buf.getvalue()
+
+    pdf_body = case.input.get("pdf_body") or (
+        "This study documents the welfare effects of algorithmic pricing in "
+        "platform markets. We measure consumer surplus, seller profits, and "
+        "total welfare across a range of market conditions."
+    )
+    default_status = int(case.input.get("http_status", 200))
+    default_type = str(case.input.get("content_type", "application/pdf"))
+    content_length = case.input.get("content_length")
+    route_by_url: dict[str, dict[str, Any]] = {}
+    for route in case.input.get("routes") or []:
+        route_by_url[str(route.get("url"))] = route
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        route = route_by_url.get(url, {})
+        status = int(route.get("status", default_status))
+        ctype = str(route.get("content_type", default_type))
+        if status == 404:
+            return httpx.Response(404, request=request)
+        if status >= 400:
+            return httpx.Response(status, request=request)
+        headers: dict[str, str] = {}
+        if content_length is not None:
+            headers["content-length"] = str(content_length)
+        if ctype:
+            headers["content-type"] = ctype
+        if ctype != "application/pdf":
+            body = (
+                b"<!doctype html><html><head><title>login</title></head><body>sign in</body></html>"
+            )
+        else:
+            body = _make_pdf_bytes(pdf_body)
+        return httpx.Response(200, headers=headers, content=body, request=request)
+
+    transport = httpx.MockTransport(_handler)
+    http_client = httpx.AsyncClient(transport=transport, follow_redirects=False)
+
+    # fixture papers + identities with OA URLs
+    paper_ids: list[str] = []
+    identity_ids: list[str] = []
+    for i, p in enumerate(case.input.get("papers") or []):
+        record = PaperRecord(
+            title=p["title"],
+            year=2021,
+            venue="Journal of Platform Studies",
+            open_access_url=p.get("open_access_url"),
+            metadata={} if not p.get("pdf_url") else {"open_access_pdf_url": p["pdf_url"]},
+        )
+        pid = f"{case.id}-{run_suffix}-paper-{i}"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=record,
+                artifact_type="paper_record",
+                producer=producer,
+                artifact_id=pid,
+            )
+        )
+        paper_ids.append(pid)
+        identity = PaperIdentity(
+            member_paper_artifact_ids=[pid],
+            canonical_identifiers=[],
+            resolution_method=ResolutionMethod.manual,
+            resolution_evidence=[],
+        )
+        iid = f"{case.id}-{run_suffix}-identity-{i}"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=identity,
+                artifact_type="paper_identity",
+                producer=producer,
+                artifact_id=iid,
+            )
+        )
+        identity_ids.append(iid)
+
+    screened_set = ScreenedLiteratureSet(
+        screening_execution_id=f"{case.id}-screen-exec",
+        screening_protocol_id=f"{case.id}-protocol",
+        included_identity_ids=identity_ids,
+        excluded_identity_ids=[],
+        uncertain_identity_ids=[],
+    )
+    set_id = f"{case.id}-{run_suffix}-set"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=screened_set,
+            artifact_type="screened_literature_set",
+            producer=producer,
+            artifact_id=set_id,
+        )
+    )
+
+    locator = MetadataLocatorService(artifact_store=artifact_store)
+    extractor = PypdfExtractorService(artifact_store=artifact_store, blob_store=blob_store)
+    fetcher = HttpFetcherService(
+        artifact_store=artifact_store,
+        blob_store=blob_store,
+        http_client=http_client,
+        timeout_seconds=5.0,
+        max_redirects=3,
+        max_bytes=int((case.input.get("acquisition_config") or {}).get("max_bytes", 52428800)),
+    )
+    orchestrator = DocumentAcquisitionOrchestratorService(
+        artifact_store=artifact_store,
+        blob_store=blob_store,
+        fetcher=fetcher,
+        extractor=extractor,
+        metadata_locator=locator,
+        unpaywall_locator=None,
+    )
+    await orchestrator.run(set_id)
+    try:
+        await fetcher.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# incremental_revalidation workflow (Phase 7A): immutable recomputation
+# ---------------------------------------------------------------------------
+
+
+async def run_revalidation_workflow(
+    *,
+    artifact_store: Any,
+    blob_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives REAL production services twice per stage (baseline + changed
+    upstream) and records for each stage whether the downstream execution was
+    recomputed (new artifact id) or deterministically reused (same artifact id).
+    Any stale reuse of incompatible upstream state is recorded as a defect."""
+    from research_harness.plugins.autonomy.configurable.plugin import (
+        ConfigurableAutonomyPolicy,
+    )
+    from research_harness.plugins.literature.evidence_extractor.plugin import (
+        EvidenceExtractorService,
+    )
+    from research_harness.plugins.literature.evidence_orchestrator.plugin import (
+        EvidenceOrchestratorService,
+    )
+    from research_harness.plugins.literature.gap_analyzer.plugin import GapAnalyzerService
+    from research_harness.plugins.literature.screening_orchestrator.plugin import (
+        ScreeningOrchestratorService,
+    )
+    from research_harness.plugins.literature.screening_protocol_builder.plugin import (
+        ScreeningProtocolBuilderService,
+    )
+    from research_harness.plugins.literature.screening_view_builder.plugin import (
+        ScreeningViewBuilderService,
+    )
+    from research_harness.plugins.literature.synthesis.plugin import (
+        LiteratureSynthesizerService,
+    )
+    from research_harness.plugins.literature.title_abstract_screener.plugin import (
+        TitleAbstractScreenerService,
+    )
+    from research_harness.plugins.research.equilibrium_deriver.plugin import (
+        EquilibriumDeriverService,
+    )
+    from research_harness.plugins.research.equilibrium_verifier.plugin import (
+        EquilibriumVerifierService,
+    )
+    from research_harness.research.schemas.evidence import EvidenceCategory, EvidenceItem, Locator
+    from research_harness.research.schemas.evidence_extraction import EvidenceCorpus
+    from research_harness.research.schemas.execution import LiteratureSearchExecution
+    from research_harness.research.schemas.full_text import (
+        FullTextCorpus,
+        FullTextDocument,
+        TextStatus,
+    )
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+    from research_harness.research.schemas.model import (
+        Expression,
+        FormalAnalyticalModel,
+        ModelActor,
+        ModelParameter,
+        ModelTimingStage,
+        ModelVariable,
+        PayoffFunction,
+        SymbolKind,
+    )
+    from research_harness.research.schemas.project import ResearchQuestion
+    from research_harness.research.schemas.research_profile import PaperResearchProfile
+
+    if blob_store is None:
+        raise BenchmarkError("incremental_revalidation requires a blob store")
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    fixtures = case.input.get("llm_fixtures") or []
+    router = FixtureModelRouter(fixtures)
+    autonomy = ConfigurableAutonomyPolicy(mode="high")
+
+    async def _put_model(prefix: str) -> str:
+        model = FormalAnalyticalModel(
+            selected_mechanism_id=f"{prefix}-mech",
+            title="Strategic Pricing",
+            description="A strategic pricing model.",
+            actors=[ModelActor(actor_id="firm", name="Firm")],
+            variables=[
+                ModelVariable(
+                    symbol="p",
+                    name="price",
+                    meaning="price",
+                    domain="R_+",
+                    kind=SymbolKind.decision_variable,
+                    owner_actor_id="firm",
+                )
+            ],
+            parameters=[ModelParameter(symbol="c", name="cost", meaning="cost", domain="R_+")],
+            timing=[
+                ModelTimingStage(
+                    stage_number=0, name="pricing", description="price", actor_ids=["firm"]
+                )
+            ],
+            payoffs=[
+                PayoffFunction(
+                    actor_id="firm",
+                    expression=Expression(expression="(p - c) * (10 - p)", symbols_used=["p", "c"]),
+                    decision_variables=["p"],
+                    parameters=["c"],
+                )
+            ],
+        )
+        mid = f"{prefix}-model"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=model,
+                artifact_type="formal_analytical_model",
+                producer=producer,
+                artifact_id=mid,
+            )
+        )
+        return mid
+
+    async def _put_evidence_corpus(
+        prefix: str, label: str, ev_prefix: str
+    ) -> tuple[str, list[str]]:
+        # EvidenceCorpus fixture (input to Phase 2G synthesis): papers +
+        # EvidenceItem + PaperResearchProfile.
+        ev_ids: list[str] = []
+        profile_ids: list[str] = []
+        for i in range(2):
+            pid = f"{prefix}-paper-{i}"
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=PaperIdentity(
+                        member_paper_artifact_ids=[f"{prefix}-record-{i}"],
+                        canonical_identifiers=[],
+                        resolution_method=ResolutionMethod.manual,
+                        resolution_evidence=[],
+                    ),
+                    artifact_type="paper_identity",
+                    producer=producer,
+                    artifact_id=pid,
+                )
+            )
+            eid = f"{prefix}-{ev_prefix}-evidence-{i}"
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=EvidenceItem(
+                        statement=f"{label} evidence statement {i}.",
+                        source_artifact_id=f"{prefix}-doc-{i}",
+                        category=EvidenceCategory.finding,
+                        locator=Locator(page=1, pages=[1]),
+                        extraction_method="model-assisted",
+                        confidence=0.9,
+                    ),
+                    artifact_type="evidence_item",
+                    producer=producer,
+                    artifact_id=eid,
+                )
+            )
+            ev_ids.append(eid)
+            prid = f"{prefix}-profile-{i}"
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=PaperResearchProfile(
+                        paper_identity_id=pid,
+                        full_text_document_id=f"{prefix}-doc-{i}",
+                        evidence_item_ids=[eid],
+                        extraction_method="model-assisted",
+                    ),
+                    artifact_type="paper_research_profile",
+                    producer=producer,
+                    artifact_id=prid,
+                )
+            )
+            profile_ids.append(prid)
+        corpus = EvidenceCorpus(
+            evidence_extraction_execution_id=f"{prefix}-acq-exec",
+            full_text_corpus_id=f"{prefix}-corpus",
+            paper_profile_ids=profile_ids,
+            evidence_item_ids=ev_ids,
+            documents_without_evidence=[],
+            failed_document_ids=[],
+        )
+        cid = f"{prefix}-corpus"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=corpus,
+                artifact_type="evidence_corpus",
+                producer=producer,
+                artifact_id=cid,
+            )
+        )
+        return cid, ev_ids
+
+    async def _put_full_text_corpus(prefix: str, label: str) -> str:
+        # FullTextCorpus fixture (input to Phase 2F evidence extraction):
+        # PaperIdentity + FullTextDocument with a blob-backed text page.
+        pid = f"{prefix}-paper-0"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=PaperIdentity(
+                    member_paper_artifact_ids=[f"{prefix}-record-0"],
+                    canonical_identifiers=[],
+                    resolution_method=ResolutionMethod.manual,
+                    resolution_evidence=[],
+                ),
+                artifact_type="paper_identity",
+                producer=producer,
+                artifact_id=pid,
+            )
+        )
+        text_blob = await blob_store.put_bytes(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "pages": [{"page": 1, "text": f"{label} page text for evidence extraction."}],
+                },
+                sort_keys=True,
+            ).encode(),
+            media_type="application/json",
+        )
+        source_blob = await blob_store.put_bytes(
+            b"%PDF-1.4 benchmark", media_type="application/pdf"
+        )
+        ftd = FullTextDocument(
+            paper_identity_id=pid,
+            document_acquisition_id=f"{prefix}-acq",
+            source_blob=source_blob,
+            text_blob=text_blob,
+            extractor="documents.extractor.pypdf",
+            page_count=1,
+            pages_with_text=1,
+            character_count=len(f"{label} page text for evidence extraction."),
+            text_status=TextStatus.extracted,
+        )
+        doc_id = f"{prefix}-doc-0"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=ftd,
+                artifact_type="full_text_document",
+                producer=producer,
+                artifact_id=doc_id,
+            )
+        )
+        corpus = FullTextCorpus(
+            document_acquisition_execution_id=f"{prefix}-acq-exec",
+            screened_literature_set_id=f"{prefix}-set",
+            available_document_ids=[doc_id],
+            unavailable_identity_ids=[],
+            restricted_identity_ids=[],
+            failed_identity_ids=[],
+        )
+        cid = f"{prefix}-corpus"
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=corpus,
+                artifact_type="full_text_corpus",
+                producer=producer,
+                artifact_id=cid,
+            )
+        )
+        return cid
+
+    async def _run_synthesis(prefix: str, label: str, ev_prefix: str) -> tuple[str, str]:
+        """Create a fixture EvidenceCorpus and run the real synthesizer with a
+        corpus-scoped router, returning (corpus_id, synthesis_id)."""
+        corpus_id, ev_ids = await _put_evidence_corpus(prefix, label, ev_prefix)
+        id_map = {f"{case.id}-rev-{ev_prefix}-ev-{i}": eid for i, eid in enumerate(ev_ids)}
+        syn_fixtures = [
+            {
+                "match": label,
+                "response": {
+                    "themes": [
+                        {
+                            "title": f"{label} theme",
+                            "statements": [
+                                {
+                                    "statement": f"{label} consensus statement.",
+                                    "type": "consensus",
+                                    "supporting_evidence_ids": [
+                                        f"{case.id}-rev-{ev_prefix}-ev-0",
+                                        f"{case.id}-rev-{ev_prefix}-ev-1",
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        ]
+        synthesizer = LiteratureSynthesizerService(
+            model_router=FixtureModelRouter(_rewrite_ids(syn_fixtures, id_map)),
+            artifact_store=artifact_store,
+            model_role="reasoning",
+            batch_profiles=10,
+            max_batches=20,
+            max_model_calls=100,
+        )
+        await synthesizer.run(corpus_id)
+        syn_env = next(
+            (
+                e
+                for e in await artifact_store.list()
+                if e.artifact_id not in before
+                and e.artifact_type == "literature_synthesis"
+                and envelope_payload_dict(e).get("evidence_corpus_id") == corpus_id
+            ),
+            None,
+        )
+        if syn_env is None:
+            raise BenchmarkError(f"revalidation synthesis stage produced no synthesis ({prefix})")
+        return corpus_id, syn_env.artifact_id
+
+    def _gap_fixtures() -> list[dict[str, Any]]:
+        return [
+            {
+                "match": "identify candidate research gaps",
+                "response": {
+                    "gaps": [
+                        {
+                            "title": "No analytical model links algorithmic pricing to welfare",
+                            "gap_type": "mechanism_gap",
+                            "description": "No included study models how algorithmic pricing affects welfare.",
+                            "evidence_strength": 0.6,
+                            "research_importance": 0.7,
+                            "theoretical_relevance": 0.6,
+                            "analytical_model_potential": 0.8,
+                            "tractability": 0.7,
+                            "model_domains": ["pricing"],
+                            "model_opportunity_rationale": "closed-form pricing model",
+                        }
+                    ]
+                },
+            }
+        ]
+
+    results: dict[str, dict[str, Any]] = {}
+    for stage in case.input.get("stages") or []:
+        kind = stage["kind"]
+        state: dict[str, Any] = {"kind": kind}
+        if kind == "screening_protocol":
+            # new protocol -> new decisions
+            rq = ResearchQuestion(
+                question="Which studies examine algorithmic pricing? rev-protocol",
+                motivation="fixture",
+                scope="fixture",
+            )
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=rq,
+                    artifact_type="research_question",
+                    producer=producer,
+                    artifact_id=f"{case.id}-{run_suffix}-rq",
+                )
+            )
+            builder = ScreeningProtocolBuilderService(
+                model_router=router,
+                artifact_store=artifact_store,
+                autonomy_policy=autonomy,
+                model_role="reasoning",
+            )
+            protocol_a = await builder.build(f"{case.id}-{run_suffix}-rq")
+            protocol_b = await builder.build(f"{case.id}-{run_suffix}-rq")
+
+            # candidate identities for both screens
+            pid = f"{case.id}-{run_suffix}-paper-0"
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=PaperRecord(
+                        title="Algorithmic Pricing Study",
+                        year=2021,
+                        venue="Journal",
+                        abstract="Algorithmic pricing effects.",
+                    ),
+                    artifact_type="paper_record",
+                    producer=producer,
+                    artifact_id=pid,
+                )
+            )
+            iid = f"{case.id}-{run_suffix}-identity-0"
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=PaperIdentity(
+                        member_paper_artifact_ids=[pid],
+                        canonical_identifiers=[],
+                        resolution_method=ResolutionMethod.manual,
+                        resolution_evidence=[],
+                    ),
+                    artifact_type="paper_identity",
+                    producer=producer,
+                    artifact_id=iid,
+                )
+            )
+            search_exec = LiteratureSearchExecution(
+                strategy_artifact_id=f"{case.id}-strategy",
+                query_artifact_ids=[],
+                paper_identity_artifact_ids=[iid],
+                counts={},
+            )
+            sexec_id = f"{case.id}-{run_suffix}-search-exec"
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=search_exec,
+                    artifact_type="literature_search_execution",
+                    producer=producer,
+                    artifact_id=sexec_id,
+                )
+            )
+            orchestrator = ScreeningOrchestratorService(
+                artifact_store=artifact_store,
+                view_builder=ScreeningViewBuilderService(artifact_store=artifact_store),
+                screener=TitleAbstractScreenerService(
+                    model_router=router, artifact_store=artifact_store, model_role="fast"
+                ),
+                autonomy_policy=autonomy,
+                max_candidates=100,
+                max_model_calls=500,
+            )
+            await orchestrator.screen(sexec_id, protocol_a)
+            decisions_a = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "screening_decision"
+            ]
+            execs_a = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "screening_execution"
+            ]
+            await orchestrator.screen(sexec_id, protocol_b)
+            decisions_b = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "screening_decision"
+            ]
+            execs_b = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "screening_execution"
+            ]
+            new_decisions = [d for d in decisions_b if d not in decisions_a]
+            state["protocol_a"] = protocol_a
+            state["protocol_b"] = protocol_b
+            state["upstream_b"] = protocol_b
+            state["decision_count_a"] = len(decisions_a)
+            state["decision_count_b"] = len(decisions_b)
+            state["new_decisions"] = len(new_decisions)
+            state["downstream_a"] = execs_a[-1] if execs_a else None
+            state["downstream_b"] = execs_b[-1] if execs_b else None
+            state["recomputed"] = (
+                bool(execs_b) and (not execs_a or execs_a[-1] != execs_b[-1])
+            ) and len(new_decisions) > 0
+        elif kind == "screening_identity":
+            # superseding identity -> new screening view for the current identity
+            pid_a = f"{case.id}-{run_suffix}-pa"
+            pid_b = f"{case.id}-{run_suffix}-pb"
+            for _idx, (apid, title) in enumerate(
+                [(pid_a, "Identity A Study"), (pid_b, "Identity B Study")]
+            ):
+                await artifact_store.put(
+                    ArtifactEnvelope.create(
+                        payload=PaperRecord(
+                            title=title, year=2021, venue="Journal", abstract="abstract"
+                        ),
+                        artifact_type="paper_record",
+                        producer=producer,
+                        artifact_id=apid,
+                    )
+                )
+            ia = f"{case.id}-{run_suffix}-ia"
+            ib = f"{case.id}-{run_suffix}-ib"
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=PaperIdentity(
+                        member_paper_artifact_ids=[pid_a],
+                        canonical_identifiers=[],
+                        resolution_method=ResolutionMethod.manual,
+                        resolution_evidence=[],
+                    ),
+                    artifact_type="paper_identity",
+                    producer=producer,
+                    artifact_id=ia,
+                )
+            )
+            await artifact_store.put(
+                ArtifactEnvelope.create(
+                    payload=PaperIdentity(
+                        member_paper_artifact_ids=[pid_a, pid_b],
+                        canonical_identifiers=[],
+                        resolution_method=ResolutionMethod.manual,
+                        resolution_evidence=[],
+                    ),
+                    artifact_type="paper_identity",
+                    producer=producer,
+                    artifact_id=ib,
+                )
+            )
+            view_builder = ScreeningViewBuilderService(artifact_store=artifact_store)
+            view_a = await view_builder.build(ia)
+            view_b = await view_builder.build(ib)
+            state["view_a"] = view_a
+            state["view_b"] = view_b
+            state["view_reused"] = view_a == view_b
+            state["upstream_b"] = ib
+            state["downstream_a"] = view_a
+            state["downstream_b"] = view_b
+            state["recomputed"] = view_a != view_b
+        elif kind == "evidence_config":
+            # changed model role/config -> new evidence execution
+            corpus_id = await _put_full_text_corpus(
+                f"{case.id}-{run_suffix}-corpusA", "pricing evidence baseline"
+            )
+            evidence_fixtures = [
+                {
+                    "match": "pricing evidence baseline page text",
+                    "response": {"items": []},
+                }
+            ]
+            extractor = EvidenceExtractorService(
+                model_router=FixtureModelRouter(evidence_fixtures),
+                artifact_store=artifact_store,
+                blob_store=blob_store,
+                model_role="reasoning",
+            )
+            orch_a = EvidenceOrchestratorService(
+                artifact_store=artifact_store,
+                blob_store=blob_store,
+                extractor=extractor,
+                model_role="reasoning",
+                pages_per_chunk=4,
+            )
+            await orch_a.run(corpus_id)
+            exec_a = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before
+                and e.artifact_type == "evidence_extraction_execution"
+            ][-1]
+            orch_b = EvidenceOrchestratorService(
+                artifact_store=artifact_store,
+                blob_store=blob_store,
+                extractor=extractor,
+                model_role="reasoning",
+                pages_per_chunk=2,
+            )
+            await orch_b.run(corpus_id)
+            exec_b = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before
+                and e.artifact_type == "evidence_extraction_execution"
+            ][-1]
+            state["execution_a"] = exec_a
+            state["execution_b"] = exec_b
+            state["upstream_b"] = corpus_id
+            state["downstream_a"] = exec_a
+            state["downstream_b"] = exec_b
+            state["recomputed"] = exec_a != exec_b
+        elif kind == "synthesis":
+            # changed EvidenceCorpus -> new synthesis
+            corpus_a, syn_a = await _run_synthesis(
+                f"{case.id}-{run_suffix}-synA", "baseline", "eva"
+            )
+            corpus_b, syn_b = await _run_synthesis(f"{case.id}-{run_suffix}-synB", "changed", "evb")
+            state["synthesis_a"] = syn_a
+            state["synthesis_b"] = syn_b
+            state["upstream_b"] = corpus_b
+            state["downstream_a"] = syn_a
+            state["downstream_b"] = syn_b
+            state["recomputed"] = syn_a != syn_b
+        elif kind == "gap":
+            # changed synthesis -> new gap analysis
+            corpus_a, syn_a = await _run_synthesis(
+                f"{case.id}-{run_suffix}-gapA", "baseline", "gapa"
+            )
+            corpus_b, syn_b = await _run_synthesis(
+                f"{case.id}-{run_suffix}-gapB", "changed", "gapb"
+            )
+            analyzer = GapAnalyzerService(
+                model_router=FixtureModelRouter(_gap_fixtures()),
+                artifact_store=artifact_store,
+                model_role="reasoning",
+            )
+            await analyzer.run(syn_a, corpus_a)
+            gap_a = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "gap_analysis"
+            ][-1]
+            await analyzer.run(syn_b, corpus_b)
+            gap_b = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "gap_analysis"
+            ][-1]
+            state["gap_a"] = gap_a
+            state["gap_b"] = gap_b
+            state["upstream_b"] = syn_b
+            state["downstream_a"] = gap_a
+            state["downstream_b"] = gap_b
+            state["recomputed"] = gap_a != gap_b
+        elif kind == "equilibrium":
+            # changed model specification -> new equilibrium analysis
+            model_a = await _put_model(f"{case.id}-{run_suffix}-eqA")
+            verifier = EquilibriumVerifierService(artifact_store=artifact_store)
+            deriver_a = EquilibriumDeriverService(
+                model_router=router,
+                artifact_store=artifact_store,
+                verifier=verifier,
+                model_role="reasoning",
+                revision_role="reasoning",
+                max_revisions=2,
+                max_llm_calls=10,
+            )
+            await deriver_a.derive(model_a)
+            eq_a = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "equilibrium_analysis"
+            ][-1]
+            model_b = await _put_model(f"{case.id}-{run_suffix}-eqB")
+            await deriver_a.derive(model_b)
+            eq_b = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "equilibrium_analysis"
+            ][-1]
+            state["model_a"] = model_a
+            state["model_b"] = model_b
+            state["analysis_a"] = eq_a
+            state["analysis_b"] = eq_b
+            state["upstream_b"] = model_b
+            state["downstream_a"] = eq_a
+            state["downstream_b"] = eq_b
+            state["recomputed"] = eq_a != eq_b
+        elif kind == "unchanged_reuse":
+            # identical inputs -> deterministic reuse
+            corpus_id, ev_ids = await _put_evidence_corpus(
+                f"{case.id}-{run_suffix}-reuse", "baseline", "ev"
+            )
+            id_map = {f"{case.id}-rev-ev-{i}": eid for i, eid in enumerate(ev_ids)}
+            reuse_fixtures = [
+                {
+                    "match": "baseline",
+                    "response": {
+                        "themes": [
+                            {
+                                "title": "synthesis theme",
+                                "statements": [
+                                    {
+                                        "statement": "Algorithmic pricing affects welfare.",
+                                        "type": "consensus",
+                                        "supporting_evidence_ids": [
+                                            f"{case.id}-rev-ev-0",
+                                            f"{case.id}-rev-ev-1",
+                                        ],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                }
+            ]
+            synthesizer = LiteratureSynthesizerService(
+                model_router=FixtureModelRouter(_rewrite_ids(reuse_fixtures, id_map)),
+                artifact_store=artifact_store,
+                model_role="reasoning",
+                batch_profiles=10,
+                max_batches=20,
+                max_model_calls=100,
+            )
+            await synthesizer.run(corpus_id)
+            syn_1 = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "literature_synthesis"
+            ][-1]
+            exec_1 = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "synthesis_execution"
+            ][-1]
+            await synthesizer.run(corpus_id)
+            syn_2 = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "literature_synthesis"
+            ][-1]
+            exec_2 = [
+                e.artifact_id
+                for e in await artifact_store.list()
+                if e.artifact_id not in before and e.artifact_type == "synthesis_execution"
+            ][-1]
+            state["synthesis_1"] = syn_1
+            state["synthesis_2"] = syn_2
+            state["execution_1"] = exec_1
+            state["execution_2"] = exec_2
+            state["upstream_b"] = corpus_id
+            state["downstream_a"] = exec_1
+            state["downstream_b"] = exec_2
+            state["reused"] = syn_2 == syn_1
+            state["execution_reused"] = exec_2 == exec_1
+        else:
+            raise BenchmarkError(f"unknown revalidation stage {kind!r}")
+        results[kind] = state
+
+    # persist the stage-revalidation record artifact for the evaluator
+    reval_id = f"{case.id}-{run_suffix}-revalidation"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=RevalidationReportRecord(
+                benchmark_case_id=case.id,
+                stages=results,
+            ),
+            artifact_type="revalidation_report",
+            producer=producer,
+            artifact_id=reval_id,
+        )
+    )
     after = await artifact_store.list()
     return [e for e in after if e.artifact_id not in before]

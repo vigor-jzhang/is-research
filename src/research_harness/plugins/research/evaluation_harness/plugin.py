@@ -23,6 +23,7 @@ from research_harness.research.benchmarks import BenchmarkDefinition
 from research_harness.research.benchmarks.workflows import (
     BenchmarkError,
     FixtureModelRouter,
+    run_acquisition_workflow,
     run_citation_workflow,
     run_comparative_statics_workflow,
     run_e2e_workflow,
@@ -31,12 +32,15 @@ from research_harness.research.benchmarks.workflows import (
     run_gap_workflow,
     run_manuscript_grounding_workflow,
     run_mechanism_workflow,
+    run_model_specification_workflow,
     run_novelty_workflow,
     run_numerical_workflow,
     run_proposition_workflow,
     run_results_assembly_workflow,
     run_retrieval_workflow,
+    run_revalidation_workflow,
     run_screening_workflow,
+    run_synthesis_workflow,
 )
 from research_harness.research.envelope import ArtifactEnvelope
 from research_harness.research.provenance.relations import ProvenanceLink, ProvenanceRelation
@@ -456,6 +460,36 @@ class EvaluationHarnessService:
                 producer=self._producer,
             )
             return produced, None
+        if workflow == "literature_synthesis":
+            produced = await run_synthesis_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "analytical_model_specification":
+            produced = await run_model_specification_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "document_acquisition":
+            produced = await run_acquisition_workflow(
+                artifact_store=self._store,
+                blob_store=self._blob_store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "incremental_revalidation":
+            produced = await run_revalidation_workflow(
+                artifact_store=self._store,
+                blob_store=self._blob_store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         raise BenchmarkError(f"unsupported benchmark workflow {workflow!r}")
 
     async def _evaluate_case(
@@ -760,6 +794,10 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.results_grounding",
                 "evaluator.manuscript_grounding",
                 "evaluator.pipeline_integrity",
+                "evaluator.synthesis",
+                "evaluator.model_specification",
+                "evaluator.document_acquisition",
+                "evaluator.revalidation",
             ],
             optional_requires=["blob_store.default"],
         )
@@ -794,6 +832,10 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.results_grounding": ctx.require("evaluator.results_grounding"),
                 "evaluator.manuscript_grounding": ctx.require("evaluator.manuscript_grounding"),
                 "evaluator.pipeline_integrity": ctx.require("evaluator.pipeline_integrity"),
+                "evaluator.synthesis": ctx.require("evaluator.synthesis"),
+                "evaluator.model_specification": ctx.require("evaluator.model_specification"),
+                "evaluator.document_acquisition": ctx.require("evaluator.document_acquisition"),
+                "evaluator.revalidation": ctx.require("evaluator.revalidation"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),
