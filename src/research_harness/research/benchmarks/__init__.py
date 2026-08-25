@@ -6913,6 +6913,955 @@ INCREMENTAL_REVALIDATION_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+# ---------------------------------------------------------------------------
+# literature-ingestion-identity-v1 (Phase 7A.1): real Phase 2B/2C ingestion +
+# identity resolution
+# ---------------------------------------------------------------------------
+# The workflow drives the REAL LiteratureIngestor (ProviderRecordSnapshot ->
+# PaperRecord -> LiteratureSearchRecord) over fixture LiteratureSources and
+# then the REAL PaperIdentityResolver. References are keyed by paper index
+# (`ing-paper-{i}`) and identity group index (`ing-identity-{i}`).
+
+
+def _ing_paper(
+    title: str,
+    *,
+    doi: str | None = None,
+    ext_ids: list[dict[str, str]] | None = None,
+    year: int = 2021,
+    abstract: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "title": title,
+        "year": year,
+        "abstract": abstract,
+        "doi": doi,
+        "external_identifiers": ext_ids or [],
+    }
+
+
+def _ingestion_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    providers: dict[str, Any],
+    supersede_after: bool = False,
+    reference: dict[str, Any],
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "literature_ingestion_identity",
+            "providers": providers,
+            "supersede_after": supersede_after,
+            "ingestion_config": {"max_results_per_query": 20},
+        },
+        reference=reference,
+        evaluation_dimensions=["ingestion_identity"],
+        tags=["ingestion", "identity", "offline"],
+    )
+
+
+LITERATURE_INGESTION_IDENTITY_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="literature-ingestion-identity-v1",
+    version=1,
+    name="Literature Ingestion and Identity Resolution",
+    description=(
+        "Offline benchmark over the real Phase 2B/2C ingestion + identity "
+        "resolution: fixture ProviderRecordSnapshot -> PaperRecord -> "
+        "LiteratureSearchRecord -> PaperIdentityResolver. Verifies DOI / strong-"
+        "identifier dedup, content-hash dedup, similar-title separation (no "
+        "semantic merges), sparse metadata, provider failure with partial "
+        "ingestion, and identity supersession when a new member appears."
+    ),
+    category="literature_ingestion_identity",
+    config={"evaluators": ["evaluator.identity_resolution"]},
+    cases=[
+        _ingestion_case(
+            "ing-same-doi-across-providers",
+            "same DOI across providers",
+            "Two providers return the same paper with the same DOI; the resolver "
+            "must collapse them into one identity.",
+            providers={
+                "crossref": [
+                    _ing_paper("Algorithmic Pricing and Welfare", doi="10.6000/ing-doi"),
+                ],
+                "semantic_scholar": [
+                    _ing_paper(
+                        "Algorithmic Pricing and Welfare",
+                        doi="10.6000/ing-doi",
+                        abstract="Welfare effects of algorithmic pricing.",
+                    ),
+                ],
+            },
+            reference={
+                "expected_identities": [
+                    {"members": ["ing-paper-0", "ing-paper-1"], "method": "exact_identifier"}
+                ],
+            },
+        ),
+        _ingestion_case(
+            "ing-normalized-doi-variants",
+            "normalized DOI variants",
+            "The same DOI written as https://doi.org/..., doi:..., and bare forms "
+            "must normalize to one identity.",
+            providers={
+                "crossref": [
+                    _ing_paper("Pricing Study", doi="10.6000/ing-var"),
+                    _ing_paper("Pricing Study", doi="https://doi.org/10.6000/ing-var"),
+                ],
+                "semantic_scholar": [
+                    _ing_paper("Pricing Study", doi="doi:10.6000/ing-var"),
+                ],
+            },
+            reference={
+                "expected_identities": [
+                    {
+                        "members": ["ing-paper-0", "ing-paper-1", "ing-paper-2"],
+                        "method": "exact_identifier",
+                        "normalized": True,
+                    }
+                ],
+            },
+        ),
+        _ingestion_case(
+            "ing-shared-strong-identifier",
+            "shared strong identifier",
+            "Two records share an arXiv identifier (but no DOI) and must merge.",
+            providers={
+                "crossref": [
+                    _ing_paper(
+                        "Platform Competition Model",
+                        ext_ids=[{"scheme": "arxiv", "value": "2101.0001"}],
+                    ),
+                ],
+                "semantic_scholar": [
+                    _ing_paper(
+                        "A Model of Platform Competition",
+                        ext_ids=[{"scheme": "arxiv", "value": "2101.0001"}],
+                    ),
+                ],
+            },
+            reference={
+                "expected_identities": [
+                    {"members": ["ing-paper-0", "ing-paper-1"], "method": "exact_identifier"}
+                ],
+            },
+        ),
+        _ingestion_case(
+            "ing-exact-content-duplicate",
+            "exact-content duplicate",
+            "Identical payloads from the same provider (no identifiers) must "
+            "collapse via exact content hash.",
+            providers={
+                "crossref": [
+                    _ing_paper(
+                        "Working Note on Pricing",
+                        year=2022,
+                        abstract="A sparse working note.",
+                    ),
+                    _ing_paper(
+                        "Working Note on Pricing",
+                        year=2022,
+                        abstract="A sparse working note.",
+                    ),
+                ],
+            },
+            reference={
+                "expected_identities": [
+                    {"members": ["ing-paper-0", "ing-paper-1"], "method": "exact_content"}
+                ],
+            },
+        ),
+        _ingestion_case(
+            "ing-similar-title-no-strong-id",
+            "similar title without strong identifier",
+            "Two distinct papers with similar titles but NO shared strong "
+            "identifier must remain separate identities (no semantic merge).",
+            providers={
+                "crossref": [
+                    _ing_paper(
+                        "Dynamic Pricing and Seller Collusion in Two-Sided Markets",
+                        year=2019,
+                        abstract="Dynamic pricing may facilitate collusion.",
+                    ),
+                    _ing_paper(
+                        "Dynamic Pricing and Market Outcomes in Two-Sided Platforms",
+                        year=2021,
+                        abstract="Dynamic pricing shapes market outcomes.",
+                    ),
+                ],
+            },
+            reference={
+                "expected_identities": [
+                    {"members": ["ing-paper-0"], "method": "exact_identifier"},
+                    {"members": ["ing-paper-1"], "method": "exact_identifier"},
+                ],
+            },
+        ),
+        _ingestion_case(
+            "ing-sparse-metadata",
+            "sparse metadata",
+            "A paper with only a title (no identifiers) resolves as its own "
+            "singleton identity without invented fields.",
+            providers={
+                "crossref": [
+                    {"title": "Unpublished Working Paper on Rating Dynamics", "year": 2023},
+                ],
+            },
+            reference={
+                "expected_identities": [{"members": ["ing-paper-0"], "method": "exact_identifier"}],
+            },
+        ),
+        _ingestion_case(
+            "ing-provider-failure-partial",
+            "provider failure with partial ingestion",
+            "One provider fails entirely; papers from the surviving provider are "
+            "still ingested and resolved (partial ingestion, nothing fabricated).",
+            providers={
+                "crossref": "fail_all",
+                "semantic_scholar": [
+                    _ing_paper("Surviving Study", doi="10.6000/ing-survive"),
+                ],
+            },
+            reference={
+                "expected_identities": [{"members": ["ing-paper-0"], "method": "exact_identifier"}],
+                "expected_failed_providers": ["crossref"],
+            },
+        ),
+        _ingestion_case(
+            "ing-identity-supersession",
+            "identity supersession when a new member appears",
+            "A later provider record shares the DOI of an existing identity; "
+            "resolving the union must create a superseding identity and mark the "
+            "old one superseded.",
+            providers={
+                "crossref": [
+                    _ing_paper("Platform Pricing Study", doi="10.6000/ing-sup"),
+                ],
+                "semantic_scholar": [
+                    _ing_paper(
+                        "Platform Pricing Study",
+                        doi="10.6000/ing-sup",
+                        abstract="A fuller record of the same work.",
+                    ),
+                ],
+            },
+            supersede_after=True,
+            reference={
+                "expected_identities": [
+                    {"members": ["ing-paper-0", "ing-paper-1"], "method": "exact_identifier"}
+                ],
+                "expected_superseded": ["ing-paper-0"],
+            },
+        ),
+    ],
+)
+
+
+# ---------------------------------------------------------------------------
+# gap-selection-v1 (Phase 7A.1): real Phase 3A gap selection
+# ---------------------------------------------------------------------------
+# The workflow creates a fixture GapAnalysis + ResearchGaps and drives the REAL
+# GapSelectionService (model selection or operator override + autonomy
+# checkpoint). Case-scoped gap ids are rewritten to run-unique ids.
+
+_GAP_SELECT_MARKER = "Choose ONE research gap to develop a theoretical mechanism for."
+
+
+def _gs_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    selected_gap_id: str | None = None,
+    model_choice: str = "gap-0",
+    autonomy_mode: str = "high",
+    approval: bool | None = None,
+    expect_error: bool = False,
+    reference: dict[str, Any],
+) -> BenchmarkCaseDefinition:
+    fixtures: list[dict[str, Any]] = [
+        {
+            "match": _GAP_SELECT_MARKER,
+            "response": {
+                "selected_gap_id": model_choice,
+                "evidence_synthesis_basis": "fixture basis",
+                "research_importance": 0.8,
+                "theoretical_relevance": 0.8,
+                "analytical_model_suitability": 0.8,
+                "tractability": 0.7,
+                "selection_rationale": f"fixture rationale for {model_choice}",
+            },
+        }
+    ]
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "gap_selection",
+            "selected_gap_id": selected_gap_id,
+            "autonomy_mode": autonomy_mode,
+            "approval": approval,
+            "expect_error": expect_error,
+            "llm_fixtures": fixtures,
+            "gaps": [
+                {
+                    "id": "gap-0",
+                    "title": "No analytical model of algorithmic pricing welfare",
+                    "importance": 0.9,
+                    "tractability": 0.9,
+                },
+                {
+                    "id": "gap-1",
+                    "title": "No model of platform governance incentives",
+                    "importance": 0.7,
+                    "tractability": 0.7,
+                },
+                {
+                    "id": "gap-2",
+                    "title": "No model of consumer trust under personalization",
+                    "importance": 0.8,
+                    "tractability": 0.6,
+                },
+            ],
+        },
+        reference=reference,
+        evaluation_dimensions=["gap_selection"],
+        tags=["gap-selection", "offline"],
+    )
+
+
+GAP_SELECTION_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="gap-selection-v1",
+    version=1,
+    name="Gap Selection",
+    description=(
+        "Offline benchmark over the real Phase 3A GapSelectionService: fixture "
+        "GapAnalysis + ranked ResearchGaps -> model selection (or operator "
+        "override) -> autonomy approval checkpoint -> GapSelection. Verifies "
+        "selection validity, rationale grounding, alternative consideration, "
+        "deterministic fallback for invalid model selections, autonomy "
+        "approval/rejection, operator override, unsupported-gap-id rejection, "
+        "and deterministic rerun reuse."
+    ),
+    category="gap_selection",
+    config={"evaluators": ["evaluator.gap_selection"]},
+    cases=[
+        _gs_case(
+            "gs-select-rank1-strongest",
+            "select rank #1 when clearly strongest",
+            "The model selects the top-ranked gap; the selection is valid and approved.",
+            model_choice="gap-0",
+            reference={
+                "expected_selected_gap": "gap-0",
+                "expected_status": "approved",
+                "expected_selected_by": "model",
+            },
+        ),
+        _gs_case(
+            "gs-valid-nonrank1-selection",
+            "valid non-rank-1 selection",
+            "The model selects a lower-ranked but valid gap; the selection is accepted.",
+            model_choice="gap-2",
+            reference={
+                "expected_selected_gap": "gap-2",
+                "expected_status": "approved",
+                "expected_selected_by": "model",
+            },
+        ),
+        _gs_case(
+            "gs-operator-override",
+            "operator override",
+            "An operator explicitly selects a gap; the selection is recorded as operator.",
+            selected_gap_id="gap-1",
+            reference={
+                "expected_selected_gap": "gap-1",
+                "expected_status": "approved",
+                "expected_selected_by": "operator",
+            },
+        ),
+        _gs_case(
+            "gs-invalid-model-selection-fallback",
+            "invalid model-selected gap -> deterministic fallback",
+            "The model proposes an unknown gap id; the service must fall back to rank #1 deterministically.",
+            model_choice="ghost-gap",
+            reference={
+                "expected_selected_gap": "gap-0",
+                "expected_status": "approved",
+                "expected_selected_by": "model",
+                "expected_fallback": True,
+            },
+        ),
+        _gs_case(
+            "gs-autonomy-approval",
+            "autonomy approval",
+            "Interactive autonomy mode approves the selection.",
+            autonomy_mode="interactive",
+            approval=True,
+            reference={
+                "expected_selected_gap": "gap-0",
+                "expected_status": "approved",
+                "expected_approval_required": True,
+            },
+        ),
+        _gs_case(
+            "gs-autonomy-rejection",
+            "autonomy rejection",
+            "Interactive autonomy mode rejects the selection; the selection is recorded rejected.",
+            autonomy_mode="interactive",
+            approval=False,
+            reference={
+                "expected_selected_gap": "gap-0",
+                "expected_status": "rejected",
+                "expected_approval_required": True,
+            },
+        ),
+        _gs_case(
+            "gs-unsupported-gap-id-rejected",
+            "unsupported gap id rejected",
+            "An operator-supplied gap id outside the analyzed set is rejected with an error.",
+            selected_gap_id="not-in-analysis",
+            expect_error=True,
+            reference={"expected_error": True},
+        ),
+        _gs_case(
+            "gs-deterministic-rerun",
+            "deterministic rerun",
+            "Re-running selection on the same analysis reuses the existing selection artifact.",
+            model_choice="gap-1",
+            reference={
+                "expected_selected_gap": "gap-1",
+                "expected_status": "approved",
+                "expected_reuse": True,
+            },
+        ),
+    ],
+)
+
+
+# ---------------------------------------------------------------------------
+# novelty-revalidation-v1 (Phase 7A.1): real Phase 5A/5B novelty pipeline over
+# changing literature
+# ---------------------------------------------------------------------------
+# The workflow runs the REAL NoveltyValidationService.create_report twice —
+# once against baseline fixture sources, once against changed sources — and
+# records per-claim statuses, report/gate ids, supersession, and staleness.
+
+_REV_BASE_FIXTURES = [
+    {"match": "Identify novelty and contribution claims", "response": {"claims": []}},
+    {"match": "Generate concrete literature-search queries", "response": {"queries": []}},
+    {
+        "match": "Judge whether the produced research output satisfies the reference.",
+        "response": {"score": 1.0, "status": "pass", "explanation": "fixture"},
+    },
+    {
+        "match": "grounded in the cited evidence",
+        "response": {"verdict": "grounded", "explanation": "fixture"},
+    },
+    {
+        "match": "You independently verify a prior-art assessment",
+        "response": {"verdict": "concurs", "reasoning": "fixture critic concurs"},
+    },
+    {
+        "match": "You recommend conservative rewording",
+        "response": {"suggested_scope_change": "", "suggested_wording": ""},
+    },
+]
+
+
+def _rev_claim(title: str, abstract: str) -> dict[str, Any]:
+    return {
+        "title": title,
+        "abstract": abstract,
+        "sections": {
+            "introduction": (
+                "Prior work examines platform pricing but not consumer welfare effects. "
+                "We are the first to show that algorithmic pricing reduces consumer "
+                "welfare in online markets. We study this question in a stylized model."
+            ),
+            "conclusion": "Our model connects pricing, welfare, and platform design.",
+        },
+    }
+
+
+def _relevant_paper(doi: str, claim: str) -> dict[str, Any]:
+    return {
+        "title": "Algorithmic Pricing and Consumer Welfare in Online Markets",
+        "abstract": f"We show that {claim}",
+        "year": 2020,
+        "doi": doi,
+        "venue": "Journal of Platform Studies",
+    }
+
+
+def _irrelevant_paper() -> dict[str, Any]:
+    return {
+        "title": "Soil Microbiomes in Agricultural Systems",
+        "abstract": "Microbial communities in agricultural soils.",
+        "year": 2017,
+        "doi": "10.6000/rev-irrelevant",
+        "venue": "Agronomy",
+    }
+
+
+def _novelty_reval_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    changed_sources: list[dict[str, Any]] | str,
+    reference: dict[str, Any],
+    baseline_sources: list[dict[str, Any]] | str | None = None,
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "novelty_revalidation",
+            "submission": _rev_claim(
+                "Algorithmic Pricing and Consumer Welfare",
+                "We study how algorithmic pricing shapes welfare in online markets.",
+            ),
+            "baseline_sources": baseline_sources if baseline_sources is not None else [],
+            "changed_sources": changed_sources,
+            "llm_fixtures": _REV_BASE_FIXTURES,
+            "providers": ["semantic_scholar"],
+            "as_of": "2026-08-01",
+            "novelty_config": {
+                "providers": ["semantic_scholar"],
+                "max_queries_per_claim": 4,
+            },
+        },
+        reference=reference,
+        evaluation_dimensions=["novelty_revalidation"],
+        tags=["novelty", "revalidation", "offline"],
+    )
+
+
+NOVELTY_REVALIDATION_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="novelty-revalidation-v1",
+    version=1,
+    name="Novelty Revalidation",
+    description=(
+        "Offline benchmark over the real Phase 5A/5B novelty pipeline across "
+        "changing literature: the real NoveltyValidationService.create_report "
+        "runs once against baseline fixture sources and again against changed "
+        "sources. Verifies that new directly relevant / contradictory / "
+        "mechanism-covering papers re-threaten claims, irrelevant papers do not "
+        "invalidate novelty, unchanged literature keeps prior novelty reusable, "
+        "stale artifacts are not silently reused, and superseding assessments "
+        "preserve history."
+    ),
+    category="novelty_revalidation",
+    config={"evaluators": ["evaluator.novelty_revalidation"]},
+    cases=[
+        _novelty_reval_case(
+            "nvr-unchanged-literature-reusable",
+            "unchanged literature -> prior novelty reusable",
+            "Running validation again against unchanged literature produces the "
+            "same clear verdict (the prior assessment is reusable).",
+            baseline_sources=[],
+            changed_sources=[],
+            reference={
+                "expected_overall_baseline": "clear",
+                "expected_overall_changed": "clear",
+                "expected_trigger": False,
+            },
+        ),
+        _novelty_reval_case(
+            "nvr-new-relevant-paper",
+            "new directly relevant paper -> revalidation required",
+            "A new directly relevant paper must re-threaten the novelty claim.",
+            baseline_sources=[],
+            changed_sources=[
+                _relevant_paper(
+                    "10.6000/rev-direct",
+                    "algorithmic pricing reduces consumer welfare in online markets.",
+                )
+            ],
+            reference={
+                "expected_overall_baseline": "clear",
+                "expected_overall_changed": "blocked",
+                "expected_trigger": True,
+                "expected_threatened": True,
+            },
+        ),
+        _novelty_reval_case(
+            "nvr-new-contradictory-evidence",
+            "new contradictory evidence",
+            "New evidence contradicting the claimed result re-threatens novelty.",
+            baseline_sources=[],
+            changed_sources=[
+                _relevant_paper(
+                    "10.6000/rev-contra",
+                    "algorithmic pricing increases consumer welfare in online markets.",
+                )
+            ],
+            reference={
+                "expected_overall_baseline": "clear",
+                "expected_overall_changed": "blocked",
+                "expected_trigger": True,
+                "expected_threatened": True,
+            },
+        ),
+        _novelty_reval_case(
+            "nvr-new-mechanism-coverage",
+            "new paper covering claimed mechanism/gap",
+            "A new paper covering the claimed mechanism/gap re-threatens novelty.",
+            baseline_sources=[],
+            changed_sources=[
+                _relevant_paper(
+                    "10.6000/rev-mech",
+                    "algorithmic pricing reduces consumer welfare in online markets.",
+                )
+            ],
+            reference={
+                "expected_overall_baseline": "clear",
+                "expected_overall_changed": "blocked",
+                "expected_trigger": True,
+                "expected_threatened": True,
+            },
+        ),
+        _novelty_reval_case(
+            "nvr-irrelevant-paper",
+            "irrelevant new paper does not invalidate novelty",
+            "Adding an unrelated paper must not invalidate the novelty claim.",
+            baseline_sources=[],
+            changed_sources=[_irrelevant_paper()],
+            reference={
+                "expected_overall_baseline": "clear",
+                "expected_overall_changed": "clear",
+                "expected_trigger": False,
+                "expected_irrelevant": True,
+            },
+        ),
+        _novelty_reval_case(
+            "nvr-stale-not-silently-reused",
+            "stale novelty artifact is not silently reused",
+            "After the literature changes, the second validation must NOT reuse "
+            "the first report's claim assessments; a fresh report supersedes it.",
+            baseline_sources=[],
+            changed_sources=[
+                _relevant_paper(
+                    "10.6000/rev-stale",
+                    "algorithmic pricing reduces consumer welfare in online markets.",
+                )
+            ],
+            reference={
+                "expected_overall_baseline": "clear",
+                "expected_overall_changed": "blocked",
+                "expected_trigger": True,
+                "expected_stale_reuse": False,
+            },
+        ),
+        _novelty_reval_case(
+            "nvr-supersession-preserves-history",
+            "superseding assessment preserves history",
+            "A new report supersedes the previous one; the old report is not "
+            "mutated and provenance links both to the same package.",
+            baseline_sources=[
+                _relevant_paper(
+                    "10.6000/rev-base",
+                    "algorithmic pricing reduces consumer welfare in online markets.",
+                )
+            ],
+            changed_sources=[
+                _relevant_paper(
+                    "10.6000/rev-base",
+                    "algorithmic pricing reduces consumer welfare in online markets.",
+                ),
+                _relevant_paper(
+                    "10.6000/rev-new",
+                    "algorithmic pricing reduces consumer welfare in online markets.",
+                ),
+            ],
+            reference={
+                "expected_overall_baseline": "blocked",
+                "expected_overall_changed": "blocked",
+                "expected_trigger": False,
+                "expected_supersession": True,
+            },
+        ),
+    ],
+)
+
+
+# ---------------------------------------------------------------------------
+# publication-packaging-v1 (Phase 7A.1): real Phase 4C formatter + exporters +
+# submission package
+# ---------------------------------------------------------------------------
+# The workflow drives the REAL PublicationFormatterService over fixture papers
+# + ManuscriptDraft sections: format -> bibliography -> validate -> exports
+# (markdown/latex/docx/pdf -> BlobStore) -> SubmissionPackage. References reuse
+# Phase 6B citation expectations where relevant (without duplicating that
+# evaluator).
+
+
+def _pkg_paper(
+    paper_id: str,
+    identity_id: str,
+    title: str,
+    *,
+    authors: list[str] | None = None,
+    year: int = 2021,
+    venue: str = "Journal of Platform Studies",
+    doi: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": paper_id,
+        "identity_id": identity_id,
+        "title": title,
+        "authors": authors or ["Smith, Jane"],
+        "year": year,
+        "venue": venue,
+        "doi": doi,
+        "abstract": f"Abstract of {title}.",
+    }
+
+
+def _pkg_section(
+    sec_id: str,
+    title: str,
+    body: str,
+    citations: list[dict[str, Any]],
+    *,
+    section_id: str = "introduction",
+    conditions_preserved: bool = True,
+) -> dict[str, Any]:
+    return {
+        "id": sec_id,
+        "section_id": section_id,
+        "title": title,
+        "body": body,
+        "citations": citations,
+        "conditions_preserved": conditions_preserved,
+    }
+
+
+def _pkg_cite(
+    citation_id: str, identity_id: str, page_locator: str | None = None
+) -> dict[str, Any]:
+    return {
+        "citation_id": citation_id,
+        "paper_identity_id": identity_id,
+        "page_locator": page_locator,
+    }
+
+
+def _packaging_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    papers: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    anonymous: bool = False,
+    expected_status: str = "ready",
+    expected_failure: bool = False,
+    expected_placeholder: bool = False,
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "publication_packaging",
+            "papers": papers,
+            "sections": sections,
+            "profile": {
+                "name": "Benchmark Profile",
+                "citation_style": "author_year",
+                "anonymous_review": anonymous,
+                "required_sections": ["introduction", "conclusion"],
+                "section_order": ["introduction", "conclusion"],
+            },
+            "expected_package_status": expected_status,
+            "expected_failure": expected_failure,
+            "expected_placeholder": expected_placeholder,
+        },
+        reference={
+            "expected_package_status": expected_status,
+            "expected_failure": expected_failure,
+            "expected_placeholder": expected_placeholder,
+        },
+        evaluation_dimensions=["publication_packaging"],
+        tags=["packaging", "offline"],
+    )
+
+
+_PKG_PAPER_A = _pkg_paper(
+    "pkg-paper-a",
+    "pkg-identity-a",
+    "Consumer Welfare Under Algorithmic Pricing",
+    authors=["Smith, Jane"],
+    year=2021,
+    doi="10.6000/pkg-a",
+)
+_PKG_PAPER_B = _pkg_paper(
+    "pkg-paper-b",
+    "pkg-identity-b",
+    "Dynamic Pricing and Seller Collusion",
+    authors=["Doe, John"],
+    year=2019,
+    doi="10.6000/pkg-b",
+)
+
+
+def _pkg_intro(body: str, citations: list[dict[str, Any]]) -> dict[str, Any]:
+    return _pkg_section("pkg-sec-1", "Introduction", body, citations, section_id="introduction")
+
+
+def _pkg_conclusion(body: str) -> dict[str, Any]:
+    return _pkg_section("pkg-sec-2", "Conclusion", body, [], section_id="conclusion")
+
+
+PUBLICATION_PACKAGING_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="publication-packaging-v1",
+    version=1,
+    name="Publication Packaging",
+    description=(
+        "Offline benchmark over the real Phase 4C pipeline: ManuscriptDraft -> "
+        "PublicationFormatterService (citation resolution + bibliography) -> "
+        "deterministic validation -> exporters (Markdown/LaTeX/DOCX/PDF -> "
+        "BlobStore) -> SubmissionPackage. Verifies citation resolution, "
+        "unresolved-citation readiness blocking, bibliography dedup, missing-"
+        "metadata non-invention, anonymous review, placeholder removal, export "
+        "persistence, deterministic rerender, and invalid packages not marked "
+        "publication-ready."
+    ),
+    category="publication_packaging",
+    config={"evaluators": ["evaluator.publication_packaging"]},
+    cases=[
+        _packaging_case(
+            "pkg-correct-citation-resolution",
+            "correct citation resolution",
+            "A valid manuscript formats, validates, exports, and packages as ready.",
+            papers=[_PKG_PAPER_A, _PKG_PAPER_B],
+            sections=[
+                _pkg_intro(
+                    "Prior work studies welfare effects of pricing [CITE:c1] and "
+                    "collusion [CITE:c2].",
+                    [_pkg_cite("c1", "pkg-identity-a"), _pkg_cite("c2", "pkg-identity-b")],
+                ),
+                _pkg_conclusion("We conclude with implications for platform design."),
+            ],
+            expected_status="ready",
+        ),
+        _packaging_case(
+            "pkg-unresolved-citation-blocks-ready",
+            "unresolved citation blocks readiness",
+            "A manuscript citing a missing identity fails validation and the "
+            "package is not marked ready.",
+            papers=[_PKG_PAPER_A],
+            sections=[
+                _pkg_intro(
+                    "Prior work studies welfare effects [CITE:c1].",
+                    [_pkg_cite("c1", "pkg-identity-missing")],
+                ),
+                _pkg_conclusion("We conclude."),
+            ],
+            expected_status="failed",
+            expected_failure=True,
+        ),
+        _packaging_case(
+            "pkg-bibliography-dedup",
+            "bibliography dedup",
+            "Two citations to the same paper yield exactly one bibliography entry.",
+            papers=[_PKG_PAPER_A],
+            sections=[
+                _pkg_intro(
+                    "One view [CITE:c1] and another [CITE:c2] cite the same work.",
+                    [_pkg_cite("c1", "pkg-identity-a"), _pkg_cite("c2", "pkg-identity-a")],
+                ),
+                _pkg_conclusion("We conclude."),
+            ],
+            expected_status="ready",
+        ),
+        _packaging_case(
+            "pkg-missing-metadata-not-invented",
+            "missing metadata not invented",
+            "A paper with only a title renders without invented fields.",
+            papers=[
+                _pkg_paper("pkg-paper-s", "pkg-identity-s", "Working Paper on Quantity Games"),
+            ],
+            sections=[
+                _pkg_intro(
+                    "An unpublished note [CITE:c1] discusses quantity games.",
+                    [_pkg_cite("c1", "pkg-identity-s")],
+                ),
+                _pkg_conclusion("We conclude."),
+            ],
+            expected_status="ready",
+        ),
+        _packaging_case(
+            "pkg-anonymous-review-mode",
+            "anonymous-review mode",
+            "An anonymous profile renders without author front matter.",
+            papers=[_PKG_PAPER_A],
+            sections=[
+                _pkg_intro(
+                    "Prior work [CITE:c1] studies welfare effects.",
+                    [_pkg_cite("c1", "pkg-identity-a")],
+                ),
+                _pkg_conclusion("We conclude."),
+            ],
+            anonymous=True,
+            expected_status="ready",
+        ),
+        _packaging_case(
+            "pkg-leftover-placeholder",
+            "leftover internal placeholder",
+            "An unresolved [CITE:ghost] left in the text fails validation and blocks readiness.",
+            papers=[_PKG_PAPER_A],
+            sections=[
+                _pkg_intro(
+                    "Prior work [CITE:c1] is relevant, and [CITE:ghost] is not.",
+                    [_pkg_cite("c1", "pkg-identity-a")],
+                ),
+                _pkg_conclusion("We conclude."),
+            ],
+            expected_status="failed",
+            expected_failure=True,
+            expected_placeholder=True,
+        ),
+        _packaging_case(
+            "pkg-markdown-latex-docx-pdf-exports",
+            "Markdown/LaTeX/DOCX/PDF artifact generation",
+            "All four export formats are generated and persisted to the blob store.",
+            papers=[_PKG_PAPER_A],
+            sections=[
+                _pkg_intro(
+                    "Prior work [CITE:c1] studies welfare effects.",
+                    [_pkg_cite("c1", "pkg-identity-a")],
+                ),
+                _pkg_conclusion("We conclude."),
+            ],
+            expected_status="ready",
+        ),
+        _packaging_case(
+            "pkg-invalid-not-publication-ready",
+            "invalid package not marked publication-ready",
+            "A manuscript failing validation yields a failed package, never ready.",
+            papers=[_PKG_PAPER_A],
+            sections=[
+                _pkg_intro(
+                    "Missing required section body.",
+                    [_pkg_cite("c1", "pkg-identity-a")],
+                ),
+            ],
+            expected_status="failed",
+            expected_failure=True,
+        ),
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -6932,4 +7881,8 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     ANALYTICAL_MODEL_SPECIFICATION_V1.benchmark_id: ANALYTICAL_MODEL_SPECIFICATION_V1,
     DOCUMENT_ACQUISITION_V1.benchmark_id: DOCUMENT_ACQUISITION_V1,
     INCREMENTAL_REVALIDATION_V1.benchmark_id: INCREMENTAL_REVALIDATION_V1,
+    LITERATURE_INGESTION_IDENTITY_V1.benchmark_id: LITERATURE_INGESTION_IDENTITY_V1,
+    GAP_SELECTION_V1.benchmark_id: GAP_SELECTION_V1,
+    NOVELTY_REVALIDATION_V1.benchmark_id: NOVELTY_REVALIDATION_V1,
+    PUBLICATION_PACKAGING_V1.benchmark_id: PUBLICATION_PACKAGING_V1,
 }

@@ -51,6 +51,10 @@ def _deterministic_evaluators() -> set[str]:
         "evaluator.model_specification",
         "evaluator.document_acquisition",
         "evaluator.revalidation",
+        "evaluator.identity_resolution",
+        "evaluator.gap_selection",
+        "evaluator.novelty_revalidation",
+        "evaluator.publication_packaging",
     }
 
 
@@ -67,9 +71,9 @@ def _known_untested_behaviors() -> tuple[str, ...]:
     return (
         "LLM candidate/derivation quality for transcendental equilibria (scripted only)",
         "live provider corpora and live publisher/download endpoints",
-        "incremental novelty revalidation (generic idempotency is benchmarked)",
+        "live provider connectors (Phase 2A) over real APIs",
+        "evidence enrichment / pre-acquisition (5C-5D) standalone",
         "long-document prose quality (advisory-only critique)",
-        "publication packaging beyond citation formatting",
     )
 
 
@@ -144,12 +148,13 @@ def readiness_report() -> ReadinessResult:
     elif gaps_exist:
         verdict = "ready_with_gaps"
         narrative = (
-            "Deterministic gating is complete across all benchmark families "
-            "(18 benchmarks incl. synthesis, model specification, document "
-            "acquisition, and incremental revalidation) and the e2e pipeline "
-            "passes; residual gaps are non-core (submission packaging, "
-            "ingestion/identity resolution, gap-selection heuristics, novelty "
-            "revalidation, live corpora). See uncovered_capabilities."
+            "Deterministic gating is complete across all 22 benchmark families "
+            "(incl. ingestion/identity, gap selection, novelty revalidation, and "
+            "publication packaging) and the e2e pipeline passes; the four "
+            "targeted deterministic gaps are closed. Residual gaps are "
+            "non-blocking: live provider connectors/publisher endpoints, "
+            "evidence enrichment (5C-5D) standalone, and advisory LLM-quality "
+            "judging. See uncovered_capabilities."
         )
     else:
         verdict = "ready"

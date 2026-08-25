@@ -459,6 +459,38 @@ def _create_evaluator_revalidation() -> Plugin:
     return RevalidationEvaluatorPlugin()
 
 
+def _create_evaluator_identity_resolution() -> Plugin:
+    from research_harness.plugins.research.evaluator_identity_resolution.plugin import (
+        IdentityResolutionEvaluatorPlugin,
+    )
+
+    return IdentityResolutionEvaluatorPlugin()
+
+
+def _create_evaluator_gap_selection() -> Plugin:
+    from research_harness.plugins.research.evaluator_gap_selection.plugin import (
+        GapSelectionEvaluatorPlugin,
+    )
+
+    return GapSelectionEvaluatorPlugin()
+
+
+def _create_evaluator_novelty_revalidation() -> Plugin:
+    from research_harness.plugins.research.evaluator_novelty_revalidation.plugin import (
+        NoveltyRevalidationEvaluatorPlugin,
+    )
+
+    return NoveltyRevalidationEvaluatorPlugin()
+
+
+def _create_evaluator_publication_packaging() -> Plugin:
+    from research_harness.plugins.research.evaluator_publication_packaging.plugin import (
+        PublicationPackagingEvaluatorPlugin,
+    )
+
+    return PublicationPackagingEvaluatorPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -558,6 +590,10 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "evaluator.model_specification": _create_evaluator_model_specification,
     "evaluator.document_acquisition": _create_evaluator_document_acquisition,
     "evaluator.revalidation": _create_evaluator_revalidation,
+    "evaluator.identity_resolution": _create_evaluator_identity_resolution,
+    "evaluator.gap_selection": _create_evaluator_gap_selection,
+    "evaluator.novelty_revalidation": _create_evaluator_novelty_revalidation,
+    "evaluator.publication_packaging": _create_evaluator_publication_packaging,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

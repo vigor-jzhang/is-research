@@ -1,4 +1,4 @@
-# Evaluation Harness (Phase 6A–7A)
+# Evaluation Harness (Phase 6A–7A.1)
 
 Plugin-based evaluation framework that measures research-agent quality
 independently from the production pipeline:
@@ -74,6 +74,10 @@ Evaluators are plugin services registered in the service registry:
 | `evaluator.model_specification` | deterministic | Analytical model specification (Phase 7A): symbol table, payoff completeness, decision ownership, timing, information structure, assumption grounding, structural validity, critic issue recall |
 | `evaluator.document_acquisition` | deterministic | Document acquisition (Phase 7A): acquisition/extraction success, failure classification, fallback usage, duplicate-blob reuse, corpus availability |
 | `evaluator.revalidation` | deterministic | Incremental revalidation (Phase 7A): stale-reuse rate, required recomputation, unchanged reuse, provenance-version accuracy |
+| `evaluator.identity_resolution` | deterministic | Ingestion + identity resolution (Phase 7A.1): canonical mapping, duplicate collapse, false-merge/false-split detection, DOI normalization, supersession, partial ingestion |
+| `evaluator.gap_selection` | deterministic | Gap selection (Phase 7A.1): selection validity, rationale grounding, alternatives, deterministic fallback, autonomy decision, operator override, rerun reuse |
+| `evaluator.novelty_revalidation` | deterministic | Novelty revalidation (Phase 7A.1): revalidation trigger, stale-reuse rate, threat detection, irrelevant-update, supersession, provenance version |
+| `evaluator.publication_packaging` | deterministic | Publication packaging (Phase 7A.1): package validation, exports, bibliography integrity, placeholder removal, anonymization, blob persistence, deterministic render |
 | `evaluator.claim_grounding` | model-assisted | Whether candidate assessments are grounded in cited evidence (deterministic guard: no evidence → ungrounded without a model call) |
 | `evaluator.citation_correctness` | deterministic | Placeholder check (6A) or full `manuscript_citation` mode (6B): resolution, map accuracy, dedup, leftovers, invented fields |
 | `evaluator.llm_judge` | model-assisted | Generic rubric-driven judge with structured output |
@@ -759,14 +763,82 @@ a deterministic failure.
 - `unchanged_reuse_accuracy` — identical stages that reused deterministically
 - `provenance_version_accuracy` — new downstream derived (transitively) from the changed upstream
 
+## Ingestion + identity benchmark (`literature-ingestion-identity-v1`, Phase 7A.1)
+
+Drives the real Phase 2B/2C pipeline over fixture provider sources:
+
+```
+ProviderRecordSnapshot → PaperRecord → LiteratureSearchRecord → PaperIdentityResolver
+```
+
+8 cases: same DOI across providers; normalized DOI variants
+(`https://doi.org/…`, `doi:…`, bare); shared strong identifier (arXiv); exact-content
+duplicate; similar-title without a strong identifier stays separate; sparse metadata;
+provider failure with partial ingestion; identity supersession when a new member
+appears. False semantic merges deterministically fail.
+
+### Identity-resolution metrics (`evaluator.identity_resolution`)
+
+- `canonical_mapping_accuracy`, `duplicate_collapse_accuracy`
+- `false_merge_rate`, `false_split_rate` — false semantic merges are failures
+- `identifier_normalization_accuracy`, `supersession_accuracy`, `partial_ingestion_accuracy`
+
+## Gap-selection benchmark (`gap-selection-v1`, Phase 7A.1)
+
+Drives the real Phase 3A `GapSelectionService` over a fixture `GapAnalysis` + ranked
+`ResearchGap`s (model selection or operator override + autonomy checkpoint). 8 cases:
+select rank #1 when clearly strongest; valid non-rank-1 selection; operator override;
+invalid model-selected gap → deterministic fallback; autonomy approval; autonomy
+rejection; unsupported gap id rejected; deterministic rerun reuse. No subjective
+"best gap" is scored unless the fixture defines the expected decision.
+
+### Gap-selection metrics (`evaluator.gap_selection`)
+
+- `selected_gap_validity`, `selection_rationale_grounding`
+- `alternative_consideration_accuracy`, `fallback_accuracy`
+- `autonomy_decision_accuracy`, `operator_override_accuracy`, `reuse_accuracy`
+
+## Novelty revalidation benchmark (`novelty-revalidation-v1`, Phase 7A.1)
+
+Runs the real Phase 5A/5B `NoveltyValidationService.create_report` twice — once
+against baseline fixture sources, once against changed sources — and compares the
+two reports. 7 cases: unchanged literature → prior novelty reusable; new directly
+relevant paper → revalidation required; new contradictory evidence; new paper
+covering the claimed mechanism/gap; irrelevant new paper does not invalidate
+novelty; stale novelty artifact is not silently reused; superseding assessment
+preserves history. Any incompatible stale novelty reuse is a deterministic failure.
+
+### Novelty-revalidation metrics (`evaluator.novelty_revalidation`)
+
+- `revalidation_trigger_accuracy`, `stale_reuse_rate`
+- `novelty_threat_detection_accuracy`, `irrelevant_update_accuracy`
+- `supersession_accuracy`, `provenance_version_accuracy`
+
+## Publication / packaging benchmark (`publication-packaging-v1`, Phase 7A.1)
+
+Drives the real Phase 4C pipeline: `ManuscriptDraft → formatter → bibliography →
+validate → exporters (Markdown/LaTeX/DOCX/PDF → BlobStore) → SubmissionPackage`.
+8 cases: correct citation resolution; unresolved citation blocks readiness;
+bibliography dedup; missing metadata not invented; anonymous-review mode; leftover
+internal placeholder; Markdown/LaTeX/DOCX/PDF artifact generation; export BlobStore
+persistence; deterministic rerender; invalid package not marked publication-ready.
+Reuses Phase 6B citation expectations conceptually without duplicating that
+evaluator.
+
+### Packaging metrics (`evaluator.publication_packaging`)
+
+- `package_validation_accuracy`, `export_success_accuracy`, `bibliography_integrity`
+- `placeholder_removal_accuracy`, `anonymization_accuracy`
+- `blob_persistence_accuracy`, `deterministic_render_accuracy`
+
 ## Coverage matrix
 
 `research_harness/research/evaluation_coverage.py` maps every production
 capability → benchmark → evaluator → metrics → deterministic/advisory gating
-→ covered edge cases → known gaps, across all of 6A-7A (18 benchmarks). Missing
+→ covered edge cases → known gaps, across all of 6A-7A.1 (22 benchmarks). Missing
 coverage is explicit: `uncovered_capabilities()` lists capabilities with no
-dedicated benchmark (incremental novelty revalidation, submission packaging,
-ingestion/identity resolution, and gap-selection heuristics).
+dedicated benchmark (live provider connectors, evidence enrichment/
+pre-acquisition standalone, advisory proposition-critique quality).
 
 ## Evaluation readiness
 
@@ -777,19 +849,22 @@ untested behaviors, uncovered capabilities, reproducibility status,
 provenance/reopen coverage, live-test coverage, model-assisted evaluator
 usage) and a deterministic verdict: `ready` / `ready_with_gaps` /
 `not_ready` — never an LLM judgment. Current verdict: `ready_with_gaps`
-(all 18 benchmark families deterministically gated; residual gaps are
-non-core, so `ready` is not forced).
+(all 22 benchmark families deterministically gated; the four targeted
+deterministic gaps from 7A are closed; residual gaps are non-blocking:
+live provider/publisher behavior, evidence-enrichment standalone, and
+advisory LLM-quality judging, so `ready` is not forced).
 
-## Known limitations (Phase 6A–7A)
+## Known limitations (Phase 6A–7A.1)
 
 - Benchmarks: novelty threat, retrieval, citation, screening, evidence
   extraction, gap analysis, mechanism development, equilibrium correctness,
   numerical analysis, comparative statics, proposition correctness, results
   assembly, manuscript grounding, research-pipeline e2e, literature
-  synthesis, analytical model specification, document acquisition, and
-  incremental revalidation. Leaderboards, live corpora, model tournaments,
-  automated model selection, and publication-quality scoring are not
-  implemented.
+  synthesis, analytical model specification, document acquisition,
+  incremental revalidation, literature ingestion/identity resolution, gap
+  selection, novelty revalidation, and publication packaging. Leaderboards,
+  live corpora, model tournaments, automated model selection, and
+  publication-quality scoring are not implemented.
 - Case pass/fail is gated only by deterministic evaluators; a benchmark with
   only model-assisted evaluators cannot fail a case (by design — LLM judges
   never override deterministic verdicts).
@@ -813,10 +888,11 @@ non-core, so `ready` is not forced).
 
 ## Recommended next increment
 
-Post-Phase-7A: the evaluation program covers every core pipeline stage with
-deterministic gating; the verdict remains `ready_with_gaps` because
-submission packaging, ingestion/identity resolution, gap-selection heuristics,
-and incremental novelty revalidation still lack dedicated benchmarks. Closing
-those would move the verdict to `ready`; the first leaderboard/model-tournament
-increment would then reuse the frozen harness.
-unchanged.
+Post-Phase-7A.1: the evaluation program covers every core pipeline stage with
+deterministic gating and the four 7A targeted gaps are closed (ingestion/
+identity, gap selection, novelty revalidation, publication packaging). The
+verdict remains `ready_with_gaps` only because non-blocking gaps remain
+(live provider connectors/publisher endpoints, evidence enrichment (5C-5D)
+standalone, advisory LLM-quality judging). Closing the standalone 5C-5D
+enrichment benchmark is the natural next step; the first
+leaderboard/model-tournament increment would then reuse the frozen harness.

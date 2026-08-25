@@ -63,7 +63,7 @@ The kernel imports **zero** concrete plugins and contains no research behavior. 
 The bootstrap layer (`src/research_harness/app/bootstrap.py`) is the composition root:
 
 - Loads YAML config via `config/loader.py`
-- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 66 plugins)
+- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 70 plugins)
 - Discovers **external** plugins via `importlib.metadata.entry_points(group="research_harness.plugins")` — lazy factories, validated on creation, duplicate IDs rejected, clear errors
 - Merges built-in + external deterministically (`get_all_plugin_factories`)
 - Builds per-plugin configs from `AppConfig` (e.g., `models.roles` → `routing.role_router`, `session.root` → `session.jsonl`)
@@ -295,7 +295,7 @@ See `docs/documents.md` for full lifecycle, resolution priority, security, and C
 - `manuscript` — outline, draft, inspect, critique, revise (Phase 4B)
 - `publication` — profile-create, format, validate, export, package, inspect (Phase 4C)
 - `novelty` — validate, report, gate, revalidate, enrich, inspect (Phases 5A–5D)
-- `eval` — run, inspect, list, coverage, readiness (Phase 6A-7A harness: 18 offline benchmarks from novelty-threat to incremental-revalidation, coverage matrix, deterministic readiness report)
+- `eval` — run, inspect, list, coverage, readiness (Phase 6A-7A.1 harness: 22 offline benchmarks from novelty-threat to publication-packaging, coverage matrix, deterministic readiness report)
 
 The full command reference (with options and live-test markers) is in `docs/cli.md`.
 
@@ -317,17 +317,17 @@ Rules enforced by `tests/unit/test_architecture.py`:
 
 ## Testing
 
-Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 69 unit, 39 integration, and 16 opt-in live test files cover every phase:
+Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 73 unit, 43 integration, and 16 opt-in live test files cover every phase:
 
 ```bash
-uv run pytest                # offline: 736 passed, 19 skipped
+uv run pytest                # offline: 774 passed, 19 skipped
 uv run --env-file .env pytest -m live -v          # OpenRouter live
 uv run --env-file .env pytest -m live_novelty_validation -v  # e.g. Phase 5 live
 ```
 
 Live tests assert structural success with minimal tokens and never log keys.
 
-Coverage: kernel lifecycle, services, events, config, OpenRouter, sessions (including nested secret scrubbing), loops, routing, external discovery, architecture rules, literature phases (2A–2H), research phases (3A–3E), results assembly (4A), manuscript drafting (4B), publication formatting (4C), novelty validation/revalidation/enrichment/pre-acquisition (5A–5D), and evaluation benchmarks (6A–7A), plus end-to-end offline integration chains per phase.
+Coverage: kernel lifecycle, services, events, config, OpenRouter, sessions (including nested secret scrubbing), loops, routing, external discovery, architecture rules, literature phases (2A–2H), research phases (3A–3E), results assembly (4A), manuscript drafting (4B), publication formatting (4C), novelty validation/revalidation/enrichment/pre-acquisition (5A–5D), and evaluation benchmarks (6A–7A.1), plus end-to-end offline integration chains per phase.
 
 ## Research Workflows on the Kernel
 

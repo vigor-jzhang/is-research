@@ -5929,6 +5929,10 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.model_specification",
         "evaluator.document_acquisition",
         "evaluator.revalidation",
+        "evaluator.identity_resolution",
+        "evaluator.gap_selection",
+        "evaluator.novelty_revalidation",
+        "evaluator.publication_packaging",
         "storage.blobs_filesystem",
     ):
         if pid not in cfg.plugins:

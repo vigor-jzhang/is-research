@@ -55,6 +55,64 @@ class RevalidationReportRecord(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class IngestionIdentityReport(BaseModel):
+    """Benchmark-only record of fixture paper id mapping + resolution result
+    (Phase 7A.1)."""
+
+    benchmark_case_id: str
+    paper_ids: dict[str, str] = Field(default_factory=dict)
+    superseded_identity_ids: list[str] = Field(default_factory=list)
+    failed_providers: list[str] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
+class GapSelectionReport(BaseModel):
+    """Benchmark-only record of fixture gap id mapping + selection outcome
+    (Phase 7A.1)."""
+
+    benchmark_case_id: str
+    gap_ids: dict[str, str] = Field(default_factory=dict)
+    selection_id: str | None = None
+    reuse_selection_id: str | None = None
+    error: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class NoveltyRevalidationReport(BaseModel):
+    """Benchmark-only record of the two novelty runs (baseline + changed
+    literature) for the novelty-revalidation benchmark (Phase 7A.1)."""
+
+    benchmark_case_id: str
+    report_a: str
+    report_b: str
+    gate_a: str | None = None
+    gate_b: str | None = None
+    package_id: str = ""
+    manuscript_id: str = ""
+    overall_a: str = ""
+    overall_b: str = ""
+    assessments_a: list[str] = Field(default_factory=list)
+    assessments_b: list[str] = Field(default_factory=list)
+    report_b_supersedes_a: bool = False
+
+    model_config = {"extra": "forbid"}
+
+
+class PackagingReport(BaseModel):
+    """Benchmark-only record of the packaging run (Phase 7A.1)."""
+
+    benchmark_case_id: str
+    formatted_manuscript_id: str
+    package_id: str
+    export_ids: list[str] = Field(default_factory=list)
+    reexport_ids: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
 class BenchmarkError(Exception):
     """Benchmark workflow error (raised by fixture composition, never by
     production code)."""
@@ -4178,5 +4236,608 @@ async def run_revalidation_workflow(
             artifact_id=reval_id,
         )
     )
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# literature_ingestion_identity workflow (Phase 7A.1): real Phase 2B/2C
+# ---------------------------------------------------------------------------
+
+
+async def run_ingestion_identity_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 2B/2C pipeline: fixture LiteratureSources ->
+    LiteratureIngestor (ProviderRecordSnapshot -> PaperRecord ->
+    LiteratureSearchRecord) -> PaperIdentityResolver. Optionally resolves in
+    two stages to exercise identity supersession when a new member appears."""
+    from research_harness.contracts.literature import LiteratureSearchRequest
+    from research_harness.plugins.literature.identity_resolver.plugin import (
+        PaperIdentityResolverService,
+    )
+    from research_harness.plugins.literature.ingestion.plugin import LiteratureIngestor
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    ingestor = LiteratureIngestor(artifact_store=artifact_store)
+    resolver = PaperIdentityResolverService(artifact_store=artifact_store)
+
+    provider_papers: list[list[str]] = []
+    failed_providers: list[str] = []
+    search_record_ids: list[str] = []
+    for provider, papers in (case.input.get("providers") or {}).items():
+        source = FixtureLiteratureSource(provider, papers)
+        try:
+            request = LiteratureSearchRequest(
+                query="benchmark ingestion",
+                year_from=2015,
+                year_to=2026,
+                limit=int(
+                    (case.input.get("ingestion_config") or {}).get("max_results_per_query", 20)
+                ),
+            )
+            search_env, _snaps, paper_envs = await ingestor.ingest_search(
+                source, request, producer=producer
+            )
+            search_record_ids.append(search_env.artifact_id)
+            provider_papers.append([e.artifact_id for e in paper_envs])
+        except Exception:
+            failed_providers.append(provider)
+
+    all_paper_ids = [pid for group in provider_papers for pid in group]
+    paper_map: dict[str, str] = {f"ing-paper-{i}": pid for i, pid in enumerate(all_paper_ids)}
+
+    superseded: list[str] = []
+    if case.input.get("supersede_after") and provider_papers:
+        # first resolve only the first provider's papers -> identity1
+        await resolver.resolve(provider_papers[0])
+    result = await resolver.resolve(all_paper_ids)
+    superseded = list(result.identities_superseded)
+
+    report_id = f"{case.id}-{run_suffix}-ingestion-identity"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=IngestionIdentityReport(
+                benchmark_case_id=case.id,
+                paper_ids=paper_map,
+                superseded_identity_ids=superseded,
+                failed_providers=failed_providers,
+            ),
+            artifact_type="ingestion_identity_report",
+            producer=producer,
+            artifact_id=report_id,
+        )
+    )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# gap_selection workflow (Phase 7A.1): real Phase 3A gap selection
+# ---------------------------------------------------------------------------
+
+
+class _BenchmarkApprovalPolicy:
+    """Deterministic approval policy for autonomy-checkpoint cases."""
+
+    def __init__(self, approved: bool) -> None:
+        self._approved = bool(approved)
+
+    async def request_approval(self, request: Any) -> Any:
+        from research_harness.contracts.autonomy import ApprovalDecision
+
+        return ApprovalDecision(
+            request_id=request.request_id,
+            approved=self._approved,
+            reason="fixture approval policy",
+            decided_by="fixture",
+        )
+
+    async def requires_approval(self, checkpoint: str) -> bool:
+        return True
+
+
+async def run_gap_selection_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 3A GapSelectionService over a fixture GapAnalysis
+    + ranked ResearchGaps: model selection (or operator override) + autonomy
+    checkpoint. Case-scoped gap ids are rewritten to run-unique ids."""
+    from research_harness.plugins.autonomy.configurable.plugin import (
+        ConfigurableAutonomyPolicy,
+    )
+    from research_harness.plugins.research.gap_selection.plugin import GapSelectionService
+    from research_harness.research.schemas.gap import (
+        GapAnalysis,
+        GapRankDimension,
+        GapType,
+        ResearchGap,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    id_map: dict[str, str] = {}
+    for i in range(len(case.input.get("gaps") or [])):
+        id_map[f"gap-{i}"] = f"{case.id}-{run_suffix}-gap-{i}"
+    router = FixtureModelRouter(_rewrite_ids(case.input.get("llm_fixtures") or [], id_map))
+
+    gap_ids: list[str] = []
+    for i, g in enumerate(case.input.get("gaps") or []):
+        gid = id_map[f"gap-{i}"]
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=ResearchGap(
+                    title=g["title"],
+                    gap_type=GapType.mechanism_gap,
+                    description=f"Within the reviewed corpus, no model addresses {g['title']}.",
+                    supporting_papers=2,
+                    supporting_evidence_items=3,
+                    ranking=GapRankDimension(
+                        evidence_strength=0.8,
+                        research_importance=float(g.get("importance", 0.8)),
+                        theoretical_relevance=0.8,
+                        analytical_model_potential=0.8,
+                        tractability=float(g.get("tractability", 0.8)),
+                    ),
+                ),
+                artifact_type="research_gap",
+                producer=producer,
+                artifact_id=gid,
+            )
+        )
+        gap_ids.append(gid)
+
+    analysis = GapAnalysis(
+        literature_synthesis_id=f"{case.id}-synthesis",
+        evidence_corpus_id=f"{case.id}-corpus",
+        gap_ids=gap_ids,
+        ranked_gap_ids=gap_ids,
+    )
+    analysis_id = f"{case.id}-{run_suffix}-analysis"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=analysis,
+            artifact_type="gap_analysis",
+            producer=producer,
+            artifact_id=analysis_id,
+        )
+    )
+
+    autonomy_mode = str(case.input.get("autonomy_mode") or "high")
+    approval = case.input.get("approval")
+    if approval is not None:
+        autonomy: Any = _BenchmarkApprovalPolicy(approved=bool(approval))
+    else:
+        autonomy = ConfigurableAutonomyPolicy(mode=autonomy_mode)
+
+    selected = case.input.get("selected_gap_id")
+    if selected is not None:
+        selected = id_map.get(str(selected), str(selected))
+
+    svc = GapSelectionService(
+        model_router=router,
+        artifact_store=artifact_store,
+        model_role="reasoning",
+        autonomy_mode=autonomy_mode,
+        autonomy=autonomy,
+    )
+    selection_id: str | None = None
+    error: str | None = None
+    try:
+        selection_id = await svc.select(analysis_id, selected_gap_id=selected)
+    except ValueError as e:
+        error = str(e)
+
+    reuse_selection_id: str | None = None
+    if (case.reference or {}).get("expected_reuse"):
+        try:
+            reuse_selection_id = await svc.select(analysis_id)
+        except Exception:  # noqa: BLE001
+            reuse_selection_id = None
+
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=GapSelectionReport(
+                benchmark_case_id=case.id,
+                gap_ids=id_map,
+                selection_id=selection_id,
+                reuse_selection_id=reuse_selection_id,
+                error=error,
+            ),
+            artifact_type="gap_selection_report",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-gap-report",
+        )
+    )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# novelty_revalidation workflow (Phase 7A.1): real Phase 5A/5B novelty over
+# changing literature
+# ---------------------------------------------------------------------------
+
+
+def _novelty_assess(relationship: str) -> dict[str, Any]:
+    return {
+        "dimensions": [
+            {"dimension": "focal_phenomenon", "value": "match"},
+            {"dimension": "actors", "value": "match"},
+            {"dimension": "setting", "value": "match"},
+            {"dimension": "mechanism", "value": "match"},
+            {"dimension": "key_assumptions", "value": "match"},
+            {"dimension": "strategic_decision", "value": "match"},
+            {"dimension": "causal_equilibrium_relationship", "value": "match"},
+            {"dimension": "theoretical_result", "value": "match"},
+            {"dimension": "claimed_contribution", "value": "match"},
+        ],
+        "relationship": relationship,
+        "assessment": f"fixture assessment: {relationship}",
+    }
+
+
+def _novelty_revalidation_assess_fixtures(case: BenchmarkCase) -> list[dict[str, Any]]:
+    fixtures: list[dict[str, Any]] = []
+    papers: list[dict[str, Any]] = []
+    for src in (case.input.get("baseline_sources") or []) + (
+        case.input.get("changed_sources") or []
+    ):
+        if isinstance(src, dict):
+            papers.append(src)
+    for p in papers:
+        title = str(p.get("title") or "")
+        if "Microbiomes" in title:
+            fixtures.append(
+                {
+                    "match": "Soil Microbiomes in Agricultural Systems",
+                    "response": _novelty_assess("distinct"),
+                }
+            )
+        else:
+            fixtures.append(
+                {
+                    "match": "reduces consumer welfare in online markets",
+                    "response": _novelty_assess("direct_prior_art"),
+                }
+            )
+    return fixtures
+
+
+async def run_novelty_revalidation_workflow(
+    *,
+    artifact_store: Any,
+    ingestor: Any,
+    identity_resolver: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Runs the real NoveltyValidationService.create_report twice — once
+    against baseline fixture sources, once against changed sources — and
+    records report/gate ids + overall statuses for the evaluator."""
+    from research_harness.plugins.research.novelty_validator.plugin import (
+        NoveltyValidationService,
+    )
+    from research_harness.research.schemas.novelty import (
+        NoveltyValidationReport,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+
+    sub: dict[str, Any] = case.input.get("submission") or {}
+    manuscript = FormattedManuscript(
+        draft_id=f"{case.id}-{run_suffix}-draft",
+        results_package_id=f"{case.id}-results",
+        profile_id=f"{case.id}-profile",
+        profile_name="benchmark",
+        front_matter=FrontMatter(title=sub.get("title", ""), abstract=sub.get("abstract", "")),
+        sections=[
+            FormattedSection(section_id=sid, title=sid, body=body)
+            for sid, body in (sub.get("sections") or {}).items()
+        ],
+    )
+    manuscript_id = f"{case.id}-{run_suffix}-manuscript"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=manuscript,
+            artifact_type="formatted_manuscript",
+            producer=producer,
+            artifact_id=manuscript_id,
+        )
+    )
+    package = SubmissionPackage(
+        formatted_manuscript_id=manuscript_id,
+        draft_id=manuscript.draft_id,
+        profile_id=manuscript.profile_id,
+    )
+    package_id = f"{case.id}-{run_suffix}-package"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=package,
+            artifact_type="submission_package",
+            producer=producer,
+            artifact_id=package_id,
+        )
+    )
+
+    def _sources(papers: list[dict[str, Any]] | str) -> dict[str, FixtureLiteratureSource]:
+        if isinstance(papers, str):
+            return {"semantic_scholar": FixtureLiteratureSource("semantic_scholar", papers)}
+        return {"semantic_scholar": FixtureLiteratureSource("semantic_scholar", papers)}
+
+    assess_fixtures = _novelty_revalidation_assess_fixtures(case)
+    base_fixtures = list(case.input.get("llm_fixtures") or []) + assess_fixtures
+    novelty_config = dict(case.input.get("novelty_config") or {})
+    as_of = case.input.get("as_of")
+
+    def _service(sources: dict[str, FixtureLiteratureSource]) -> NoveltyValidationService:
+        return NoveltyValidationService(
+            model_router=FixtureModelRouter(base_fixtures),
+            artifact_store=artifact_store,
+            ingestor=ingestor,
+            identity_resolver=identity_resolver,
+            service_lookup=make_source_lookup(sources),
+            enrichment_enabled=False,
+            preacquisition_enabled=False,
+            **novelty_config,
+        )
+
+    svc_a = _service(_sources(list(case.input.get("baseline_sources") or [])))
+    report_a = await svc_a.create_report(package_id, as_of=as_of)
+    gate_a = await svc_a.create_gate(package_id, report_a)
+
+    svc_b = _service(_sources(case.input.get("changed_sources") or []))
+    report_b = await svc_b.create_report(package_id, as_of=as_of)
+    gate_b = await svc_b.create_gate(package_id, report_b)
+
+    async def _overall(rid: str) -> str:
+        try:
+            rep = (await artifact_store.get(rid)).parse_payload(NoveltyValidationReport)
+            return rep.overall_status.value
+        except Exception:  # noqa: BLE001
+            return ""
+
+    async def _assessments(rid: str) -> list[str]:
+        try:
+            rep = (await artifact_store.get(rid)).parse_payload(NoveltyValidationReport)
+            return list(rep.claim_assessment_ids)
+        except Exception:  # noqa: BLE001
+            return []
+
+    async def _supersedes_a(rid_b: str) -> bool:
+        try:
+            children = await artifact_store.get_children(report_a)
+            return any(
+                c.relation.value == "supersedes" and c.target_artifact_id == rid_b for c in children
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=NoveltyRevalidationReport(
+                benchmark_case_id=case.id,
+                report_a=report_a,
+                report_b=report_b,
+                gate_a=gate_a,
+                gate_b=gate_b,
+                package_id=package_id,
+                manuscript_id=manuscript_id,
+                overall_a=await _overall(report_a),
+                overall_b=await _overall(report_b),
+                assessments_a=await _assessments(report_a),
+                assessments_b=await _assessments(report_b),
+                report_b_supersedes_a=await _supersedes_a(report_b),
+            ),
+            artifact_type="novelty_revalidation_report",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-nvr-report",
+        )
+    )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# publication_packaging workflow (Phase 7A.1): real Phase 4C formatter +
+# exporters + submission package
+# ---------------------------------------------------------------------------
+
+
+async def run_publication_packaging_workflow(
+    *,
+    artifact_store: Any,
+    blob_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real Phase 4C pipeline: fixture papers + ManuscriptDraft
+    sections -> PublicationFormatterService.format (citation resolution +
+    bibliography) -> validate -> export (Markdown/LaTeX/DOCX/PDF -> BlobStore)
+    -> SubmissionPackage."""
+    from research_harness.plugins.research.publication_formatter.plugin import (
+        PublicationFormatterService,
+    )
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+    from research_harness.research.schemas.manuscript import (
+        CitationReference,
+        ManuscriptDraft,
+        ManuscriptSection,
+    )
+    from research_harness.research.schemas.publication import PublicationProfile
+
+    if blob_store is None:
+        raise BenchmarkError("publication_packaging requires a blob store")
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+
+    id_map: dict[str, str] = {}
+    for p in case.input.get("papers") or []:
+        rid = f"{case.id}-{run_suffix}-{p['id']}"
+        id_map[str(p["id"])] = rid
+        identity_id = f"{case.id}-{run_suffix}-{p['identity_id']}"
+        id_map[str(p["identity_id"])] = identity_id
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=PaperRecord(
+                    title=p["title"],
+                    authors=[Author(name=a) for a in p.get("authors") or []],
+                    year=p.get("year"),
+                    venue=p.get("venue"),
+                    doi=p.get("doi"),
+                    abstract=p.get("abstract"),
+                ),
+                artifact_type="paper_record",
+                producer=producer,
+                artifact_id=rid,
+            )
+        )
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=PaperIdentity(
+                    member_paper_artifact_ids=[rid],
+                    canonical_identifiers=[],
+                    resolution_method=ResolutionMethod.manual,
+                    resolution_evidence=[],
+                ),
+                artifact_type="paper_identity",
+                producer=producer,
+                artifact_id=identity_id,
+            )
+        )
+
+    section_ids: list[str] = []
+    for i, sec in enumerate(case.input.get("sections") or []):
+        sid = f"{case.id}-{run_suffix}-sec-{i}"
+        section = ManuscriptSection(
+            outline_id=f"{case.id}-outline",
+            section_id=sec["section_id"],
+            title=sec["title"],
+            body=sec["body"],
+            citations=[
+                CitationReference(
+                    citation_id=c["citation_id"],
+                    paper_identity_id=id_map.get(
+                        str(c["paper_identity_id"]), str(c["paper_identity_id"])
+                    ),
+                    evidence_item_id="ev-benchmark",
+                    page_locator=c.get("page_locator"),
+                )
+                for c in sec.get("citations") or []
+            ],
+        )
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=section,
+                artifact_type="manuscript_section",
+                producer=producer,
+                artifact_id=sid,
+            )
+        )
+        section_ids.append(sid)
+
+    draft = ManuscriptDraft(
+        outline_id=f"{case.id}-outline",
+        results_package_id=f"{case.id}-results",
+        title="Packaging Benchmark Draft",
+        section_ids=section_ids,
+    )
+    draft_id = f"{case.id}-{run_suffix}-draft"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=draft,
+            artifact_type="manuscript_draft",
+            producer=producer,
+            artifact_id=draft_id,
+        )
+    )
+
+    profile_cfg = case.input.get("profile") or {}
+    profile = PublicationProfile(
+        name=profile_cfg.get("name", "Benchmark Profile"),
+        citation_style=profile_cfg.get("citation_style", "author_year"),
+        anonymous_review=bool(profile_cfg.get("anonymous_review", False)),
+        abstract_required=False,
+        abstract_max_words=100,
+        required_sections=list(profile_cfg.get("required_sections") or []),
+        section_order=list(profile_cfg.get("section_order") or []),
+    )
+    profile_id = f"{case.id}-{run_suffix}-profile"
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=profile,
+            artifact_type="publication_profile",
+            producer=producer,
+            artifact_id=profile_id,
+        )
+    )
+
+    formatter = PublicationFormatterService(
+        model_router=FixtureModelRouter([]),
+        artifact_store=artifact_store,
+        blob_store=blob_store,
+        formatter_role="reasoning",
+    )
+    fm_id: str | None = None
+    error: str | None = None
+    try:
+        fm_id = await formatter.format(draft_id, profile_id)
+    except Exception as e:  # noqa: BLE001
+        error = f"formatter refused: {e}"
+
+    leaf_id: str | None = None
+    package_id: str | None = None
+    export_ids: list[str] = []
+    reexport_ids: list[str] = []
+    if fm_id is not None:
+        leaf_id, _passed = await formatter.validate(fm_id)
+        try:
+            package_id = await formatter.package(leaf_id)
+        except Exception as e:  # noqa: BLE001
+            error = f"{error}; package failed: {e}" if error else f"package failed: {e}"
+
+        # deterministic rerender: re-export each format and record the ids so the
+        # evaluator can verify the export idempotency (same artifact, same hash)
+        if package_id is not None:
+            formats = ["markdown", "latex", "docx", "pdf"]
+            for fmt in formats:
+                try:
+                    export_ids.append(await formatter.export(leaf_id, fmt))
+                except Exception:  # noqa: BLE001
+                    continue
+            for fmt in formats:
+                try:
+                    reexport_ids.append(await formatter.export(leaf_id, fmt))
+                except Exception:  # noqa: BLE001
+                    continue
+
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=PackagingReport(
+                benchmark_case_id=case.id,
+                formatted_manuscript_id=leaf_id or "",
+                package_id=package_id or "",
+                export_ids=export_ids,
+                reexport_ids=reexport_ids,
+                error=error,
+            ),
+            artifact_type="packaging_report",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-packaging-report",
+        )
+    )
+
     after = await artifact_store.list()
     return [e for e in after if e.artifact_id not in before]

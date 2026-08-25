@@ -60,6 +60,10 @@ plugins:
   - evaluator.model_specification
   - evaluator.document_acquisition
   - evaluator.revalidation
+  - evaluator.identity_resolution
+  - evaluator.gap_selection
+  - evaluator.novelty_revalidation
+  - evaluator.publication_packaging
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http

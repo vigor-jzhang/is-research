@@ -29,13 +29,17 @@ from research_harness.research.benchmarks.workflows import (
     run_e2e_workflow,
     run_equilibrium_workflow,
     run_evidence_workflow,
+    run_gap_selection_workflow,
     run_gap_workflow,
+    run_ingestion_identity_workflow,
     run_manuscript_grounding_workflow,
     run_mechanism_workflow,
     run_model_specification_workflow,
+    run_novelty_revalidation_workflow,
     run_novelty_workflow,
     run_numerical_workflow,
     run_proposition_workflow,
+    run_publication_packaging_workflow,
     run_results_assembly_workflow,
     run_retrieval_workflow,
     run_revalidation_workflow,
@@ -490,6 +494,37 @@ class EvaluationHarnessService:
                 producer=self._producer,
             )
             return produced, None
+        if workflow == "literature_ingestion_identity":
+            produced = await run_ingestion_identity_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "gap_selection":
+            produced = await run_gap_selection_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "novelty_revalidation":
+            produced = await run_novelty_revalidation_workflow(
+                artifact_store=self._store,
+                ingestor=self._ingestor,
+                identity_resolver=self._resolver,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "publication_packaging":
+            produced = await run_publication_packaging_workflow(
+                artifact_store=self._store,
+                blob_store=self._blob_store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         raise BenchmarkError(f"unsupported benchmark workflow {workflow!r}")
 
     async def _evaluate_case(
@@ -798,6 +833,10 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.model_specification",
                 "evaluator.document_acquisition",
                 "evaluator.revalidation",
+                "evaluator.identity_resolution",
+                "evaluator.gap_selection",
+                "evaluator.novelty_revalidation",
+                "evaluator.publication_packaging",
             ],
             optional_requires=["blob_store.default"],
         )
@@ -836,6 +875,10 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.model_specification": ctx.require("evaluator.model_specification"),
                 "evaluator.document_acquisition": ctx.require("evaluator.document_acquisition"),
                 "evaluator.revalidation": ctx.require("evaluator.revalidation"),
+                "evaluator.identity_resolution": ctx.require("evaluator.identity_resolution"),
+                "evaluator.gap_selection": ctx.require("evaluator.gap_selection"),
+                "evaluator.novelty_revalidation": ctx.require("evaluator.novelty_revalidation"),
+                "evaluator.publication_packaging": ctx.require("evaluator.publication_packaging"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),
