@@ -5269,6 +5269,79 @@ async def run_qualification_policy_workflow(
 
 
 # ---------------------------------------------------------------------------
+# qualification_matrix workflow (Phase 7D.2): the production-qualification
+# matrix across roles over synthetic live-quality results
+# ---------------------------------------------------------------------------
+
+
+async def run_qualification_matrix_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Builds the real `build_qualification_matrix` per role from synthetic
+    LiveQualityModelResult fixtures and persists the resulting
+    ProductionQualificationMatrix for the evaluator. No network."""
+    from research_harness.research.routing.qualification import (
+        build_qualification_matrix,
+        summarize_role_live,
+    )
+    from research_harness.research.schemas.live_quality import (
+        LiveQualityModelResult,
+        QualificationCriteria,
+    )
+    from research_harness.research.schemas.qualification import (
+        ProductionQualificationMatrix,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    live_results_by_role: dict[str, dict[str, LiveQualityModelResult]] = {}
+    for role, results in (case.input.get("live_results") or {}).items():
+        live_results_by_role[str(role)] = {
+            str(cid): LiveQualityModelResult.model_validate(dict(payload, candidate_id=str(cid)))
+            for cid, payload in results.items()
+        }
+
+    criteria_data = dict(case.input.get("criteria") or {})
+    criteria = QualificationCriteria.model_validate(criteria_data) if criteria_data else None
+    benchmark_id = str(case.input.get("benchmark_id") or "live-quality-reasoning-v1")
+    repetitions = int(case.input.get("repetitions") or 3)
+
+    matrices: list[ProductionQualificationMatrix] = []
+    for role, results in sorted(live_results_by_role.items()):
+        _summary, candidates = summarize_role_live(
+            results,
+            role=role,
+            benchmark_id=benchmark_id,
+            repetitions=repetitions,
+            criteria=criteria,
+        )
+        matrices.append(
+            build_qualification_matrix(
+                candidates,
+                role=role,
+                benchmark_id=benchmark_id,
+                repetitions=repetitions,
+                criteria=criteria or _summary.criteria,
+            )
+        )
+    for matrix in matrices:
+        await artifact_store.put(
+            ArtifactEnvelope.create(
+                payload=matrix,
+                artifact_type="production_qualification_matrix",
+                producer=producer,
+                artifact_id=f"{case.id}-{run_suffix}-matrix-{matrix.role}",
+            )
+        )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
 # publication_packaging workflow (Phase 7A.1): real Phase 4C formatter +
 # exporters + submission package
 # ---------------------------------------------------------------------------

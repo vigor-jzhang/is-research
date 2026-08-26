@@ -1204,14 +1204,90 @@ uv run research-agent routing qualification summary
 uv run research-agent eval run model-qualification-policy-v1
 ```
 
+## Qualification expansion + benchmark calibration (Phase 7D.2)
+
+Expands candidate pools per role and verifies that failures reflect genuine
+model/provider capability rather than benchmark defects. Production switching
+stays disabled; thresholds are never loosened.
+
+### Candidate pools (`live_quality.candidates` in config)
+
+fast 4 candidates, reasoning 5, critic 4 (config-driven, no slugs in service
+logic). Campaigns run >=3 repetitions per candidate (5 supported for borderline
+candidates); a single run never qualifies.
+
+### Benchmark calibration audit
+
+`research-agent eval calibration` runs a model-independent audit per live-quality
+benchmark (persisted as `benchmark_calibration_audit`): valid model-agnostic
+reference, achievable structured schema, no fixture leakage, no impossible
+evidence requirement, deterministic evaluator correctness, realistic context
+size, valid grounding ids/pages, and no provider-specific assumptions.
+Confirmed benchmark/evaluator defects are excluded from qualification (only
+genuine model/provider outcomes count).
+
+### Structured failure attribution
+
+Each failed case is attributed to `model_reasoning_failure`,
+`structured_output_failure`, `grounding_failure`,
+`instruction_following_failure`, `provider_error`, `timeout`, `rate_limit`,
+`benchmark_reference_defect`, `evaluator_defect`, or `infrastructure_failure`.
+`benchmark_reference_defect`/`evaluator_defect` are excluded from the
+critical-grounding gate.
+
+### Per-task diagnostics
+
+`LiveQualityModelResult.task_performance` records per-task (per-case) pass
+rate mean/worst/variance, critical grounding failures, and failure attribution
+across repetitions — a single aggregate score is insufficient. Reasoning
+task-level breakdown: evidence extraction, literature synthesis, gap analysis,
+mechanism generation, model specification, proposition generation. Fast-role
+diagnostics: decision accuracy, false exclusions, uncertain handling,
+structured-output reliability.
+
+### Stability + ProductionQualificationMatrix
+
+Qualified candidates get `stable` | `borderline` | `unstable` (worst
+repetition below the threshold, critical grounding, or provider-error above the
+cap -> unstable). Unstable candidates are never primary/fallback eligible.
+`routing qualification matrix` persists the `ProductionQualificationMatrix`
+(role, candidate, qualified, stability, primary_eligible, fallback_eligible,
+repetitions, rejection reasons, live-quality run ids) — the Phase 7D activation
+input. Qualified candidates are compared only among themselves (quality/
+reliability first, then latency/cost); unqualified candidates are never ranked
+above qualified ones; raw dimensions are preserved.
+
+### Qualification benchmark (`model-qualification-policy-v1`, 16 cases)
+
+Adds to the Phase 7D.1 cases: benchmark defect excluded from model failure,
+evaluator defect excluded from model failure, borderline candidate requiring
+extra repetitions, unstable candidate rejected (not eligible), qualified
+primary + qualified fallback, and role-specific partial qualification via the
+cross-role matrix. `evaluator.model_qualification` v0.2 adds
+`stability_classification_accuracy` and `eligibility_accuracy`; the critical
+`unsafe_model_qualification_rate` stays 0.
+
+### CLI
+
+```bash
+uv run research-agent eval calibration
+uv run research-agent routing qualify --role fast --repetitions 3
+uv run research-agent routing qualification matrix
+uv run research-agent routing qualification inspect <campaign-id>
+uv run research-agent eval run model-qualification-policy-v1
+```
+
 ## Recommended next increment
 
-Post-Phase-7D.1: the evaluation program covers 29 benchmark families with
+Post-Phase-7D.2: the evaluation program covers 29 benchmark families with
 deterministic gating; live qualification campaigns identify per-role
 primary/fallback over real live-quality evidence with a strict
-unsafe_model_qualification_rate = 0 gate. The verdict remains
-`ready_with_gaps` (non-blocking: live provider connectors, advisory
+unsafe_model_qualification_rate = 0 gate, structured failure attribution,
+per-task diagnostics, and a production-qualification matrix. The verdict
+remains `ready_with_gaps` (non-blocking: live provider connectors, advisory
 LLM-quality judging). Phase 7D (controlled activation) would build opt-in
 automatic role switching with hard quality/cost budgets, deterministic
 fallback, circuit breakers, observability, and immediate rollback to static
 configuration — reusing only roles with sufficient qualified live evidence.
+Only the critic role currently has a qualified (stable) primary; fast and
+reasoning have none.

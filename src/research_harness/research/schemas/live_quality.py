@@ -1,15 +1,17 @@
-"""Live-quality model validation + routing-readiness schemas — Phase 7D.0.
+"""Live-quality model validation + routing-readiness schemas — Phase 7D.0/7D.2.
 
 Durable artifacts recording live-quality benchmark runs, per-model results
-(with repetitions/variance), and deterministic routing-readiness assessments.
-Production routing is never enabled automatically; these artifacts only gate
-whether a role MAY be considered ready for Phase 7D controlled activation.
+(with repetitions/variance), structured failure attribution, task-level
+performance, and deterministic routing-readiness assessments. Production
+routing is never enabled automatically; these artifacts only gate whether a
+role MAY be considered ready for Phase 7D controlled activation.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -17,6 +19,33 @@ from pydantic import BaseModel, Field
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+class FailureAttributionKind(str, Enum):
+    """Structured attribution for failed live-quality cases (Phase 7D.2).
+
+    Only genuine model/provider outcomes count toward qualification after
+    benchmark validity is confirmed; `benchmark_reference_defect` and
+    `evaluator_defect` are excluded from qualification."""
+
+    model_reasoning_failure = "model_reasoning_failure"
+    structured_output_failure = "structured_output_failure"
+    grounding_failure = "grounding_failure"
+    instruction_following_failure = "instruction_following_failure"
+    provider_error = "provider_error"
+    timeout = "timeout"
+    rate_limit = "rate_limit"
+    benchmark_reference_defect = "benchmark_reference_defect"
+    evaluator_defect = "evaluator_defect"
+    infrastructure_failure = "infrastructure_failure"
+
+
+EXCLUDED_ATTRIBUTION_KINDS = frozenset(
+    {
+        FailureAttributionKind.benchmark_reference_defect.value,
+        FailureAttributionKind.evaluator_defect.value,
+    }
+)
 
 
 class QualificationCriteria(BaseModel):
@@ -57,6 +86,22 @@ class LiveQualityTaskResult(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class LiveQualityTaskPerformance(BaseModel):
+    """Per-task (per-case) live-quality performance across repetitions (Phase 7D.2)."""
+
+    task_id: str
+    task_name: str = ""
+    repetitions: int = 0
+    pass_rate_mean: float | None = None
+    pass_rate_worst: float | None = None
+    pass_rate_variance: float | None = None
+    critical_grounding_failures: int = 0
+    failure_attribution: dict[str, int] = Field(default_factory=dict)
+    excluded_failure_attribution: dict[str, int] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
 class LiveQualityModelResult(BaseModel):
     """Aggregated live-quality result for one model on one benchmark.
 
@@ -85,6 +130,22 @@ class LiveQualityModelResult(BaseModel):
     qualification: bool | None = Field(default=None, description="Qualified for production routing")
     qualification_reasons: list[str] = Field(default_factory=list)
     failure_counts: dict[str, int] = Field(default_factory=dict)
+    failure_attribution: dict[str, int] = Field(
+        default_factory=dict,
+        description="Case-failure kind -> count for genuine model/provider outcomes (Phase 7D.2)",
+    )
+    excluded_failure_attribution: dict[str, int] = Field(
+        default_factory=dict,
+        description="Case-failure kind -> count for confirmed benchmark/evaluator defects, "
+        "excluded from qualification (Phase 7D.2)",
+    )
+    task_performance: list[LiveQualityTaskPerformance] = Field(
+        default_factory=list,
+        description="Per-task pass rates + failure attribution across repetitions (Phase 7D.2)",
+    )
+    stability: str | None = Field(
+        default=None, description="stable | borderline | unstable (Phase 7D.2)"
+    )
     evidence_timestamp: datetime = Field(
         default_factory=_utcnow, description="When this evidence was collected"
     )

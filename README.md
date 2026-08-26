@@ -109,6 +109,12 @@ uv run research-agent routing qualify --role reasoning --repetitions 3   # real 
 uv run research-agent routing qualification inspect <campaign-id>
 uv run research-agent routing qualification summary                      # per-role primary/fallback/status
 uv run research-agent eval run model-qualification-policy-v1             # offline qualification benchmark
+
+# Qualification expansion + benchmark calibration (Phase 7D.2)
+uv run research-agent eval calibration                                   # audit live-quality benchmarks (references, schemas, leakage, grounding, provider assumptions)
+uv run research-agent routing qualify --role fast --repetitions 3        # expanded config-driven candidate pools
+uv run research-agent routing qualification matrix                       # ProductionQualificationMatrix (activation input for Phase 7D)
+uv run research-agent eval run model-qualification-policy-v1             # 16 offline cases incl. defect-exclusion/stability/eligibility
 ```
 
 The complete command reference (including kernel commands, `run` demo,
@@ -213,6 +219,7 @@ tests/           # unit/ 80, integration/ 48, live/ 18 (opt-in markers)
 - **Phase 7C** — policy-constrained model routing (shadow): evidence-enrichment benchmark closes the 5C-5D gap; routing policies (quality_first/balanced/cost_constrained/latency_constrained) select from persisted leaderboards with capability/quality/reliability gates, fallbacks, stale-evidence handling, role isolation; shadow mode never switches production models
 - **Phase 7D.0** — live-quality model validation + routing readiness: real-model live-quality benchmarks (reasoning/critic/fast) with structural references and deterministic evaluators, configurable repetitions with variance, role-specific production-qualification gates (live_quality_evidence required), production-routing-readiness benchmark, and per-role ready/not_ready verdicts — no automatic routing activation
 - **Phase 7D.1** — live-model qualification campaigns: config-driven candidate sets per role, >=3 repetitions each over the live-quality benchmarks, structured rejection kinds, primary/fallback selection among qualified models only, offline model-qualification-policy benchmark (unsafe_model_qualification_rate = 0), per-role qualified status — production switching stays off
+- **Phase 7D.2** — qualification expansion & benchmark calibration: expanded candidate pools (fast 4, reasoning 5, critic 4), model-independent calibration audit of every live-quality task (reference validity, achievable schema, no leakage/impossible-evidence/provider assumptions), structured failure attribution (model/grounding/instruction/provider/timeout/rate-limit/benchmark-defect/evaluator-defect/infrastructure), per-task diagnostics (evidence extraction dominates reasoning grounding failures), stability (stable/borderline/unstable) with unstable candidates never eligible, ProductionQualificationMatrix (activation input for Phase 7D), and 6 new offline qualification cases (defect exclusion, extra repetitions, unstable rejection, primary+fallback, role-partial matrix) — thresholds never loosened
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
 - **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, publication-quality scoring (see the readiness report's uncovered capabilities)
 - **Post-Phase-7A.1 (not implemented)** — live provider-connector/publisher-endpoint coverage, advisory LLM-quality judging

@@ -66,7 +66,11 @@ def qualify_model(
     result: LiveQualityModelResult,
     criteria: QualificationCriteria,
 ) -> tuple[bool, list[str]]:
-    """Deterministic qualification of one model's live-quality result."""
+    """Deterministic qualification of one model's live-quality result.
+
+    Confirmed benchmark/evaluator defects (Phase 7D.2) are excluded from the
+    critical-grounding gate: only genuine model/provider outcomes count. This
+    is a benchmark-validity repair, never a threshold loosening."""
     reasons: list[str] = []
 
     if result.repetitions < criteria.min_repetitions:
@@ -100,14 +104,28 @@ def qualify_model(
         reasons.append(
             f"provider_error_frequency {provider_error:.3f} > {criteria.max_provider_error_rate}"
         )
-    if criteria.require_no_critical_grounding_failures and result.critical_grounding_failures:
-        reasons.append(f"{result.critical_grounding_failures} critical grounding failure(s)")
+    excluded = _excluded_grounding(result)
+    effective_grounding = max(0, result.critical_grounding_failures - excluded)
+    if criteria.require_no_critical_grounding_failures and effective_grounding:
+        reasons.append(f"{effective_grounding} critical grounding failure(s)")
     cases = sum(t.cases_total for t in result.task_results)
     if cases < criteria.min_cases:
         reasons.append(f"exercised cases {cases} < {criteria.min_cases}")
 
     qualified = not reasons
     return qualified, reasons
+
+
+def _excluded_grounding(result: LiveQualityModelResult) -> int:
+    """Count of critical-grounding failures attributable to confirmed benchmark
+    or evaluator defects (Phase 7D.2). These are not counted against the model."""
+    from research_harness.research.schemas.live_quality import EXCLUDED_ATTRIBUTION_KINDS
+
+    total = 0
+    for kind, count in (result.excluded_failure_attribution or {}).items():
+        if kind in EXCLUDED_ATTRIBUTION_KINDS:
+            total += int(count)
+    return total
 
 
 def assess_role_readiness(

@@ -43,6 +43,7 @@ from research_harness.research.benchmarks.workflows import (
     run_numerical_workflow,
     run_proposition_workflow,
     run_publication_packaging_workflow,
+    run_qualification_matrix_workflow,
     run_qualification_policy_workflow,
     run_results_assembly_workflow,
     run_retrieval_workflow,
@@ -524,6 +525,13 @@ class EvaluationHarnessService:
             return produced, None
         if workflow == "qualification_policy":
             produced = await run_qualification_policy_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "qualification_matrix":
+            produced = await run_qualification_matrix_workflow(
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,

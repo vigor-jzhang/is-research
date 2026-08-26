@@ -157,13 +157,15 @@ def readiness_report() -> ReadinessResult:
         narrative = (
             "Deterministic gating is complete across all 29 benchmark families "
             "(incl. evidence enrichment, model routing, live-quality reasoning/"
-            "critic/fast, production-routing readiness, and model qualification) "
-            "and the e2e pipeline passes. Live-quality benchmarks (7D.0) provide "
-            "real-model evidence; the readiness/qualification gates require "
-            "live_quality_evidence for production routing. Residual gaps are "
-            "non-blocking: live provider connectors/publisher endpoints, "
-            "advisory LLM-quality judging, and automatic routing activation "
-            "(Phase 7D). See uncovered_capabilities."
+            "critic/fast, production-routing readiness, model qualification, and "
+            "the 7D.2 calibration audit) and the e2e pipeline passes. Live-quality "
+            "benchmarks (7D.0) provide real-model evidence; 7D.2 adds structured "
+            "failure attribution, per-task diagnostics, stability, and a "
+            "production-qualification matrix (activation input). The readiness/"
+            "qualification gates require live_quality_evidence for production "
+            "routing. Residual gaps are non-blocking: live provider connectors/"
+            "publisher endpoints, advisory LLM-quality judging, and automatic "
+            "routing activation (Phase 7D). See uncovered_capabilities."
         )
     else:
         verdict = "ready"

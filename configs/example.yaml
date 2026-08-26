@@ -256,12 +256,19 @@ live_quality:
     reasoning:
       - "nvidia/nemotron-3-ultra-550b-a55b:free"
       - "deepseek/deepseek-v4-flash-0731"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "mistralai/mistral-small-3.1-24b-instruct:free"
+      - "google/gemini-2.5-flash:free"
     critic:
       - "nvidia/nemotron-3-ultra-550b-a55b:free"
       - "deepseek/deepseek-v4-flash-0731"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "mistralai/mistral-small-3.1-24b-instruct:free"
     fast:
       - "deepseek/deepseek-v4-flash-0731"
       - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "mistralai/mistral-small-3.1-24b-instruct:free"
 
 loop:
   max_steps: 8

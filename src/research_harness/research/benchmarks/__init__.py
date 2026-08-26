@@ -9380,23 +9380,45 @@ def _lq_result(
     repetitions: int = 3,
     age_seconds: float | None = None,
     cost: float | None = None,
+    role: str = "reasoning",
+    repetition_rates: list[float] | None = None,
+    stability: str | None = None,
+    failure_attribution: dict[str, int] | None = None,
+    excluded_failure_attribution: dict[str, int] | None = None,
+    task_performance: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     created = (
         datetime.now(UTC) - timedelta(seconds=age_seconds) if age_seconds else datetime.now(UTC)
     )
+    if repetition_rates is not None:
+        det_mean = sum(repetition_rates) / len(repetition_rates)
+        det_worst = min(repetition_rates)
+        det_var = (
+            sum((r - det_mean) ** 2 for r in repetition_rates) / len(repetition_rates)
+            if len(repetition_rates) > 1
+            else 0.0
+        )
+        reps = len(repetition_rates)
+    else:
+        det_mean, det_worst, det_var, reps = det, det, 0.0, repetitions
     return {
         "candidate_id": candidate_id,
         "model": {"candidate_id": candidate_id, "requested_model": f"m-{candidate_id}"},
         "resolved_model": f"m-{candidate_id}",
-        "role": "reasoning",
+        "role": role,
         "benchmark_id": "live-quality-reasoning-v1",
-        "repetitions": repetitions,
-        "deterministic_pass_rate_mean": det,
-        "deterministic_pass_rate_worst": det,
+        "repetitions": reps,
+        "deterministic_pass_rate_mean": det_mean,
+        "deterministic_pass_rate_worst": det_worst,
+        "deterministic_pass_rate_variance": det_var,
         "structured_output_success_rate": structured,
         "provider_error_frequency": provider_error,
         "critical_grounding_failures": grounding_failures,
         "estimated_cost": cost,
+        "stability": stability,
+        "failure_attribution": failure_attribution or {},
+        "excluded_failure_attribution": excluded_failure_attribution or {},
+        "task_performance": task_performance or [],
         "task_results": [
             {
                 "repetition": i,
@@ -9410,7 +9432,7 @@ def _lq_result(
                 "task_pass_rate": 1.0,
                 "task_completed": True,
             }
-            for i in range(repetitions)
+            for i in range(reps)
         ],
         "evidence_timestamp": created.isoformat(),
     }
@@ -9607,15 +9629,16 @@ def _qualification_case(
     *,
     role: str,
     reference: dict[str, Any],
-    live_results: dict[str, dict[str, Any]],
+    live_results: dict[str, Any],
     criteria: dict[str, Any] | None = None,
+    workflow: str = "qualification_policy",
 ) -> BenchmarkCaseDefinition:
     return BenchmarkCaseDefinition(
         id=case_id,
         name=name,
         description=description,
         input={
-            "workflow": "qualification_policy",
+            "workflow": workflow,
             "role": role,
             "live_results": live_results,
             "criteria": criteria or {},
@@ -9779,6 +9802,155 @@ MODEL_QUALIFICATION_POLICY_V1: BenchmarkDefinition = BenchmarkDefinition(
             reference={
                 "expected_status": "no_qualified_model",
                 "expected_rejection_kinds": {"m-border": ["below_quality_threshold"]},
+            },
+        ),
+        _qualification_case(
+            "mq-benchmark-defect-excluded",
+            "benchmark defect excluded from model failure",
+            "A confirmed benchmark-reference defect is not counted against the model: "
+            "the candidate's only grounding failures are excluded and it qualifies.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_result(
+                    "m-a",
+                    det=0.9,
+                    grounding_failures=1,
+                    excluded_failure_attribution={"benchmark_reference_defect": 1},
+                    failure_attribution={"benchmark_reference_defect": 1},
+                )
+            },
+            reference={
+                "expected_status": "qualified_without_fallback",
+                "expected_primary": "m-a",
+                "expected_qualified_models": ["m-a"],
+            },
+        ),
+        _qualification_case(
+            "mq-evaluator-defect-excluded",
+            "evaluator defect excluded from model failure",
+            "A confirmed evaluator defect is not counted against the model: inflated "
+            "critical-grounding counts are excluded and the candidate qualifies.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_result(
+                    "m-a",
+                    det=0.9,
+                    grounding_failures=2,
+                    excluded_failure_attribution={"evaluator_defect": 2},
+                    failure_attribution={"evaluator_defect": 2},
+                )
+            },
+            reference={
+                "expected_status": "qualified_without_fallback",
+                "expected_primary": "m-a",
+                "expected_qualified_models": ["m-a"],
+            },
+        ),
+        _qualification_case(
+            "mq-borderline-extra-repetitions",
+            "borderline candidate requiring extra repetitions",
+            "A borderline candidate evaluated over 5 repetitions (worst just above the "
+            "threshold) qualifies with stability=borderline; extra repetitions are "
+            "supported and recorded.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_result(
+                    "m-a", repetition_rates=[0.86, 0.86, 0.86, 0.86, 0.86], structured=0.9
+                )
+            },
+            reference={
+                "expected_status": "qualified_without_fallback",
+                "expected_primary": "m-a",
+                "expected_qualified_models": ["m-a"],
+                "expected_stability": {"m-a": "borderline"},
+                "expected_primary_eligible": {"m-a": True},
+                "expected_repetitions": {"m-a": 5},
+            },
+        ),
+        _qualification_case(
+            "mq-unstable-rejected",
+            "unstable candidate rejected",
+            "A candidate whose mean passes but a repetition falls below the threshold is "
+            "qualified by the existing criteria yet marked unstable and NOT eligible "
+            "for primary/fallback (activation).",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_result("m-a", repetition_rates=[1.0, 1.0, 0.7], structured=0.9)
+            },
+            reference={
+                "expected_status": "qualified_without_fallback",
+                "expected_primary": "m-a",
+                "expected_qualified_models": ["m-a"],
+                "expected_stability": {"m-a": "unstable"},
+                "expected_primary_eligible": {"m-a": False},
+                "expected_fallback_eligible": {"m-a": False},
+            },
+        ),
+        _qualification_case(
+            "mq-qualified-primary-fallback",
+            "qualified primary + qualified fallback",
+            "Two independently qualified, stable candidates produce a primary and a "
+            "qualified fallback, both eligible.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_result("m-a", det=0.92),
+                "m-b": _lq_result("m-b", det=0.9),
+            },
+            reference={
+                "expected_status": "qualified",
+                "expected_primary": "m-a",
+                "expected_fallback": "m-b",
+                "expected_qualified_models": ["m-a", "m-b"],
+                "expected_stability": {"m-a": "stable", "m-b": "stable"},
+                "expected_primary_eligible": {"m-a": True},
+                "expected_fallback_eligible": {"m-b": True},
+            },
+        ),
+        _qualification_case(
+            "mq-role-partial-qualification",
+            "role-specific partial qualification",
+            "One role fully qualifies (primary + fallback) while another only has a "
+            "qualified primary; the matrix records the per-role partial state.",
+            role="reasoning",
+            workflow="qualification_matrix",
+            live_results={
+                "reasoning": {
+                    "m-a": _lq_result("m-a", det=0.92, role="reasoning"),
+                    "m-b": _lq_result("m-b", det=0.9, role="reasoning"),
+                },
+                "critic": {"m-c": _lq_result("m-c", det=0.95, role="critic")},
+            },
+            reference={
+                "expected_matrix_rows": [
+                    {
+                        "role": "reasoning",
+                        "candidate": "m-a",
+                        "qualified": True,
+                        "stability": "stable",
+                        "primary_eligible": True,
+                        "fallback_eligible": False,
+                    },
+                    {
+                        "role": "reasoning",
+                        "candidate": "m-b",
+                        "qualified": True,
+                        "stability": "stable",
+                        "primary_eligible": True,
+                        "fallback_eligible": True,
+                    },
+                    {
+                        "role": "critic",
+                        "candidate": "m-c",
+                        "qualified": True,
+                        "stability": "stable",
+                        "primary_eligible": True,
+                        "fallback_eligible": False,
+                    },
+                ],
+                "expected_matrix_status": {
+                    "reasoning": "qualified",
+                    "critic": "qualified_without_fallback",
+                },
             },
         ),
     ],

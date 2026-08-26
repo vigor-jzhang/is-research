@@ -17,10 +17,16 @@ from typing import Any
 from research_harness.kernel.plugin import Plugin, PluginContext, PluginMetadata
 from research_harness.research.benchmarks import BUILTIN_BENCHMARKS
 from research_harness.research.envelope import ArtifactEnvelope
-from research_harness.research.schemas.evaluation import EvaluationReport
+from research_harness.research.schemas.evaluation import (
+    EvaluationReport,
+    EvaluatorResult,
+    EvaluatorStatus,
+)
 from research_harness.research.schemas.live_quality import (
+    FailureAttributionKind,
     LiveQualityModelResult,
     LiveQualityRun,
+    LiveQualityTaskPerformance,
     LiveQualityTaskResult,
     QualificationCriteria,
     RoutingReadinessAssessment,
@@ -92,6 +98,10 @@ class LiveQualityService:
         task_results: list[LiveQualityTaskResult] = []
         calls: list[Any] = []
         critical_grounding = 0
+        case_rates: dict[str, list[float]] = {}
+        case_names: dict[str, str] = {}
+        case_grounding: dict[str, int] = {}
+        case_failures: dict[str, list[str]] = {}
         for rep in range(1, repetitions + 1):
             router = await self._make_router(
                 role, benchmark_id, model_config, timeout_seconds, retries
@@ -121,6 +131,9 @@ class LiveQualityService:
                 continue
             report = (await self._store.get(report_id)).parse_payload(EvaluationReport)
             critical_grounding += self._report_metric(report, "critical_grounding_failures")
+            await self._collect_case_stats(
+                report, case_rates, case_names, case_grounding, case_failures
+            )
             task_results.append(
                 LiveQualityTaskResult(
                     repetition=rep,
@@ -187,9 +200,17 @@ class LiveQualityService:
             failure_counts={k: int(v) for k, v in call_metrics.get("failure_counts", {}).items()},
         )
 
+        from research_harness.research.routing.qualification import (
+            stability_status,
+        )
         from research_harness.research.routing.readiness import qualify_model
 
         criteria = criteria or criteria_for_role(role)
+        self._apply_attribution(result, case_failures, benchmark_id)
+        result.task_performance = self._build_task_performance(
+            case_rates, case_names, case_grounding, case_failures
+        )
+        result.stability = stability_status(result, criteria)
         qualified, reasons = qualify_model(result, criteria)
         result.qualification = qualified
         result.qualification_reasons = reasons
@@ -431,11 +452,170 @@ class LiveQualityService:
         campaigns.sort(key=lambda c: c.completed_at, reverse=True)
         return campaigns
 
+    async def build_qualification_matrix(self, role: str | None = None) -> list[Any]:
+        """Build (and persist) the production-qualification matrix (Phase 7D.2)
+        from the latest campaign per role. Becomes the activation input for
+        Phase 7D controlled routing."""
+        from research_harness.research.routing.qualification import build_qualification_matrix
+        from research_harness.research.routing.readiness import criteria_for_role
+        from research_harness.research.schemas.qualification import (
+            ProductionQualificationMatrix,
+        )
+
+        campaigns = await self.list_campaigns()
+        latest_by_role: dict[str, Any] = {}
+        for c in campaigns:
+            if role is not None and c.role != role:
+                continue
+            if c.role not in latest_by_role or c.completed_at > latest_by_role[c.role].completed_at:
+                latest_by_role[c.role] = c
+
+        matrices: list[ProductionQualificationMatrix] = []
+        for r, campaign in sorted(latest_by_role.items()):
+            criteria = criteria_for_role(r)
+            matrix = build_qualification_matrix(
+                campaign.candidates,
+                role=r,
+                benchmark_id=campaign.benchmark_id,
+                repetitions=campaign.repetitions,
+                criteria=criteria,
+            )
+            await self._store.put(
+                ArtifactEnvelope.create(
+                    payload=matrix,
+                    artifact_type="production_qualification_matrix",
+                    producer=self._producer,
+                    artifact_id=matrix.id,
+                )
+            )
+            matrices.append(matrix)
+        return matrices
+
+    async def get_matrix(self, matrix_id: str) -> Any:
+        from research_harness.research.schemas.qualification import (
+            ProductionQualificationMatrix,
+        )
+
+        return (await self._store.get(matrix_id)).parse_payload(ProductionQualificationMatrix)
+
     def _report_metric(self, report: EvaluationReport, metric_id: str) -> int:
         for m in report.metrics:
             if m.metric_id == metric_id:
                 return int(m.value)
         return 0
+
+    # ------------------------------------------------------------------
+    # Phase 7D.2: per-task performance + failure attribution
+    # ------------------------------------------------------------------
+
+    async def _collect_case_stats(
+        self,
+        report: EvaluationReport,
+        case_rates: dict[str, list[float]],
+        case_names: dict[str, str],
+        case_grounding: dict[str, int],
+        case_failures: dict[str, list[str]],
+    ) -> None:
+        """Accumulate per-case pass rates, names, grounding counts, and failure
+        texts across repetitions (from the stored report + evaluator results)."""
+        for cr in report.case_results:
+            case_rates.setdefault(cr.case_id, []).append(
+                1.0 if cr.status.value == "passed" else 0.0
+            )
+            case_names.setdefault(cr.case_id, cr.case_name)
+            if cr.status.value != "passed":
+                texts = await self._case_failure_texts(cr.evaluator_result_ids)
+                case_failures.setdefault(cr.case_id, []).extend(texts)
+                case_grounding[cr.case_id] = case_grounding.get(cr.case_id, 0) + (
+                    await self._evaluator_grounding(cr.evaluator_result_ids)
+                )
+
+    async def _case_failure_texts(self, evaluator_result_ids: list[str]) -> list[str]:
+        texts: list[str] = []
+        for rid in evaluator_result_ids:
+            try:
+                env = await self._store.get(rid)
+                result = env.parse_payload(EvaluatorResult)
+            except Exception:  # noqa: BLE001
+                continue
+            if result.status != EvaluatorStatus.passed and result.explanation:
+                texts.append(result.explanation)
+        return texts
+
+    async def _evaluator_grounding(self, evaluator_result_ids: list[str]) -> int:
+        total = 0
+        for rid in evaluator_result_ids:
+            try:
+                env = await self._store.get(rid)
+                result = env.parse_payload(EvaluatorResult)
+            except Exception:  # noqa: BLE001
+                continue
+            total += int((result.value or {}).get("critical_grounding_failures") or 0)
+        return total
+
+    def _apply_attribution(
+        self, result: LiveQualityModelResult, case_failures: dict[str, list[str]], benchmark_id: str
+    ) -> None:
+        """Attribute case failures into genuine vs excluded (confirmed
+        benchmark/evaluator defect) buckets, then merge call-level failures."""
+        from research_harness.research.benchmarks.calibration import confirmed_defect_map
+        from research_harness.research.routing.qualification import attribute_failures
+
+        defect_cases = {
+            cid for (bid, cid), _kind in confirmed_defect_map().items() if bid == benchmark_id
+        }
+        attribution: dict[str, int] = {}
+        excluded: dict[str, int] = {}
+        for case_id, texts in case_failures.items():
+            a, e = attribute_failures(texts, defect_case_ids=defect_cases, case_id=case_id)
+            for kind, count in a.items():
+                attribution[kind] = attribution.get(kind, 0) + count
+            for kind, count in e.items():
+                excluded[kind] = excluded.get(kind, 0) + count
+        # call-level failures (structured output + provider errors)
+        call_failure_to_kind = {
+            "structured_output_failure": FailureAttributionKind.structured_output_failure.value,
+            "timeout": FailureAttributionKind.timeout.value,
+            "rate_limit": FailureAttributionKind.rate_limit.value,
+            "provider_error": FailureAttributionKind.provider_error.value,
+            "validation_failure": FailureAttributionKind.provider_error.value,
+        }
+        for kind, count in (result.failure_counts or {}).items():
+            mapped = call_failure_to_kind.get(str(kind))
+            if mapped:
+                attribution[mapped] = attribution.get(mapped, 0) + int(count)
+        result.failure_attribution = attribution
+        result.excluded_failure_attribution = excluded
+
+    def _build_task_performance(
+        self,
+        case_rates: dict[str, list[float]],
+        case_names: dict[str, str],
+        case_grounding: dict[str, int],
+        case_failures: dict[str, list[str]],
+    ) -> list[LiveQualityTaskPerformance]:
+        from research_harness.research.routing.qualification import attribute_failure_text
+
+        performance: list[LiveQualityTaskPerformance] = []
+        for case_id in sorted(case_rates):
+            rates = case_rates[case_id]
+            attribution: dict[str, int] = {}
+            for text in case_failures.get(case_id, []):
+                kind = attribute_failure_text(text).value
+                attribution[kind] = attribution.get(kind, 0) + 1
+            performance.append(
+                LiveQualityTaskPerformance(
+                    task_id=case_id,
+                    task_name=case_names.get(case_id, ""),
+                    repetitions=len(rates),
+                    pass_rate_mean=fmean(rates) if rates else None,
+                    pass_rate_worst=min(rates) if rates else None,
+                    pass_rate_variance=(pvariance(rates) if len(rates) > 1 else 0.0),
+                    critical_grounding_failures=case_grounding.get(case_id, 0),
+                    failure_attribution=attribution,
+                )
+            )
+        return performance
 
 
 def run_failures(report: EvaluationReport) -> list[str]:

@@ -6783,6 +6783,80 @@ def live_quality_inspect(
                     f"{t.cases_passed}/{t.cases_total}  pass_rate {t.task_pass_rate:.3f}  "
                     f"run {t.run_id}"
                 )
+            console.print(f"  stability {result.stability}")
+            if result.failure_attribution:
+                console.print(f"  failure attribution {result.failure_attribution}")
+            if result.excluded_failure_attribution:
+                console.print(f"  excluded attribution {result.excluded_failure_attribution}")
+            for tp in result.task_performance:
+                console.print(
+                    f"  task {tp.task_id} mean={tp.pass_rate_mean} worst={tp.pass_rate_worst} "
+                    f"var={tp.pass_rate_variance} grounding={tp.critical_grounding_failures} "
+                    f"attribution={tp.failure_attribution}"
+                )
+
+    asyncio.run(_run())
+
+
+@evaluation_app.command("calibration")
+def evaluation_calibration(
+    benchmark: Annotated[
+        str | None,
+        typer.Option(help="Audit one live-quality benchmark (default: all)"),
+    ] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Audit live-quality benchmarks for calibration (Phase 7D.2).
+
+    Model-independent audit: valid reference, achievable schema, no fixture
+    leakage, no impossible evidence, deterministic evaluator correctness,
+    realistic context size, valid grounding ids/pages, no provider assumptions.
+    Confirmed defects are excluded from qualification. Audit artifacts persist.
+    """
+    import asyncio
+
+    from research_harness.research.benchmarks.calibration import (
+        audit_all_live_quality_benchmarks,
+        audit_live_quality_benchmark,
+    )
+
+    async def _run() -> None:
+        cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            audits = (
+                [audit_live_quality_benchmark(benchmark)]
+                if benchmark
+                else audit_all_live_quality_benchmarks()
+            )
+            from research_harness.research.envelope import ArtifactEnvelope
+
+            for audit in audits:
+                color = "green" if audit.verdict == "ok" else "red"
+                console.print(
+                    f"[{color}]CalibrationAudit {audit.benchmark_id} verdict={audit.verdict}[/{color}]"
+                )
+                for check in audit.checks:
+                    console.print(f"  {'PASS' if check.passed else 'FAIL'} {check.name}")
+                for finding in audit.findings:
+                    console.print(
+                        f"  [yellow]finding ({finding.severity.value})[/yellow] {finding.message}"
+                    )
+                if audit.confirmed_defects:
+                    console.print(f"  confirmed defects: {audit.confirmed_defects}")
+                await store.put(
+                    ArtifactEnvelope.create(
+                        payload=audit,
+                        artifact_type="benchmark_calibration_audit",
+                        producer="evaluation.calibration",
+                        artifact_id=audit.id,
+                    )
+                )
 
     asyncio.run(_run())
 
@@ -6823,10 +6897,65 @@ def routing_qualify(
             )
             for c in campaign.candidates:
                 mark = "[green]qualified[/green]" if c.qualified else "[red]rejected[/red]"
-                console.print(f"  {c.candidate_id} {mark} det={c.deterministic_pass_rate_mean}")
+                stab = c.stability or "-"
+                console.print(
+                    f"  {c.candidate_id} {mark} det={c.deterministic_pass_rate_mean} "
+                    f"stability={stab} kinds={c.rejection_kinds}"
+                )
                 for reason in c.rejection_reasons:
                     console.print(f"    [yellow]{reason}[/yellow]")
+                if c.failure_attribution:
+                    console.print(f"    failure attribution: {c.failure_attribution}")
             console.print(f"  rejection counts: {summary.rejection_counts}")
+
+    asyncio.run(_run())
+
+
+@routing_qualification_app.command("matrix")
+def routing_qualification_matrix(
+    role: Annotated[str | None, typer.Option(help="Filter by role (default: all)")] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Build/print the production-qualification matrix (Phase 7D.2).
+
+    Rows: role, candidate, qualified, stability, primary_eligible,
+    fallback_eligible, repetitions, rejection reasons, live-quality run ids.
+    This is the activation input for Phase 7D controlled routing.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("live_quality.default")
+            matrices = await svc.build_qualification_matrix(role)
+            if not matrices:
+                console.print("  (no qualification campaigns yet)")
+                return
+            for m in matrices:
+                color = "green" if m.status == "qualified" else "yellow"
+                console.print(
+                    f"[{color}]Role {m.role}: {m.status} "
+                    f"(primary={m.primary} fallback={m.fallback})[/{color}]"
+                )
+                for row in m.rows:
+                    console.print(
+                        f"  {row.candidate} qualified={row.qualified} stability={row.stability} "
+                        f"primary_eligible={row.primary_eligible} "
+                        f"fallback_eligible={row.fallback_eligible} reps={row.repetitions} "
+                        f"det={row.deterministic_pass_rate_mean}"
+                    )
+                    if row.rejection_reasons:
+                        console.print(f"    [yellow]{row.rejection_reasons}[/yellow]")
+                    if row.live_quality_run_ids:
+                        console.print(f"    runs {row.live_quality_run_ids}")
+            matrix_ids = [m.id for m in matrices]
+            console.print(f"  matrix artifacts: {matrix_ids}")
 
     asyncio.run(_run())
 
@@ -6864,9 +6993,24 @@ def routing_qualification_inspect(
             console.print(f"  live-quality runs {c.live_quality_run_ids}")
             for cand in c.candidates:
                 console.print(
-                    f"  {cand.candidate_id} qualified={cand.qualified} "
-                    f"kinds={cand.rejection_kinds} det={cand.deterministic_pass_rate_mean}"
+                    f"  {cand.candidate_id} qualified={cand.qualified} stability={cand.stability} "
+                    f"kinds={cand.rejection_kinds} det={cand.deterministic_pass_rate_mean} "
+                    f"worst={cand.deterministic_pass_rate_worst} "
+                    f"var={cand.deterministic_pass_rate_variance}"
                 )
+                for reason in cand.rejection_reasons:
+                    console.print(f"    [yellow]{reason}[/yellow]")
+                if cand.failure_attribution:
+                    console.print(f"    failure attribution: {cand.failure_attribution}")
+                if cand.excluded_failure_attribution:
+                    console.print(f"    excluded attribution: {cand.excluded_failure_attribution}")
+                for tp in cand.task_performance:
+                    console.print(
+                        f"    task {tp.get('task_id')} mean={tp.get('pass_rate_mean')} "
+                        f"worst={tp.get('pass_rate_worst')} var={tp.get('pass_rate_variance')} "
+                        f"grounding={tp.get('critical_grounding_failures')} "
+                        f"attribution={tp.get('failure_attribution')}"
+                    )
 
     asyncio.run(_run())
 
