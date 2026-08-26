@@ -61,6 +61,7 @@ def _deterministic_evaluators() -> set[str]:
         "evaluator.live_quality_critic",
         "evaluator.live_quality_fast",
         "evaluator.routing_readiness",
+        "evaluator.model_qualification",
     }
 
 
@@ -154,14 +155,15 @@ def readiness_report() -> ReadinessResult:
     elif gaps_exist:
         verdict = "ready_with_gaps"
         narrative = (
-            "Deterministic gating is complete across all 28 benchmark families "
+            "Deterministic gating is complete across all 29 benchmark families "
             "(incl. evidence enrichment, model routing, live-quality reasoning/"
-            "critic/fast, and production-routing readiness) and the e2e pipeline "
-            "passes. Live-quality benchmarks (7D.0) provide real-model evidence; "
-            "the readiness gate requires live_quality_evidence for production "
-            "routing. Residual gaps are non-blocking: live provider connectors/"
-            "publisher endpoints, advisory LLM-quality judging, and automatic "
-            "routing activation (Phase 7D). See uncovered_capabilities."
+            "critic/fast, production-routing readiness, and model qualification) "
+            "and the e2e pipeline passes. Live-quality benchmarks (7D.0) provide "
+            "real-model evidence; the readiness/qualification gates require "
+            "live_quality_evidence for production routing. Residual gaps are "
+            "non-blocking: live provider connectors/publisher endpoints, "
+            "advisory LLM-quality judging, and automatic routing activation "
+            "(Phase 7D). See uncovered_capabilities."
         )
     else:
         verdict = "ready"

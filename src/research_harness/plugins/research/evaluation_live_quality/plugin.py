@@ -36,6 +36,12 @@ _PRODUCER = "evaluation.live_quality"
 
 _PROVIDER_ERROR_KINDS = {"timeout", "provider_error", "rate_limit", "validation_failure"}
 
+_BENCHMARK_BY_ROLE = {
+    "fast": "live-quality-fast-v1",
+    "reasoning": "live-quality-reasoning-v1",
+    "critic": "live-quality-critic-v1",
+}
+
 
 class LiveQualityService:
     def __init__(
@@ -46,6 +52,8 @@ class LiveQualityService:
         role_router: Any,
         service_lookup: Any,
         current_roles: dict[str, dict[str, str]] | None = None,
+        candidates: dict[str, list[str]] | None = None,
+        repetitions: int = 3,
         producer: str = _PRODUCER,
     ) -> None:
         self._store = artifact_store
@@ -53,6 +61,8 @@ class LiveQualityService:
         self._role_router = role_router
         self._lookup = service_lookup
         self._current_roles = dict(current_roles or {})
+        self._candidates = dict(candidates or {})
+        self._repetitions = repetitions
         self._producer = producer
 
     @property
@@ -332,6 +342,95 @@ class LiveQualityService:
     async def get_run(self, run_id: str) -> LiveQualityRun:
         return (await self._store.get(run_id)).parse_payload(LiveQualityRun)
 
+    async def run_qualification_campaign(
+        self,
+        role: str,
+        *,
+        candidates: list[str] | None = None,
+        repetitions: int | None = None,
+        benchmark_id: str | None = None,
+    ) -> Any:
+        """Run a live-model qualification campaign for a role: each candidate ->
+        live-quality benchmark (>=3 reps) -> LiveQualityModelResult -> verdict.
+
+        Uses config-driven candidates (no slugs hard-coded in service logic).
+        Production routing stays disabled."""
+        from research_harness.research.routing.qualification import (
+            build_role_summary,
+            candidate_result,
+        )
+        from research_harness.research.routing.readiness import criteria_for_role
+        from research_harness.research.routing.roles import validate_role
+        from research_harness.research.schemas.qualification import QualificationCampaign
+
+        validate_role(role)
+        candidates = list(candidates if candidates is not None else self._candidates.get(role, []))
+        if not candidates:
+            raise ValueError(f"no qualification candidates configured for role {role!r}")
+        repetitions = repetitions or self._repetitions
+        benchmark_id = benchmark_id or _BENCHMARK_BY_ROLE[role]
+        criteria = criteria_for_role(role)
+
+        candidate_results = []
+        run_ids: list[str] = []
+        leaderboard_ids: list[str] = []
+        for slug in candidates:
+            model_config = TournamentModelConfig(
+                candidate_id=slug, provider="openrouter", requested_model=slug
+            )
+            run = await self.run_live_quality(
+                role, benchmark_id, model_config, repetitions=repetitions
+            )
+            cr = candidate_result(
+                run.result,
+                criteria,
+                live_quality_run_id=run.id,
+                leaderboard_id=run.leaderboard_id,
+            )
+            candidate_results.append(cr)
+            run_ids.append(run.id)
+            if run.leaderboard_id:
+                leaderboard_ids.append(run.leaderboard_id)
+
+        summary = build_role_summary(
+            candidate_results, criteria, benchmark_id=benchmark_id, repetitions=repetitions
+        )
+        campaign = QualificationCampaign(
+            role=role,
+            benchmark_id=benchmark_id,
+            repetitions=repetitions,
+            candidates=candidate_results,
+            summary=summary,
+            live_quality_run_ids=run_ids,
+            leaderboard_ids=leaderboard_ids,
+            criteria=criteria,
+        )
+        await self._store.put(
+            ArtifactEnvelope.create(
+                payload=campaign,
+                artifact_type="qualification_campaign",
+                producer=self._producer,
+                artifact_id=campaign.id,
+            )
+        )
+        return campaign
+
+    async def get_campaign(self, campaign_id: str) -> Any:
+        from research_harness.research.schemas.qualification import QualificationCampaign
+
+        return (await self._store.get(campaign_id)).parse_payload(QualificationCampaign)
+
+    async def list_campaigns(self, role: str | None = None) -> list[Any]:
+        from research_harness.research.schemas.qualification import QualificationCampaign
+
+        campaigns = [
+            env.parse_payload(QualificationCampaign)
+            for env in await self._store.list(artifact_type="qualification_campaign")
+            if role is None or env.payload.get("role") == role
+        ]
+        campaigns.sort(key=lambda c: c.completed_at, reverse=True)
+        return campaigns
+
     def _report_metric(self, report: EvaluationReport, metric_id: str) -> int:
         for m in report.metrics:
             if m.metric_id == metric_id:
@@ -387,11 +486,20 @@ class LiveQualityPlugin(Plugin):
         def _lookup(name: str) -> Any:
             return ctx.require(name)
 
+        live_cfg = cfg.get("live_quality") or {}
+        candidates = {
+            str(role): [str(m) for m in models]
+            for role, models in (live_cfg.get("candidates") or {}).items()
+        }
+        repetitions = int(live_cfg.get("repetitions") or 3)
+
         service = LiveQualityService(
             artifact_store=ctx.require("artifact_store.default"),
             harness=ctx.require("evaluation_harness.default"),
             role_router=ctx.require("model_router.default"),
             service_lookup=_lookup,
             current_roles=current_roles,
+            candidates=candidates,
+            repetitions=repetitions,
         )
         ctx.register("live_quality.default", service)

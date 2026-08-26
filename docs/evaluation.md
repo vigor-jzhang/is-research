@@ -1151,14 +1151,67 @@ uv run research-agent eval run production-routing-readiness-v1
 Production routing is never enabled automatically: each role reports
 ready/not_ready; Phase 7D (controlled activation) is a separate future phase.
 
+## Live-model qualification campaigns (Phase 7D.1)
+
+Identifies production-qualified primary/fallback per role from live-quality
+evidence. Production switching stays disabled.
+
+### Campaign flow
+
+```
+config candidate set (live_quality.candidates[role])   # no slugs in service logic
+  -> for each candidate: live-quality benchmark (>=3 reps) -> LiveQualityModelResult
+  -> RoleLeaderboard (live_quality_evidence)
+  -> qualify_candidate (reuses Phase 7D.0 QualificationCriteria exactly, never loosened)
+  -> primary/fallback among qualified models (quality/reliability first, then
+     latency/cost per policy; an unqualified cheap model can never win)
+  -> RoleQualificationSummary + QualificationCampaign (persisted)
+```
+
+### Artifacts (`research/schemas/qualification.py`)
+
+`QualificationCampaign`, `QualificationCandidateResult` (structured
+`rejection_kinds`), `RoleQualificationSummary` (status = `qualified` |
+`qualified_without_fallback` | `no_qualified_model`; primary/fallback).
+
+### Rejection kinds
+
+`below_quality_threshold`, `structured_output_failure`,
+`critical_grounding_failure`, `provider_error_rate`,
+`insufficient_repetitions`, `stale_evidence`, `capability_mismatch`. Aggregate
+rejection counts are reported per campaign.
+
+### Stability
+
+>=3 repetitions required; mean/worst/variance pass rates + critical failure
+frequency reported. A single lucky run never qualifies.
+
+### Qualification benchmark (`model-qualification-policy-v1`)
+
+10 offline cases over the real qualification algorithm: qualified primary +
+fallback, primary-without-fallback, none qualified, critical-grounding despite
+mean pass, insufficient repetitions, stale evidence, role mismatch, cheaper
+unqualified loses, deterministic tie, borderline stays unqualified.
+`evaluator.model_qualification` with critical metric
+`unsafe_model_qualification_rate = 0`.
+
+### CLI
+
+```bash
+uv run research-agent routing qualify --role reasoning --repetitions 3
+uv run research-agent routing qualification inspect <campaign-id>
+uv run research-agent routing qualification summary
+uv run research-agent eval run model-qualification-policy-v1
+```
+
 ## Recommended next increment
 
-Post-Phase-7D.0: the evaluation program covers 28 benchmark families with
-deterministic gating; the readiness gate requires live-quality evidence for
-production routing. The verdict remains `ready_with_gaps` because non-blocking
-gaps remain (live provider connectors/publisher endpoints, advisory LLM-quality
-judging) and automatic routing activation is deliberately not implemented.
-Phase 7D (controlled activation) would build opt-in automatic role switching
-with hard quality/cost budgets, deterministic fallback, circuit breakers,
-observability, and immediate rollback to static configuration — reusing the
-live-quality-qualified leaderboards and the readiness gate from 7D.0.
+Post-Phase-7D.1: the evaluation program covers 29 benchmark families with
+deterministic gating; live qualification campaigns identify per-role
+primary/fallback over real live-quality evidence with a strict
+unsafe_model_qualification_rate = 0 gate. The verdict remains
+`ready_with_gaps` (non-blocking: live provider connectors, advisory
+LLM-quality judging). Phase 7D (controlled activation) would build opt-in
+automatic role switching with hard quality/cost budgets, deterministic
+fallback, circuit breakers, observability, and immediate rollback to static
+configuration — reusing only roles with sufficient qualified live evidence.

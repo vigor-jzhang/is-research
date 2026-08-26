@@ -390,6 +390,19 @@ class DocumentsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class LiveQualityConfig(BaseModel):
+    """Live-quality validation + qualification campaign settings (Phase 7D)."""
+
+    candidates: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Role -> candidate model slugs for qualification campaigns "
+        "(no slugs hard-coded in service logic)",
+    )
+    repetitions: int = Field(default=3, ge=1, le=10, description="Runs per model/task")
+
+    model_config = {"extra": "forbid"}
+
+
 class EvaluationConfig(BaseModel):
     """Evaluation harness settings (Phase 6A)."""
 
@@ -426,6 +439,7 @@ class AppConfig(BaseModel):
     documents: DocumentsConfig = Field(default_factory=DocumentsConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    live_quality: LiveQualityConfig = Field(default_factory=LiveQualityConfig)
 
     @field_validator("plugins")
     @classmethod
@@ -441,7 +455,10 @@ class AppConfig(BaseModel):
         mapping: dict[str, dict[str, Any]] = {
             "routing.role_router": {"models": self.models.model_dump()},
             "routing.policy_router": {"models": self.models.model_dump()},
-            "evaluation.live_quality": {"models": self.models.model_dump()},
+            "evaluation.live_quality": {
+                "models": self.models.model_dump(),
+                "live_quality": self.live_quality.model_dump(),
+            },
             "session.jsonl": {"session": self.session.model_dump()},
             "loop.simple_tool_loop": {"loop": self.loop.model_dump()},
             "autonomy.configurable": {"autonomy": self.runtime.autonomy},

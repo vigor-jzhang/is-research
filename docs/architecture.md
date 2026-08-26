@@ -63,7 +63,7 @@ The kernel imports **zero** concrete plugins and contains no research behavior. 
 The bootstrap layer (`src/research_harness/app/bootstrap.py`) is the composition root:
 
 - Loads YAML config via `config/loader.py`
-- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 79 plugins)
+- Discovers **built-in** plugins from `plugins/registry.py:332` (`BUILTIN_PLUGINS`, 80 plugins)
 - Discovers **external** plugins via `importlib.metadata.entry_points(group="research_harness.plugins")` — lazy factories, validated on creation, duplicate IDs rejected, clear errors
 - Merges built-in + external deterministically (`get_all_plugin_factories`)
 - Builds per-plugin configs from `AppConfig` (e.g., `models.roles` → `routing.role_router`, `session.root` → `session.jsonl`)
@@ -295,9 +295,9 @@ See `docs/documents.md` for full lifecycle, resolution priority, security, and C
 - `manuscript` — outline, draft, inspect, critique, revise (Phase 4B)
 - `publication` — profile-create, format, validate, export, package, inspect (Phase 4C)
 - `novelty` — validate, report, gate, revalidate, enrich, inspect (Phases 5A–5D)
-- `eval` — run, inspect, list, coverage, readiness (Phase 6A-7A.1/7C harness: 28 offline benchmarks from novelty-threat to production-routing-readiness, coverage matrix, deterministic readiness report)
+- `eval` — run, inspect, list, coverage, readiness (Phase 6A-7A.1/7C harness: 29 offline benchmarks from novelty-threat to model-qualification, coverage matrix, deterministic readiness report)
 - `evaluation` — model tournaments + role leaderboards (Phase 7B): `tournament run/inspect`, `leaderboard show/list/inspect` over the frozen benchmarks with correctness-first deterministic ranking; `live-quality run/inspect` (Phase 7D.0) validates real models over realistic inputs with repetitions/variance
-- `routing` — policy-constrained model routing (Phase 7C, shadow mode): `decide`, `shadow`, `inspect`, `policies list` over persisted role leaderboards; `readiness` (Phase 7D.0) reports per-role ready/not_ready from live-quality evidence; production roles never switched
+- `routing` — policy-constrained model routing (Phase 7C, shadow mode): `decide`, `shadow`, `inspect`, `policies list` over persisted role leaderboards; `readiness` (Phase 7D.0) reports per-role ready/not_ready from live-quality evidence; `qualify` + `qualification inspect/summary` (Phase 7D.1) run config-driven live-model qualification campaigns; production roles never switched
 
 The full command reference (with options and live-test markers) is in `docs/cli.md`.
 
@@ -322,7 +322,7 @@ Rules enforced by `tests/unit/test_architecture.py`:
 Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 73 unit, 43 integration, and 16 opt-in live test files cover every phase:
 
 ```bash
-uv run pytest                # offline: 850 passed, 21 skipped
+uv run pytest                # offline: 861 passed, 21 skipped
 uv run --env-file .env pytest -m live -v          # OpenRouter live
 uv run --env-file .env pytest -m live_novelty_validation -v  # e.g. Phase 5 live
 ```

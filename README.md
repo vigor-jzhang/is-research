@@ -26,7 +26,7 @@ uv run research-agent config validate configs/example.yaml                   # v
 
 ## How to Use It
 
-Configuration lives in `configs/example.yaml` (79 plugins; see
+Configuration lives in `configs/example.yaml` (80 plugins; see
 [docs/configuration.md](docs/configuration.md)). The research pipeline is
 driven by one CLI command per stage; every command writes immutable,
 provenance-linked artifacts to `.research/artifacts.db`:
@@ -103,6 +103,12 @@ uv run research-agent evaluation live-quality run --role reasoning --repetitions
 uv run research-agent evaluation live-quality inspect <run-id>
 uv run research-agent routing readiness --role reasoning          # ready / not_ready (never auto-enables routing)
 uv run research-agent eval run production-routing-readiness-v1    # offline readiness-gate benchmark
+
+# Live-model qualification campaigns (Phase 7D.1)
+uv run research-agent routing qualify --role reasoning --repetitions 3   # real campaign (config-driven candidates)
+uv run research-agent routing qualification inspect <campaign-id>
+uv run research-agent routing qualification summary                      # per-role primary/fallback/status
+uv run research-agent eval run model-qualification-policy-v1             # offline qualification benchmark
 ```
 
 The complete command reference (including kernel commands, `run` demo,
@@ -130,7 +136,7 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All gates must pass: `850 passed, 21 skipped` (offline), ruff/format/pyright
+All gates must pass: `861 passed, 21 skipped` (offline), ruff/format/pyright
 clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
@@ -168,7 +174,7 @@ src/research_harness/
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/            # per-phase + architecture/configuration/cli/plugin-authoring docs
-tests/           # unit/ 79, integration/ 47, live/ 18 (opt-in markers)
+tests/           # unit/ 80, integration/ 48, live/ 18 (opt-in markers)
 ```
 
 ## Documentation
@@ -206,6 +212,7 @@ tests/           # unit/ 79, integration/ 47, live/ 18 (opt-in markers)
 - **Phase 7B** — model tournaments + role leaderboards: reproducible per-role model comparison over the frozen benchmarks (correctness-first lexicographic ranking, reliability/latency/token/cost accounting, offline + opt-in live tournaments)
 - **Phase 7C** — policy-constrained model routing (shadow): evidence-enrichment benchmark closes the 5C-5D gap; routing policies (quality_first/balanced/cost_constrained/latency_constrained) select from persisted leaderboards with capability/quality/reliability gates, fallbacks, stale-evidence handling, role isolation; shadow mode never switches production models
 - **Phase 7D.0** — live-quality model validation + routing readiness: real-model live-quality benchmarks (reasoning/critic/fast) with structural references and deterministic evaluators, configurable repetitions with variance, role-specific production-qualification gates (live_quality_evidence required), production-routing-readiness benchmark, and per-role ready/not_ready verdicts — no automatic routing activation
+- **Phase 7D.1** — live-model qualification campaigns: config-driven candidate sets per role, >=3 repetitions each over the live-quality benchmarks, structured rejection kinds, primary/fallback selection among qualified models only, offline model-qualification-policy benchmark (unsafe_model_qualification_rate = 0), per-role qualified status — production switching stays off
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
 - **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, publication-quality scoring (see the readiness report's uncovered capabilities)
 - **Post-Phase-7A.1 (not implemented)** — live provider-connector/publisher-endpoint coverage, advisory LLM-quality judging

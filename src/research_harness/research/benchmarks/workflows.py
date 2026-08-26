@@ -5215,6 +5215,60 @@ def summary_payload(result: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# qualification_policy workflow (Phase 7D.1): the real qualification algorithm
+# over synthetic live-quality results
+# ---------------------------------------------------------------------------
+
+
+async def run_qualification_policy_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real `summarize_role_live` qualification logic over synthetic
+    LiveQualityModelResult fixtures and persists the RoleQualificationSummary
+    for the evaluator. No network."""
+    from research_harness.research.routing.qualification import summarize_role_live
+    from research_harness.research.schemas.live_quality import (
+        LiveQualityModelResult,
+        QualificationCriteria,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    role = str(case.input.get("role") or "reasoning")
+
+    live_results: dict[str, LiveQualityModelResult] = {}
+    for candidate_id, payload in (case.input.get("live_results") or {}).items():
+        live_results[str(candidate_id)] = LiveQualityModelResult.model_validate(
+            dict(payload, candidate_id=str(candidate_id))
+        )
+
+    criteria_data = dict(case.input.get("criteria") or {})
+    criteria = QualificationCriteria.model_validate(criteria_data) if criteria_data else None
+
+    summary, _candidates = summarize_role_live(
+        live_results,
+        role=role,
+        benchmark_id=str(case.input.get("benchmark_id") or "live-quality-reasoning-v1"),
+        repetitions=int(case.input.get("repetitions") or 3),
+        criteria=criteria,
+    )
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=summary,
+            artifact_type="qualification_summary",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-qualification",
+        )
+    )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
 # publication_packaging workflow (Phase 7A.1): real Phase 4C formatter +
 # exporters + submission package
 # ---------------------------------------------------------------------------

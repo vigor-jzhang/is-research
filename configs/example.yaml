@@ -73,6 +73,7 @@ plugins:
   - evaluator.live_quality_critic
   - evaluator.live_quality_fast
   - evaluator.routing_readiness
+  - evaluator.model_qualification
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -248,6 +249,19 @@ evaluation:
   cost_per_million_tokens:
     prompt: 0.0
     completion: 0.0
+
+live_quality:
+  repetitions: 3
+  candidates:
+    reasoning:
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "deepseek/deepseek-v4-flash-0731"
+    critic:
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "deepseek/deepseek-v4-flash-0731"
+    fast:
+      - "deepseek/deepseek-v4-flash-0731"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 loop:
   max_steps: 8

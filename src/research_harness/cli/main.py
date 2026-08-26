@@ -57,7 +57,9 @@ app.add_typer(model_evaluation_app, name="evaluation")
 
 routing_app = typer.Typer(help="Policy-constrained model routing (Phase 7C, shadow mode)")
 routing_policies_app = typer.Typer(help="Routing policies")
+routing_qualification_app = typer.Typer(help="Live-model qualification campaigns (Phase 7D.1)")
 routing_app.add_typer(routing_policies_app, name="policies")
+routing_app.add_typer(routing_qualification_app, name="qualification")
 app.add_typer(routing_app, name="routing")
 
 console = Console()
@@ -5953,6 +5955,7 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.live_quality_critic",
         "evaluator.live_quality_fast",
         "evaluator.routing_readiness",
+        "evaluator.model_qualification",
         "storage.blobs_filesystem",
     ):
         if pid not in cfg.plugins:
@@ -6779,6 +6782,136 @@ def live_quality_inspect(
                     f"  rep {t.repetition}  {t.report_status}  "
                     f"{t.cases_passed}/{t.cases_total}  pass_rate {t.task_pass_rate:.3f}  "
                     f"run {t.run_id}"
+                )
+
+    asyncio.run(_run())
+
+
+@routing_app.command("qualify")
+def routing_qualify(
+    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    repetitions: Annotated[int, typer.Option(help="Runs per candidate (>=3 recommended)")] = 3,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Run a live-model qualification campaign for a role (Phase 7D.1).
+
+    Evaluates the configured candidate models over the live-quality benchmark
+    with >=3 repetitions and reports primary/fallback/status. Production
+    routing stays disabled.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("live_quality.default")
+            campaign = await svc.run_qualification_campaign(role, repetitions=repetitions)
+            summary = campaign.summary
+            color = "green" if summary.status == "qualified" else "yellow"
+            console.print(
+                f"[{color}]Role {role}: {summary.status} (primary={summary.primary} "
+                f"fallback={summary.fallback})[/{color}]"
+            )
+            console.print(f"  campaign {campaign.id}  benchmark {campaign.benchmark_id}")
+            console.print(
+                f"  repetitions {campaign.repetitions}  qualified {summary.qualified_models}"
+            )
+            for c in campaign.candidates:
+                mark = "[green]qualified[/green]" if c.qualified else "[red]rejected[/red]"
+                console.print(f"  {c.candidate_id} {mark} det={c.deterministic_pass_rate_mean}")
+                for reason in c.rejection_reasons:
+                    console.print(f"    [yellow]{reason}[/yellow]")
+            console.print(f"  rejection counts: {summary.rejection_counts}")
+
+    asyncio.run(_run())
+
+
+@routing_qualification_app.command("inspect")
+def routing_qualification_inspect(
+    campaign: Annotated[str, typer.Argument(help="QualificationCampaign artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a qualification campaign (Phase 7D.1)."""
+    import asyncio
+
+    from research_harness.research.schemas.qualification import QualificationCampaign
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            env = await store.get(campaign)
+            if env.artifact_type != "qualification_campaign":
+                console.print(f"[red]artifact {campaign!r} is not a qualification_campaign[/red]")
+                raise typer.Exit(code=1)
+            c = env.parse_payload(QualificationCampaign)
+            summary = c.summary
+            console.print(f"[bold]QualificationCampaign {c.id}[/bold] role {c.role}")
+            console.print(f"  benchmark {c.benchmark_id}  repetitions {c.repetitions}")
+            console.print(
+                f"  status {summary.status}  primary {summary.primary}  fallback {summary.fallback}"
+            )
+            console.print(f"  live-quality runs {c.live_quality_run_ids}")
+            for cand in c.candidates:
+                console.print(
+                    f"  {cand.candidate_id} qualified={cand.qualified} "
+                    f"kinds={cand.rejection_kinds} det={cand.deterministic_pass_rate_mean}"
+                )
+
+    asyncio.run(_run())
+
+
+@routing_qualification_app.command("summary")
+def routing_qualification_summary(
+    role: Annotated[str | None, typer.Option(help="Filter by role (default: all)")] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Show the latest qualification status per role (Phase 7D.1)."""
+    import asyncio
+
+    from research_harness.research.schemas.qualification import QualificationCampaign
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            campaigns = [
+                env.parse_payload(QualificationCampaign)
+                for env in await store.list(artifact_type="qualification_campaign")
+                if role is None or env.payload.get("role") == role
+            ]
+            by_role: dict[str, QualificationCampaign] = {}
+            for c in campaigns:
+                existing = by_role.get(c.role)
+                if existing is None or c.completed_at > existing.completed_at:
+                    by_role[c.role] = c
+            if not by_role:
+                console.print("  (no qualification campaigns yet)")
+                return
+            for r in ("fast", "reasoning", "critic"):
+                c = by_role.get(r)
+                if c is None:
+                    console.print(f"  {r}: no campaign")
+                    continue
+                s = c.summary
+                console.print(
+                    f"  {r}: [{'green' if s.status == 'qualified' else 'yellow'}]{s.status}[/]  "
+                    f"primary={s.primary} fallback={s.fallback} qualified={s.qualified_models}"
                 )
 
     asyncio.run(_run())

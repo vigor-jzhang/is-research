@@ -9379,6 +9379,7 @@ def _lq_result(
     grounding_failures: int = 0,
     repetitions: int = 3,
     age_seconds: float | None = None,
+    cost: float | None = None,
 ) -> dict[str, Any]:
     created = (
         datetime.now(UTC) - timedelta(seconds=age_seconds) if age_seconds else datetime.now(UTC)
@@ -9395,6 +9396,7 @@ def _lq_result(
         "structured_output_success_rate": structured,
         "provider_error_frequency": provider_error,
         "critical_grounding_failures": grounding_failures,
+        "estimated_cost": cost,
         "task_results": [
             {
                 "repetition": i,
@@ -9598,6 +9600,191 @@ PRODUCTION_ROUTING_READINESS_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+def _qualification_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    role: str,
+    reference: dict[str, Any],
+    live_results: dict[str, dict[str, Any]],
+    criteria: dict[str, Any] | None = None,
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "qualification_policy",
+            "role": role,
+            "live_results": live_results,
+            "criteria": criteria or {},
+        },
+        reference=reference,
+        evaluation_dimensions=["model_qualification"],
+        tags=["qualification", "offline"],
+    )
+
+
+MODEL_QUALIFICATION_POLICY_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="model-qualification-policy-v1",
+    version=1,
+    name="Model Qualification Policy (Phase 7D.1)",
+    description=(
+        "Offline benchmark over the real deterministic live-model qualification "
+        "algorithm. Verifies primary/fallback selection among qualified models, "
+        "structured rejection kinds, role isolation, deterministic ties, "
+        "borderline rejection, and that unsafe_model_qualification_rate stays 0."
+    ),
+    category="model_qualification",
+    config={"evaluators": ["evaluator.model_qualification"]},
+    cases=[
+        _qualification_case(
+            "mq-qualified-with-fallback",
+            "qualified primary + fallback",
+            "Two independently qualified models produce a primary and a fallback.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_result("m-a", det=0.92),
+                "m-b": _lq_result("m-b", det=0.9),
+            },
+            reference={
+                "expected_status": "qualified",
+                "expected_primary": "m-a",
+                "expected_fallback": "m-b",
+                "expected_qualified_models": ["m-a", "m-b"],
+                "expected_role": "reasoning",
+            },
+        ),
+        _qualification_case(
+            "mq-primary-no-fallback",
+            "primary qualifies, fallback does not",
+            "Only one model qualifies; status is qualified_without_fallback.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_result("m-a", det=0.92),
+                "m-bad": _lq_result("m-bad", det=0.6),
+            },
+            reference={
+                "expected_status": "qualified_without_fallback",
+                "expected_primary": "m-a",
+                "expected_fallback": None,
+                "expected_qualified_models": ["m-a"],
+            },
+        ),
+        _qualification_case(
+            "mq-none-qualified",
+            "no model qualifies",
+            "All candidates fall below the role threshold.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_result("m-a", det=0.6),
+                "m-b": _lq_result("m-b", det=0.7),
+            },
+            reference={
+                "expected_status": "no_qualified_model",
+                "expected_primary": None,
+                "expected_fallback": None,
+                "expected_qualified_models": [],
+                "expected_rejection_kinds": {"m-a": ["below_quality_threshold"]},
+            },
+        ),
+        _qualification_case(
+            "mq-critical-grounding",
+            "candidate passes mean but has a critical grounding failure",
+            "A strong mean pass rate never overrides a critical grounding failure.",
+            role="reasoning",
+            live_results={"m-a": _lq_result("m-a", det=0.95, grounding_failures=1)},
+            reference={
+                "expected_status": "no_qualified_model",
+                "expected_primary": None,
+                "expected_qualified_models": [],
+                "expected_rejection_kinds": {"m-a": ["critical_grounding_failure"]},
+            },
+        ),
+        _qualification_case(
+            "mq-insufficient-repetitions",
+            "insufficient repetitions",
+            "A single lucky run never qualifies.",
+            role="reasoning",
+            live_results={"m-a": _lq_result("m-a", det=0.95, repetitions=1)},
+            reference={
+                "expected_status": "no_qualified_model",
+                "expected_rejection_kinds": {"m-a": ["insufficient_repetitions"]},
+            },
+        ),
+        _qualification_case(
+            "mq-stale-evidence",
+            "stale live evidence",
+            "Live evidence older than the freshness limit is rejected.",
+            role="reasoning",
+            live_results={"m-a": _lq_result("m-a", det=0.95, age_seconds=5000)},
+            criteria={"role": "reasoning", "leaderboard_max_age_seconds": 100},
+            reference={
+                "expected_status": "no_qualified_model",
+                "expected_rejection_kinds": {"m-a": ["stale_evidence"]},
+            },
+        ),
+        _qualification_case(
+            "mq-role-mismatch",
+            "role mismatch",
+            "Reasoning evidence can never qualify a critic role.",
+            role="critic",
+            live_results={"m-a": _lq_result("m-a", det=0.95)},
+            reference={
+                "expected_status": "no_qualified_model",
+                "expected_primary": None,
+                "expected_qualified_models": [],
+                "expected_role": "critic",
+            },
+        ),
+        _qualification_case(
+            "mq-cheap-unqualified-loses",
+            "cheaper unqualified candidate loses",
+            "An unqualified cheap model is never selected over a qualified one.",
+            role="reasoning",
+            live_results={
+                "m-good": _lq_result("m-good", det=0.9, cost=0.05),
+                "m-cheap-bad": _lq_result("m-cheap-bad", det=0.6, cost=0.0001),
+            },
+            reference={
+                "expected_status": "qualified_without_fallback",
+                "expected_primary": "m-good",
+                "expected_qualified_models": ["m-good"],
+            },
+        ),
+        _qualification_case(
+            "mq-deterministic-tie",
+            "deterministic tie between qualified models",
+            "Identical qualified metrics break ties deterministically by candidate_id.",
+            role="reasoning",
+            live_results={
+                "m-beta": _lq_result("m-beta", det=0.9),
+                "m-alpha": _lq_result("m-alpha", det=0.9),
+            },
+            reference={
+                "expected_status": "qualified",
+                "expected_primary": "m-alpha",
+                "expected_fallback": "m-beta",
+                "expected_tiebreak": "m-alpha",
+                "expected_qualified_models": ["m-alpha", "m-beta"],
+            },
+        ),
+        _qualification_case(
+            "mq-borderline-unqualified",
+            "borderline candidate remains unqualified",
+            "A candidate just below the threshold is rejected (never loosened to obtain a winner).",
+            role="reasoning",
+            live_results={"m-border": _lq_result("m-border", det=0.849)},
+            reference={
+                "expected_status": "no_qualified_model",
+                "expected_rejection_kinds": {"m-border": ["below_quality_threshold"]},
+            },
+        ),
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -9627,4 +9814,5 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     LIVE_QUALITY_CRITIC_V1.benchmark_id: LIVE_QUALITY_CRITIC_V1,
     LIVE_QUALITY_FAST_V1.benchmark_id: LIVE_QUALITY_FAST_V1,
     PRODUCTION_ROUTING_READINESS_V1.benchmark_id: PRODUCTION_ROUTING_READINESS_V1,
+    MODEL_QUALIFICATION_POLICY_V1.benchmark_id: MODEL_QUALIFICATION_POLICY_V1,
 }

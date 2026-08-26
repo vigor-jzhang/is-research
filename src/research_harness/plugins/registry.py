@@ -555,6 +555,14 @@ def _create_evaluator_routing_readiness() -> Plugin:
     return RoutingReadinessEvaluatorPlugin()
 
 
+def _create_evaluator_model_qualification() -> Plugin:
+    from research_harness.plugins.research.evaluator_model_qualification.plugin import (
+        ModelQualificationEvaluatorPlugin,
+    )
+
+    return ModelQualificationEvaluatorPlugin()
+
+
 def _create_live_quality() -> Plugin:
     from research_harness.plugins.research.evaluation_live_quality.plugin import (
         LiveQualityPlugin,
@@ -673,6 +681,7 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "evaluator.live_quality_critic": _create_evaluator_live_quality_critic,
     "evaluator.live_quality_fast": _create_evaluator_live_quality_fast,
     "evaluator.routing_readiness": _create_evaluator_routing_readiness,
+    "evaluator.model_qualification": _create_evaluator_model_qualification,
     "routing.policy_router": _create_policy_router,
     "evaluation.live_quality": _create_live_quality,
     "storage.blobs_filesystem": _create_blobs_filesystem,

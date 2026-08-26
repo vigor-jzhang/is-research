@@ -1,6 +1,6 @@
 # Configuration
 
-The full composition lives in `configs/example.yaml` (79 plugins, including the Phase 6A-7A.1 evaluation harness, thirty evaluator plugins, the Phase 7B `evaluation.model_tournament` plugin, and the Phase 7C `routing.policy_router` plugin, and the Phase 7D.0 `evaluation.live_quality` plugin). `AppConfig`
+The full composition lives in `configs/example.yaml` (80 plugins, including the Phase 6A-7A.1 evaluation harness, thirty-one evaluator plugins, the Phase 7B `evaluation.model_tournament` plugin, and the Phase 7C `routing.policy_router` plugin, the Phase 7D.0 `evaluation.live_quality` plugin, and config-driven `live_quality.candidates` for qualification campaigns). `AppConfig`
 (`config/schema.py`) validates it via Pydantic v2; `load_config`
 (`config/loader.py`) fails early with readable messages. Secrets are never in
 YAML — they come from the environment.

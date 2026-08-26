@@ -304,3 +304,16 @@ structural references; `evaluator.*` validate grounding/defects/decisions
 deterministically. Live evidence (`live_quality_evidence` leaderboards) is
 required for production-qualification; per-role standards live in
 `research/routing/readiness.py`.
+
+## Live-model qualification campaigns (Phase 7D.1)
+
+```bash
+uv run research-agent routing qualify --role reasoning --repetitions 3   # config-driven candidates, real live runs
+uv run research-agent routing qualification inspect <campaign-id>        # candidate results + rejection kinds
+uv run research-agent routing qualification summary                      # per-role primary/fallback/status
+uv run research-agent eval run model-qualification-policy-v1             # offline qualification benchmark (10 cases)
+```
+
+Candidate sets come from `live_quality.candidates` in the config (no slugs
+hard-coded in service logic); repetitions default to the config value (>=3
+recommended). Production switching stays disabled.
