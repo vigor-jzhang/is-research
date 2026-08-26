@@ -42,6 +42,7 @@ plugins:
   - research.novelty_validator
   - research.evaluation_harness
   - evaluation.model_tournament
+  - evaluation.live_quality
   - evaluator.deterministic
   - evaluator.retrieval
   - evaluator.claim_grounding
@@ -68,6 +69,10 @@ plugins:
   - evaluator.publication_packaging
   - evaluator.evidence_enrichment
   - evaluator.model_routing
+  - evaluator.live_quality_reasoning
+  - evaluator.live_quality_critic
+  - evaluator.live_quality_fast
+  - evaluator.routing_readiness
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http

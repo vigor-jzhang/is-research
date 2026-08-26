@@ -26,7 +26,7 @@ uv run research-agent config validate configs/example.yaml                   # v
 
 ## How to Use It
 
-Configuration lives in `configs/example.yaml` (74 plugins; see
+Configuration lives in `configs/example.yaml` (79 plugins; see
 [docs/configuration.md](docs/configuration.md)). The research pipeline is
 driven by one CLI command per stage; every command writes immutable,
 provenance-linked artifacts to `.research/artifacts.db`:
@@ -97,6 +97,12 @@ uv run research-agent routing decide --role reasoning --policy quality_first
 uv run research-agent routing shadow --role reasoning            # would-switch vs current config
 uv run research-agent routing inspect <decision-id>
 uv run research-agent routing policies list
+
+# Live-quality validation + production-routing readiness (Phase 7D.0)
+uv run research-agent evaluation live-quality run --role reasoning --repetitions 3
+uv run research-agent evaluation live-quality inspect <run-id>
+uv run research-agent routing readiness --role reasoning          # ready / not_ready (never auto-enables routing)
+uv run research-agent eval run production-routing-readiness-v1    # offline readiness-gate benchmark
 ```
 
 The complete command reference (including kernel commands, `run` demo,
@@ -124,7 +130,7 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-All gates must pass: `834 passed, 20 skipped` (offline), ruff/format/pyright
+All gates must pass: `850 passed, 21 skipped` (offline), ruff/format/pyright
 clean, `config validate` passes, live tests green on demand.
 
 ## Project Structure
@@ -162,7 +168,7 @@ src/research_harness/
   cli/           # Typer CLI (delegates to bootstrap)
 configs/example.yaml
 docs/            # per-phase + architecture/configuration/cli/plugin-authoring docs
-tests/           # unit/ 78, integration/ 46, live/ 17 (opt-in markers)
+tests/           # unit/ 79, integration/ 47, live/ 18 (opt-in markers)
 ```
 
 ## Documentation
@@ -199,10 +205,11 @@ tests/           # unit/ 78, integration/ 46, live/ 17 (opt-in markers)
 - **Phase 7A.1** — final evaluation gap closure: ingestion/identity resolution, gap selection, novelty revalidation, and publication/submission-packaging benchmarks (deterministic evaluators + coverage/readiness update)
 - **Phase 7B** — model tournaments + role leaderboards: reproducible per-role model comparison over the frozen benchmarks (correctness-first lexicographic ranking, reliability/latency/token/cost accounting, offline + opt-in live tournaments)
 - **Phase 7C** — policy-constrained model routing (shadow): evidence-enrichment benchmark closes the 5C-5D gap; routing policies (quality_first/balanced/cost_constrained/latency_constrained) select from persisted leaderboards with capability/quality/reliability gates, fallbacks, stale-evidence handling, role isolation; shadow mode never switches production models
+- **Phase 7D.0** — live-quality model validation + routing readiness: real-model live-quality benchmarks (reasoning/critic/fast) with structural references and deterministic evaluators, configurable repetitions with variance, role-specific production-qualification gates (live_quality_evidence required), production-routing-readiness benchmark, and per-role ready/not_ready verdicts — no automatic routing activation
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
 - **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, publication-quality scoring (see the readiness report's uncovered capabilities)
 - **Post-Phase-7A.1 (not implemented)** — live provider-connector/publisher-endpoint coverage, advisory LLM-quality judging
-- **Post-Phase-7C (not implemented)** — automatic production model switching, contextual bandits, online learning, self-modifying routing policy, automatic cheapest-model selection, shared leaderboard service (Phase 7D+)
+- **Post-Phase-7D (not implemented)** — controlled production routing activation, contextual bandits, online learning, self-modifying routing policy, automatic cheapest-model selection, shared leaderboard service
 
 Each phase has a per-phase doc under `docs/`; nothing beyond the implemented phases is claimed.
 

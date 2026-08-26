@@ -8591,6 +8591,1013 @@ MODEL_ROUTING_POLICY_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+def _lq_paper(title: str, doi: str, abstract: str) -> dict[str, Any]:
+    return {
+        "title": title,
+        "abstract": abstract,
+        "year": 2020,
+        "venue": "Journal of Platform Studies",
+        "doi": doi,
+    }
+
+
+def _lq_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    workflow: str,
+    task: str,
+    input_extra: dict[str, Any],
+    reference: dict[str, Any],
+    evaluator: str,
+    tags: list[str],
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": workflow,
+            "task": task,
+            **input_extra,
+        },
+        reference=reference,
+        evaluation_dimensions=[task],
+        tags=tags,
+    )
+
+
+def _lq_evidence_statement(statement: str) -> dict[str, Any]:
+    return {"statement": statement, "category": "result"}
+
+
+def _lq_statement(statement: str, *, type_: str = "consensus") -> dict[str, Any]:
+    return {
+        "statement": statement,
+        "type": type_,
+        "evidence_ids": [],
+        "paper_ids": [],
+        "conflicting_evidence_ids": [],
+        "conflicting_paper_ids": [],
+        "support_type": "single_paper",
+        "confidence": 0.9,
+    }
+
+
+LIVE_QUALITY_REASONING_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="live-quality-reasoning-v1",
+    version=1,
+    name="Live Quality — Reasoning",
+    description=(
+        "Live-quality benchmark over the REAL reasoning production pipelines "
+        "(evidence extraction, synthesis, gap analysis, mechanism generation, "
+        "model specification, proposition generation). Model-agnostic inputs; "
+        "structural/semantic references; deterministic evaluator. Runs against "
+        "a real model via the live-quality service; not a scripted-fixture proxy."
+    ),
+    category="live_quality",
+    config={"evaluators": ["evaluator.live_quality_reasoning"]},
+    cases=[
+        _lq_case(
+            "lq-evidence-extraction",
+            "evidence extraction",
+            "Real evidence extractor over a realistic algorithmic-pricing document.",
+            workflow="evidence_extraction",
+            task="evidence_extraction",
+            input_extra={
+                "documents": [
+                    {
+                        "title": "Algorithmic Pricing and Consumer Welfare in Online Markets",
+                        "year": 2020,
+                        "venue": "Journal of Platform Studies",
+                        "abstract": "We study how algorithmic pricing shapes consumer welfare.",
+                        "text_status": "extracted",
+                        "pages": [
+                            {
+                                "page": 1,
+                                "text": "Sellers increasingly use algorithmic pricing, setting "
+                                "prices from demand data. Prior work examines platform pricing "
+                                "but not the resulting consumer welfare effects in online markets.",
+                            },
+                            {
+                                "page": 2,
+                                "text": "Our model shows that algorithmic pricing can reduce "
+                                "consumer welfare when demand is uncertain, because personalized "
+                                "price discrimination extracts consumer surplus.",
+                            },
+                        ],
+                    }
+                ],
+                "evidence_config": {
+                    "pages_per_chunk": 4,
+                    "max_chunks_per_document": 10,
+                    "max_model_calls": 20,
+                },
+            },
+            reference={
+                "task": "evidence_extraction",
+                "required_concepts": ["algorithmic pricing", "consumer welfare"],
+            },
+            evaluator="evaluator.live_quality_reasoning",
+            tags=["live_quality", "reasoning", "offline"],
+        ),
+        _lq_case(
+            "lq-literature-synthesis",
+            "literature synthesis",
+            "Real synthesizer over realistic evidence statements.",
+            workflow="literature_synthesis",
+            task="literature_synthesis",
+            input_extra={
+                "papers": [
+                    _lq_paper(
+                        "Algorithmic Pricing and Consumer Welfare",
+                        "10.7000/lq-syn-a",
+                        "We show algorithmic pricing reduces consumer welfare.",
+                    ),
+                    _lq_paper(
+                        "Data-Driven Pricing and Competition",
+                        "10.7000/lq-syn-b",
+                        "Data-driven pricing intensifies seller competition.",
+                    ),
+                ],
+                "evidence": [
+                    _lq_evidence_statement(
+                        "Algorithmic pricing can reduce consumer welfare in online markets."
+                    ),
+                    _lq_evidence_statement(
+                        "Data-driven pricing intensifies competition among sellers."
+                    ),
+                ],
+                "profiles": [
+                    {"paper_index": 0, "evidence_indexes": [0]},
+                    {"paper_index": 1, "evidence_indexes": [1]},
+                ],
+                "synthesis_config": {"batch_profiles": 2, "max_batches": 4, "max_model_calls": 20},
+            },
+            reference={
+                "task": "literature_synthesis",
+                "required_concepts": ["algorithmic pricing", "welfare"],
+            },
+            evaluator="evaluator.live_quality_reasoning",
+            tags=["live_quality", "reasoning", "offline"],
+        ),
+        _lq_case(
+            "lq-gap-analysis",
+            "gap analysis",
+            "Real gap analyzer over realistic synthesis statements.",
+            workflow="gap_analysis",
+            task="gap_analysis",
+            input_extra={
+                "evidence": [
+                    _lq_evidence_statement("Algorithmic pricing can reduce consumer welfare.")
+                ],
+                "profiles": [{"paper_index": 0, "evidence_indexes": [0]}],
+                "statements": [
+                    _lq_statement(
+                        "Algorithmic pricing affects consumer welfare but the welfare mechanism "
+                        "is not fully understood."
+                    )
+                ],
+                "themes": [
+                    {
+                        "title": "Algorithmic pricing and welfare",
+                        "dimension": "welfare",
+                        "statement_indexes": [0],
+                    }
+                ],
+                "documents_without_evidence": [],
+                "gap_config": {"max_statements": 10, "max_gaps": 5, "max_model_calls": 10},
+            },
+            reference={
+                "task": "gap_analysis",
+                "allowed_gap_types": [
+                    "mechanism_gap",
+                    "empirical_gap",
+                    "theoretical_gap",
+                    "context_gap",
+                ],
+                "required_concepts": ["algorithmic pricing"],
+            },
+            evaluator="evaluator.live_quality_reasoning",
+            tags=["live_quality", "reasoning", "offline"],
+        ),
+        _lq_case(
+            "lq-mechanism-development",
+            "mechanism generation",
+            "Real mechanism generator over a realistic research gap.",
+            workflow="mechanism_development",
+            task="mechanism_development",
+            input_extra={
+                "evidence": [
+                    _lq_evidence_statement("Algorithmic pricing can reduce consumer welfare.")
+                ],
+                "statements": [
+                    _lq_statement(
+                        "Algorithmic pricing may reduce welfare through extraction of consumer surplus."
+                    )
+                ],
+                "gap": {
+                    "title": "Mechanism linking algorithmic pricing to lower welfare",
+                    "gap_type": "mechanism_gap",
+                    "description": "The mechanism by which algorithmic pricing reduces welfare is unclear.",
+                    "statement_ids": [],
+                    "evidence_ids": [],
+                    "contradiction_statement_ids": [],
+                    "strength": "tentative",
+                    "confidence": 0.8,
+                },
+            },
+            reference={
+                "task": "mechanism_development",
+                "required_concepts": ["algorithmic pricing"],
+            },
+            evaluator="evaluator.live_quality_reasoning",
+            tags=["live_quality", "reasoning", "offline"],
+        ),
+        _lq_case(
+            "lq-model-specification",
+            "model specification",
+            "Real model builder over a realistic mechanism.",
+            workflow="analytical_model_specification",
+            task="analytical_model_specification",
+            input_extra={
+                "statements": [
+                    _lq_statement(
+                        "Algorithmic pricing can reduce consumer welfare when demand is uncertain."
+                    )
+                ],
+                "mechanism": {
+                    "name": "Surplus extraction under algorithmic pricing",
+                    "description": "Sellers use demand data to price-discriminate, extracting consumer surplus.",
+                    "causal_logic": "More data enables finer price discrimination, transferring surplus from consumers to sellers.",
+                    "actors": ["seller", "consumer"],
+                    "strategic_interactions": "seller sets price, consumer buys",
+                    "information_structure": "seller observes demand signals",
+                    "incentives": "seller maximizes profit",
+                    "boundary_conditions": "uncertain demand",
+                },
+                "model_config": {"max_actors": 8, "max_variables": 40},
+            },
+            reference={
+                "task": "analytical_model_specification",
+                "required_model_structure": [
+                    "actors",
+                    "variables",
+                    "parameters",
+                    "payoffs",
+                    "timing",
+                ],
+            },
+            evaluator="evaluator.live_quality_reasoning",
+            tags=["live_quality", "reasoning", "offline"],
+        ),
+        _lq_case(
+            "lq-proposition-generation",
+            "proposition generation",
+            "Real proposition generator over a verified equilibrium.",
+            workflow="proposition_generation",
+            task="proposition_generation",
+            input_extra={
+                "model": {
+                    "title": "Algorithmic Pricing and Consumer Surplus",
+                    "actors": [{"id": "seller", "name": "Seller"}],
+                    "variables": [
+                        {
+                            "symbol": "p",
+                            "name": "price",
+                            "meaning": "retail price",
+                            "domain": "R_+",
+                            "kind": "decision_variable",
+                            "owner_actor_id": "seller",
+                        }
+                    ],
+                    "parameters": [
+                        {"symbol": "c", "name": "cost", "meaning": "marginal cost", "domain": "R_+"}
+                    ],
+                    "timing": [
+                        {
+                            "stage_number": 0,
+                            "name": "pricing",
+                            "description": "seller sets price",
+                            "actor_ids": ["seller"],
+                        }
+                    ],
+                    "payoffs": [
+                        {
+                            "actor_id": "seller",
+                            "expression": {
+                                "expression": "(p - c) * (10 - p)",
+                                "symbols_used": ["p", "c"],
+                            },
+                            "decision_variables": ["p"],
+                            "parameters": ["c"],
+                        }
+                    ],
+                },
+                "candidate": {
+                    "expressions": [
+                        {
+                            "label": "price",
+                            "expression": "(p - c) * (10 - p)",
+                            "decision_variables": ["p"],
+                            "parameters": ["c"],
+                        }
+                    ],
+                    "decision_variables": ["p"],
+                    "method": "symbolic",
+                    "solution_order": ["price"],
+                },
+            },
+            reference={
+                "task": "proposition_generation",
+                "required_concepts": ["algorithmic pricing"],
+            },
+            evaluator="evaluator.live_quality_reasoning",
+            tags=["live_quality", "reasoning", "offline"],
+        ),
+    ],
+)
+
+
+def _lq_critic_fixtures(task: str) -> dict[str, list[dict[str, Any]]]:
+    if task == "mechanism_critique":
+        return {
+            "research_gap": [
+                {
+                    "title": "Mechanism linking algorithmic pricing to lower welfare",
+                    "gap_type": "mechanism_gap",
+                    "description": "The mechanism by which algorithmic pricing reduces welfare is unclear.",
+                }
+            ],
+            "mechanism_candidate": [
+                {
+                    "gap_id": "{research_gap#0}",
+                    "gap_selection_id": "lq-gap-selection",
+                    "name": "Surplus extraction mechanism",
+                    "description": "Sellers use demand data to price-discriminate.",
+                    "causal_logic": "The mechanism's direction is ambiguous and it omits the consumer's strategic incentives.",
+                    "actors": ["seller"],
+                    "literature_support_ids": [],
+                }
+            ],
+        }
+    if task == "model_critique":
+        return {
+            "selected_mechanism": [
+                {
+                    "gap_id": "lq-gap",
+                    "gap_selection_id": "lq-gap-selection",
+                    "mechanism_candidate_id": "lq-mech",
+                    "name": "Surplus extraction",
+                    "description": "Sellers extract surplus.",
+                    "causal_logic": "Data enables price discrimination.",
+                }
+            ],
+            "formal_analytical_model": [
+                {
+                    "selected_mechanism_id": "{selected_mechanism#0}",
+                    "title": "Algorithmic Pricing Model",
+                    "description": "A model of surplus extraction. The seller's payoff is inconsistent with its price setting and the consumer is not a strategic actor.",
+                    "actors": [
+                        {"actor_id": "seller", "name": "Seller", "strategic": True},
+                        {"actor_id": "consumer", "name": "Consumer", "strategic": False},
+                    ],
+                    "variables": [
+                        {
+                            "symbol": "p",
+                            "name": "price",
+                            "meaning": "retail price",
+                            "domain": "R_+",
+                            "kind": "decision_variable",
+                            "owner_actor_id": "seller",
+                        }
+                    ],
+                    "parameters": [
+                        {"symbol": "c", "name": "cost", "meaning": "marginal cost", "domain": "R_+"}
+                    ],
+                    "timing": [
+                        {
+                            "stage_number": 0,
+                            "name": "pricing",
+                            "description": "seller sets price",
+                            "actor_ids": ["seller"],
+                        }
+                    ],
+                    "payoffs": [
+                        {
+                            "actor_id": "seller",
+                            "expression": {"expression": "10 - p", "symbols_used": ["p"]},
+                            "decision_variables": ["p"],
+                            "parameters": [],
+                        }
+                    ],
+                }
+            ],
+        }
+    if task == "proposition_critique":
+        return {
+            "formal_analytical_model": [
+                {
+                    "selected_mechanism_id": "lq-mech",
+                    "title": "Algorithmic Pricing Model",
+                    "description": "A model of surplus extraction.",
+                    "actors": [{"actor_id": "seller", "name": "Seller", "strategic": True}],
+                    "variables": [
+                        {
+                            "symbol": "p",
+                            "name": "price",
+                            "meaning": "retail price",
+                            "domain": "R_+",
+                            "kind": "decision_variable",
+                            "owner_actor_id": "seller",
+                        }
+                    ],
+                    "parameters": [
+                        {"symbol": "c", "name": "cost", "meaning": "marginal cost", "domain": "R_+"}
+                    ],
+                    "timing": [
+                        {
+                            "stage_number": 0,
+                            "name": "pricing",
+                            "description": "seller sets price",
+                            "actor_ids": ["seller"],
+                        }
+                    ],
+                    "payoffs": [
+                        {
+                            "actor_id": "seller",
+                            "expression": {
+                                "expression": "(p - c) * (10 - p)",
+                                "symbols_used": ["p", "c"],
+                            },
+                            "decision_variables": ["p"],
+                            "parameters": ["c"],
+                        }
+                    ],
+                }
+            ],
+            "proposition": [
+                {
+                    "model_id": "{formal_analytical_model#0}",
+                    "equilibrium_candidate_id": "lq-eq",
+                    "comparative_statics_analysis_id": "lq-cs",
+                    "statement": "Algorithmic pricing ALWAYS increases consumer welfare in every market.",
+                    "claim_type": "monotonicity",
+                    "conditions": [],
+                }
+            ],
+        }
+    if task == "results_critique":
+        return {
+            "research_finding": [
+                {
+                    "model_id": "lq-model",
+                    "equilibrium_candidate_id": "lq-eq",
+                    "statement": "Algorithmic pricing reduces consumer welfare.",
+                    "finding_type": "result",
+                    "supporting_proposition_ids": ["lq-prop"],
+                    "conditions": [],
+                }
+            ],
+            "contribution_claim": [
+                {
+                    "gap_id": "lq-gap",
+                    "finding_ids": ["lq-finding"],
+                    "claim": "We prove algorithmic pricing causes large welfare losses.",
+                    "contribution_type": "theoretical",
+                    "novelty_claim": "this is a definitive welfare statement",
+                    "novelty_normalized": False,
+                }
+            ],
+            "research_results_package": [
+                {
+                    "research_question_id": "lq-rq",
+                    "gap_id": "lq-gap",
+                    "selected_mechanism_id": "lq-mech",
+                    "model_id": "lq-model",
+                    "equilibrium_analysis_id": "lq-ea",
+                    "equilibrium_candidate_id": "lq-eq",
+                    "finding_ids": ["{research_finding#0}"],
+                    "contribution_claim_ids": ["{contribution_claim#0}"],
+                    "implication_ids": [],
+                    "limitations": [],
+                    "status": "completed",
+                    "summary": "Results package.",
+                }
+            ],
+        }
+    # manuscript_critique
+    return {
+        "contribution_claim": [
+            {
+                "gap_id": "lq-gap",
+                "finding_ids": ["lq-finding"],
+                "claim": "Algorithmic pricing reduces consumer welfare.",
+                "contribution_type": "theoretical",
+                "novelty_claim": "",
+                "novelty_normalized": True,
+            }
+        ],
+        "research_results_package": [
+            {
+                "research_question_id": "lq-rq",
+                "gap_id": "lq-gap",
+                "selected_mechanism_id": "lq-mech",
+                "model_id": "lq-model",
+                "equilibrium_analysis_id": "lq-ea",
+                "equilibrium_candidate_id": "lq-eq",
+                "finding_ids": ["lq-finding"],
+                "contribution_claim_ids": ["{contribution_claim#0}"],
+                "implication_ids": [],
+                "limitations": ["small model"],
+                "status": "completed",
+                "summary": "Results package.",
+            }
+        ],
+        "manuscript_draft": [
+            {
+                "outline_id": "lq-outline",
+                "results_package_id": "{research_results_package#0}",
+                "title": "Algorithmic Pricing and Consumer Welfare",
+                "section_ids": ["{manuscript_section#0}", "{manuscript_section#1}"],
+            }
+        ],
+        "manuscript_section": [
+            {
+                "outline_id": "lq-outline",
+                "section_id": "introduction",
+                "title": "Introduction",
+                "body": "We study algorithmic pricing. Our model shows prices increase [CITE:smith2019]. "
+                "Algorithmic pricing increases consumer welfare in our benchmark setting.",
+                "claims": [
+                    {
+                        "text": "Algorithmic pricing increases consumer welfare.",
+                        "grounding_artifact_id": "lq-finding",
+                    }
+                ],
+                "citations": [{"citation_id": "smith2019", "paper_identity_id": "lq-paper"}],
+            },
+            {
+                "outline_id": "lq-outline",
+                "section_id": "limitations",
+                "title": "Limitations",
+                "body": "Our analysis abstracts from entry dynamics.",
+                "claims": [],
+                "citations": [],
+            },
+        ],
+    }
+
+
+LIVE_QUALITY_CRITIC_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="live-quality-critic-v1",
+    version=1,
+    name="Live Quality — Critic",
+    description=(
+        "Live-quality benchmark over the REAL production critic services "
+        "(mechanism, model, proposition, results, manuscript). Reference cases "
+        "contain known INJECTED DEFECTS; the evaluator measures how well the "
+        "critic's model output detects them (defect_recall, false_positive_rate, "
+        "severity_accuracy, coverage, actionable revisions)."
+    ),
+    category="live_quality",
+    config={"evaluators": ["evaluator.live_quality_critic"]},
+    cases=[
+        _lq_case(
+            "lq-mechanism-critique",
+            "mechanism critique with injected defects",
+            "Real mechanism critic against a candidate with an unclear causal "
+            "direction and a missing strategic actor.",
+            workflow="lq_critique",
+            task="mechanism_critique",
+            input_extra={
+                "target_artifact_type": "mechanism_candidate",
+                "fixtures": _lq_critic_fixtures("mechanism_critique"),
+            },
+            reference={
+                "task": "mechanism_critique",
+                "injected_defects": [
+                    {"category": "unclear_causal_direction", "severity": "high"},
+                    {"category": "missing_actor_or_incentive", "severity": "medium"},
+                ],
+            },
+            evaluator="evaluator.live_quality_critic",
+            tags=["live_quality", "critic", "offline"],
+        ),
+        _lq_case(
+            "lq-model-critique",
+            "model-specification critique with injected defects",
+            "Real model-specification critic against a model with a payoff "
+            "inconsistency and a missing strategic actor.",
+            workflow="lq_critique",
+            task="model_critique",
+            input_extra={
+                "target_artifact_type": "formal_analytical_model",
+                "fixtures": _lq_critic_fixtures("model_critique"),
+            },
+            reference={
+                "task": "model_critique",
+                "injected_defects": [
+                    {"category": "payoff_inconsistency", "severity": "high"},
+                    {"category": "missing_strategic_actor", "severity": "medium"},
+                ],
+            },
+            evaluator="evaluator.live_quality_critic",
+            tags=["live_quality", "critic", "offline"],
+        ),
+        _lq_case(
+            "lq-proposition-critique",
+            "proposition critique with injected defects",
+            "Real proposition critic against an overclaiming proposition with missing conditions.",
+            workflow="lq_critique",
+            task="proposition_critique",
+            input_extra={
+                "target_artifact_type": "proposition",
+                "fixtures": _lq_critic_fixtures("proposition_critique"),
+            },
+            reference={
+                "task": "proposition_critique",
+                "injected_defects": [
+                    {"category": "overclaiming", "severity": "high"},
+                    {"category": "missing_conditions", "severity": "medium"},
+                ],
+            },
+            evaluator="evaluator.live_quality_critic",
+            tags=["live_quality", "critic", "offline"],
+        ),
+        _lq_case(
+            "lq-results-critique",
+            "results critique with injected defects",
+            "Real results critic against a package with a causal overstatement.",
+            workflow="lq_critique",
+            task="results_critique",
+            input_extra={
+                "target_artifact_type": "research_results_package",
+                "fixtures": _lq_critic_fixtures("results_critique"),
+            },
+            reference={
+                "task": "results_critique",
+                "injected_defects": [{"category": "causal_overstatement", "severity": "high"}],
+            },
+            evaluator="evaluator.live_quality_critic",
+            tags=["live_quality", "critic", "offline"],
+        ),
+        _lq_case(
+            "lq-manuscript-critique",
+            "manuscript critique with injected defects",
+            "Real manuscript critic against a draft with a cross-section "
+            "inconsistency (intro vs conclusion) that no deterministic check "
+            "catches.",
+            workflow="lq_critique",
+            task="manuscript_critique",
+            input_extra={
+                "target_artifact_type": "manuscript_draft",
+                "fixtures": _lq_critic_fixtures("manuscript_critique"),
+            },
+            reference={
+                "task": "manuscript_critique",
+                "injected_defects": [
+                    {"category": "cross_section_inconsistency", "severity": "high"}
+                ],
+            },
+            evaluator="evaluator.live_quality_critic",
+            tags=["live_quality", "critic", "offline"],
+        ),
+    ],
+)
+
+
+LIVE_QUALITY_FAST_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="live-quality-fast-v1",
+    version=1,
+    name="Live Quality — Fast (screening)",
+    description=(
+        "Live-quality benchmark over the REAL screening pipeline's fast-role "
+        "screener decisions on realistic papers. References are expected "
+        "decision classes (deterministic from the inclusion criteria). "
+        "Decision accuracy, uncertain-case handling, false-exclusion rate, "
+        "structured-output success."
+    ),
+    category="live_quality",
+    config={"evaluators": ["evaluator.live_quality_fast"]},
+    cases=[
+        _lq_case(
+            "lq-fast-screening-clear",
+            "fast screening — clear relevance",
+            "Two clearly relevant papers (include) and one clearly irrelevant "
+            "paper (exclude); the fast-role screener must not exclude relevant work.",
+            workflow="literature_screening",
+            task="screening",
+            input_extra={
+                "research_question": {
+                    "question": "Which studies examine algorithmic pricing effects on consumer welfare in online markets?"
+                },
+                "papers": [
+                    _lq_paper(
+                        "Algorithmic Pricing and Consumer Welfare in Online Markets",
+                        "10.7000/lq-f1",
+                        "We study how algorithmic pricing reduces consumer welfare.",
+                    ),
+                    _lq_paper(
+                        "Data-Driven Pricing and Market Outcomes",
+                        "10.7000/lq-f2",
+                        "Data-driven pricing shapes market outcomes and consumer welfare.",
+                    ),
+                    _lq_paper(
+                        "Soil Microbiomes in Agricultural Systems",
+                        "10.7000/lq-f3",
+                        "Microbial communities in agricultural soils.",
+                    ),
+                ],
+                "identities": [
+                    {"member_indexes": [0]},
+                    {"member_indexes": [1]},
+                    {"member_indexes": [2]},
+                ],
+                "screening_config": {"max_candidates": 100, "max_model_calls": 500},
+            },
+            reference={
+                "task": "screening",
+                "expected_decisions": {
+                    "Algorithmic Pricing and Consumer Welfare in Online Markets": "include",
+                    "Data-Driven Pricing and Market Outcomes": "include",
+                    "Soil Microbiomes in Agricultural Systems": "exclude",
+                },
+                "required_decision_accuracy": 0.8,
+            },
+            evaluator="evaluator.live_quality_fast",
+            tags=["live_quality", "fast", "offline"],
+        ),
+        _lq_case(
+            "lq-fast-screening-uncertain",
+            "fast screening — uncertain handling",
+            "An ambiguous paper must not be force-excluded; it should stay "
+            "uncertain or be reviewed.",
+            workflow="literature_screening",
+            task="screening",
+            input_extra={
+                "research_question": {
+                    "question": "Which studies examine algorithmic pricing effects on consumer welfare in online markets?"
+                },
+                "papers": [
+                    _lq_paper(
+                        "Pricing and Consumer Behavior in Digital Markets",
+                        "10.7000/lq-u1",
+                        "We study pricing and consumer behavior in digital markets.",
+                    ),
+                    _lq_paper(
+                        "Consumer Welfare in Online Retail",
+                        "10.7000/lq-u2",
+                        "An overview of consumer welfare in online retail.",
+                    ),
+                ],
+                "identities": [{"member_indexes": [0]}, {"member_indexes": [1]}],
+                "screening_config": {"max_candidates": 100, "max_model_calls": 500},
+            },
+            reference={
+                "task": "screening",
+                "expected_decisions": {
+                    "Pricing and Consumer Behavior in Digital Markets": "uncertain",
+                    "Consumer Welfare in Online Retail": "uncertain",
+                },
+                "required_decision_accuracy": 0.8,
+            },
+            evaluator="evaluator.live_quality_fast",
+            tags=["live_quality", "fast", "offline"],
+        ),
+    ],
+)
+
+
+def _lq_result(
+    candidate_id: str,
+    *,
+    det: float = 0.9,
+    structured: float = 0.9,
+    provider_error: float = 0.0,
+    grounding_failures: int = 0,
+    repetitions: int = 3,
+    age_seconds: float | None = None,
+) -> dict[str, Any]:
+    created = (
+        datetime.now(UTC) - timedelta(seconds=age_seconds) if age_seconds else datetime.now(UTC)
+    )
+    return {
+        "candidate_id": candidate_id,
+        "model": {"candidate_id": candidate_id, "requested_model": f"m-{candidate_id}"},
+        "resolved_model": f"m-{candidate_id}",
+        "role": "reasoning",
+        "benchmark_id": "live-quality-reasoning-v1",
+        "repetitions": repetitions,
+        "deterministic_pass_rate_mean": det,
+        "deterministic_pass_rate_worst": det,
+        "structured_output_success_rate": structured,
+        "provider_error_frequency": provider_error,
+        "critical_grounding_failures": grounding_failures,
+        "task_results": [
+            {
+                "repetition": i,
+                "run_id": f"run-{i}",
+                "report_id": f"rep-{i}",
+                "report_status": "passed",
+                "cases_total": 1,
+                "cases_passed": 1,
+                "cases_failed": 0,
+                "cases_error": 0,
+                "task_pass_rate": 1.0,
+                "task_completed": True,
+            }
+            for i in range(repetitions)
+        ],
+        "evidence_timestamp": created.isoformat(),
+    }
+
+
+def _readiness_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    role: str,
+    configured_model: str | None,
+    reference: dict[str, Any],
+    live_results: dict[str, dict[str, Any]] | None = None,
+    require_fallback: bool = False,
+    criteria: dict[str, Any] | None = None,
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "routing_readiness",
+            "role": role,
+            "configured_model": configured_model,
+            "require_fallback": require_fallback,
+            "live_results": live_results or {},
+            "criteria": criteria or {},
+        },
+        reference=reference,
+        evaluation_dimensions=["routing_readiness"],
+        tags=["routing", "readiness", "offline"],
+    )
+
+
+PRODUCTION_ROUTING_READINESS_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="production-routing-readiness-v1",
+    version=1,
+    name="Production Routing Readiness (Phase 7D.0)",
+    description=(
+        "Offline benchmark over the real deterministic production-routing "
+        "readiness logic. Verifies that live-quality evidence is required for "
+        "qualification, thresholds/repetitions/grounding/provider-error gates "
+        "work, role evidence is isolated, fallbacks qualify, and "
+        "unsafe_production_qualification_rate stays 0."
+    ),
+    category="routing_readiness",
+    config={"evaluators": ["evaluator.routing_readiness"]},
+    cases=[
+        _readiness_case(
+            "prr-no-live-evidence",
+            "high offline score but no live evidence -> not qualified",
+            "Offline fixture tournaments alone can never authorize routing.",
+            role="reasoning",
+            configured_model="m-offline-best",
+            reference={
+                "expected_qualified": False,
+                "expected_role": "reasoning",
+                "expected_reason_substring": "no live-quality evidence",
+                "expected_qualified_models": [],
+            },
+        ),
+        _readiness_case(
+            "prr-below-threshold",
+            "live quality below threshold -> rejected",
+            "A model whose live deterministic quality is below the role "
+            "threshold is not qualified.",
+            role="reasoning",
+            configured_model="m-configured",
+            live_results={
+                "m-configured": _lq_result("m-configured", det=0.6),
+                "m-fallback": _lq_result("m-fallback", det=0.95),
+            },
+            require_fallback=True,
+            reference={
+                "expected_qualified": False,
+                "expected_reason_substring": "deterministic_pass_rate",
+                "expected_qualified_models": ["m-fallback"],
+            },
+        ),
+        _readiness_case(
+            "prr-qualified",
+            "sufficient repetitions + quality -> qualified",
+            "A model with adequate live evidence and a qualified fallback qualifies the role.",
+            role="reasoning",
+            configured_model="m-configured",
+            live_results={
+                "m-configured": _lq_result("m-configured", det=0.92),
+                "m-fallback": _lq_result("m-fallback", det=0.9),
+            },
+            require_fallback=True,
+            reference={
+                "expected_qualified": True,
+                "expected_qualified_models": ["m-configured", "m-fallback"],
+                "expected_fallback_qualified": True,
+                "expected_fallback_model": "m-fallback",
+            },
+        ),
+        _readiness_case(
+            "prr-critical-grounding",
+            "grounding critical failure -> rejected",
+            "A model with any critical grounding failure is never qualified.",
+            role="reasoning",
+            configured_model="m-configured",
+            live_results={
+                "m-configured": _lq_result("m-configured", det=0.95, grounding_failures=1)
+            },
+            require_fallback=True,
+            reference={
+                "expected_qualified": False,
+                "expected_reason_substring": "grounding",
+                "expected_qualified_models": [],
+            },
+        ),
+        _readiness_case(
+            "prr-high-provider-error",
+            "high provider-error rate -> rejected",
+            "A model with a provider-failure rate above the role maximum is not qualified.",
+            role="reasoning",
+            configured_model="m-configured",
+            live_results={"m-configured": _lq_result("m-configured", det=0.95, provider_error=0.5)},
+            require_fallback=True,
+            reference={
+                "expected_qualified": False,
+                "expected_reason_substring": "provider_error",
+                "expected_qualified_models": [],
+            },
+        ),
+        _readiness_case(
+            "prr-stale-evidence",
+            "stale live evidence -> rejected",
+            "Live evidence older than the freshness threshold is not qualified.",
+            role="reasoning",
+            configured_model="m-configured",
+            live_results={"m-configured": _lq_result("m-configured", det=0.95, age_seconds=5000)},
+            require_fallback=True,
+            criteria={"role": "reasoning", "leaderboard_max_age_seconds": 100},
+            reference={
+                "expected_qualified": False,
+                "expected_reason_substring": "stale",
+                "expected_qualified_models": [],
+            },
+        ),
+        _readiness_case(
+            "prr-role-evidence-mismatch",
+            "role evidence mismatch -> rejected",
+            "Live evidence for a different model than the configured production "
+            "model cannot qualify the role.",
+            role="reasoning",
+            configured_model="m-production",
+            live_results={"m-other": _lq_result("m-other", det=0.95)},
+            require_fallback=True,
+            reference={
+                "expected_qualified": False,
+                "expected_reason_substring": "configured model",
+                "expected_qualified_models": ["m-other"],
+            },
+        ),
+        _readiness_case(
+            "prr-no-qualified-fallback",
+            "no qualified fallback when policy requires one -> not ready",
+            "A qualified primary with no qualified fallback is not ready.",
+            role="reasoning",
+            configured_model="m-configured",
+            live_results={"m-configured": _lq_result("m-configured", det=0.95)},
+            require_fallback=True,
+            reference={
+                "expected_qualified": False,
+                "expected_reason_substring": "fallback",
+                "expected_qualified_models": ["m-configured"],
+            },
+        ),
+        _readiness_case(
+            "prr-fallback-not-required",
+            "qualified primary without required fallback -> ready",
+            "When the policy does not require a fallback, a qualified primary alone is ready.",
+            role="reasoning",
+            configured_model="m-configured",
+            live_results={"m-configured": _lq_result("m-configured", det=0.95)},
+            require_fallback=False,
+            reference={
+                "expected_qualified": True,
+                "expected_qualified_models": ["m-configured"],
+            },
+        ),
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -8616,4 +9623,8 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     PUBLICATION_PACKAGING_V1.benchmark_id: PUBLICATION_PACKAGING_V1,
     EVIDENCE_ENRICHMENT_V1.benchmark_id: EVIDENCE_ENRICHMENT_V1,
     MODEL_ROUTING_POLICY_V1.benchmark_id: MODEL_ROUTING_POLICY_V1,
+    LIVE_QUALITY_REASONING_V1.benchmark_id: LIVE_QUALITY_REASONING_V1,
+    LIVE_QUALITY_CRITIC_V1.benchmark_id: LIVE_QUALITY_CRITIC_V1,
+    LIVE_QUALITY_FAST_V1.benchmark_id: LIVE_QUALITY_FAST_V1,
+    PRODUCTION_ROUTING_READINESS_V1.benchmark_id: PRODUCTION_ROUTING_READINESS_V1,
 }

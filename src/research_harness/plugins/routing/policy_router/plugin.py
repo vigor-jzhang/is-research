@@ -191,6 +191,11 @@ class PolicyModelRouterService:
     async def _load_leaderboard(
         self, role: str, request: RoutingRequest
     ) -> tuple[RoleLeaderboard | None, float | None, bool, bool]:
+        def _evidence_ok(board: RoleLeaderboard) -> bool:
+            if not request.evidence_types:
+                return True
+            return board.evidence_type in request.evidence_types
+
         if request.leaderboard_ids:
             boards: list[RoleLeaderboard] = []
             for lid in request.leaderboard_ids:
@@ -203,6 +208,8 @@ class PolicyModelRouterService:
                 board = env.parse_payload(RoleLeaderboard)
                 if board.role != role:
                     continue  # role isolation: only the requested role's evidence
+                if not _evidence_ok(board):
+                    continue
                 boards.append(board)
         else:
             boards = [
@@ -210,6 +217,7 @@ class PolicyModelRouterService:
                 for env in await self._store.list(artifact_type="role_leaderboard")
                 if env.payload.get("role") == role
             ]
+            boards = [b for b in boards if _evidence_ok(b)]
         if not boards:
             return None, None, False, False
         leaderboard = max(boards, key=lambda b: b.created_at)

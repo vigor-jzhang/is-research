@@ -56,6 +56,10 @@ ALL_EVALUATORS = [
     "evaluator.publication_packaging",
     "evaluator.evidence_enrichment",
     "evaluator.model_routing",
+    "evaluator.live_quality_reasoning",
+    "evaluator.live_quality_critic",
+    "evaluator.live_quality_fast",
+    "evaluator.routing_readiness",
 ]
 
 

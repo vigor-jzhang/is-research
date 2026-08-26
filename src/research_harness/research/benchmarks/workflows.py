@@ -4993,6 +4993,228 @@ async def run_model_routing_workflow(
 
 
 # ---------------------------------------------------------------------------
+# lq_critique workflow (Phase 7D.0): inject a defective fixture artifact and
+# run the real production critic service; validate the critique structurally
+# ---------------------------------------------------------------------------
+
+
+def _lq_critique_service(task: str, router: Any, store: Any, producer: str):
+    from research_harness.plugins.research.manuscript_critic.plugin import ManuscriptCriticService
+    from research_harness.plugins.research.mechanism_critic.plugin import MechanismCriticService
+    from research_harness.plugins.research.model_builder.plugin import ModelBuilderService
+    from research_harness.plugins.research.model_specification_critic.plugin import (
+        ModelSpecificationCriticService,
+    )
+    from research_harness.plugins.research.proposition_critic.plugin import PropositionCriticService
+    from research_harness.plugins.research.results_critic.plugin import ResultsCriticService
+
+    if task == "mechanism_critique":
+        return "mechanism_critique", MechanismCriticService(
+            model_router=router, artifact_store=store
+        )
+    if task == "model_critique":
+        builder = ModelBuilderService(model_router=router, artifact_store=store)
+        return "model_specification_critique", ModelSpecificationCriticService(
+            model_router=router, artifact_store=store, builder=builder
+        )
+    if task == "proposition_critique":
+        return "proposition_critique", PropositionCriticService(
+            model_router=router, artifact_store=store
+        )
+    if task == "results_critique":
+        return "results_critique", ResultsCriticService(model_router=router, artifact_store=store)
+    if task == "manuscript_critique":
+        return "manuscript_critique", ManuscriptCriticService(
+            model_router=router, artifact_store=store
+        )
+    raise BenchmarkError(f"unknown live-quality critic task {task!r}")
+
+
+def _lq_fixture_schema(artifact_type: str):
+    from research_harness.research.schemas.gap import ResearchGap
+    from research_harness.research.schemas.manuscript import ManuscriptDraft, ManuscriptSection
+    from research_harness.research.schemas.mechanism import MechanismCandidate, SelectedMechanism
+    from research_harness.research.schemas.model import FormalAnalyticalModel
+    from research_harness.research.schemas.proposition import Proposition
+    from research_harness.research.schemas.results import (
+        ContributionClaim,
+        ResearchFinding,
+        ResearchResultsPackage,
+    )
+
+    return {
+        "research_gap": ResearchGap,
+        "mechanism_candidate": MechanismCandidate,
+        "selected_mechanism": SelectedMechanism,
+        "formal_analytical_model": FormalAnalyticalModel,
+        "proposition": Proposition,
+        "research_results_package": ResearchResultsPackage,
+        "research_finding": ResearchFinding,
+        "contribution_claim": ContributionClaim,
+        "manuscript_draft": ManuscriptDraft,
+        "manuscript_section": ManuscriptSection,
+    }.get(artifact_type)
+
+
+def _resolve_placeholders(value: Any, id_map: dict[str, str]) -> Any:
+    """Replace {artifact_type#index} placeholders with assigned fixture ids."""
+    if isinstance(value, dict):
+        return {k: _resolve_placeholders(v, id_map) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_placeholders(v, id_map) for v in value]
+    if isinstance(value, str):
+        if value.startswith("{") and value.endswith("}"):
+            key = value[1:-1]
+            if key in id_map:
+                return id_map[key]
+        return value
+    return value
+
+
+async def run_lq_critique_workflow(
+    *,
+    model_router: Any | None = None,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Injects a defective fixture artifact (case.input['fixtures']) and runs
+    the real production critic service for the task. The critic's model output
+    is validated structurally by the live-quality critic evaluator against the
+    known injected defects."""
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    task = str(case.input.get("task") or "")
+    router = _case_router(case, model_router, fixtures=case.input.get("llm_fixtures") or [])
+
+    fixtures = case.input.get("fixtures") or {}
+    id_plan: dict[str, str] = {}
+    for artifact_type, payloads in fixtures.items():
+        for i in range(len(payloads or [])):
+            id_plan[f"{artifact_type}#{i}"] = f"{case.id}-{run_suffix}-{artifact_type}-{i}"
+
+    for artifact_type, payloads in fixtures.items():
+        schema = _lq_fixture_schema(artifact_type)
+        if schema is None:
+            raise BenchmarkError(f"unsupported live-quality fixture type {artifact_type!r}")
+        for i, payload in enumerate(payloads or []):
+            aid = id_plan[f"{artifact_type}#{i}"]
+            payload = dict(payload)
+            payload.pop("created_at", None)
+            resolved = _resolve_placeholders(payload, id_plan)
+            env = ArtifactEnvelope.create(
+                payload=schema.model_validate(resolved),
+                artifact_type=artifact_type,
+                producer=producer,
+                artifact_id=aid,
+            )
+            await artifact_store.put(env)
+
+    target_type = str(case.input.get("target_artifact_type") or "")
+    target_index = int(case.input.get("target_index") or 0)
+    target_id = id_plan.get(f"{target_type}#{target_index}")
+    if target_id is None:
+        raise BenchmarkError(
+            f"live-quality critic target {target_type}#{target_index} not found among fixtures"
+        )
+
+    _artifact_type, service = _lq_critique_service(task, router, artifact_store, producer)
+    await service.critique(target_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# routing_readiness workflow (Phase 7D.0): the real deterministic readiness
+# assessment over synthetic live-quality results
+# ---------------------------------------------------------------------------
+
+
+async def run_routing_readiness_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real `assess_role_readiness` deterministic logic over
+    synthetic LiveQualityModelResult fixtures and persists the resulting
+    RoutingReadinessAssessment for the evaluator. No network."""
+    from research_harness.research.routing.readiness import (
+        assess_role_readiness,
+        criteria_for_role,
+    )
+    from research_harness.research.schemas.live_quality import (
+        LiveQualityModelResult,
+        QualificationCriteria,
+        RoutingReadinessAssessment,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    role = str(case.input.get("role") or "reasoning")
+    configured_model = case.input.get("configured_model")
+    require_fallback = bool(case.input.get("require_fallback") or False)
+
+    live_results: dict[str, LiveQualityModelResult] = {}
+    for candidate_id, payload in (case.input.get("live_results") or {}).items():
+        live_results[str(candidate_id)] = LiveQualityModelResult.model_validate(
+            dict(payload, candidate_id=str(candidate_id))
+        )
+
+    criteria_data = dict(case.input.get("criteria") or {})
+    criteria = (
+        QualificationCriteria.model_validate(criteria_data)
+        if criteria_data
+        else criteria_for_role(role)
+    )
+    if criteria.role != role:
+        criteria = criteria.model_copy(update={"role": role})
+
+    verdict = assess_role_readiness(
+        live_results,
+        criteria,
+        configured_model=str(configured_model) if configured_model else None,
+        require_fallback=require_fallback,
+    )
+
+    assessment = RoutingReadinessAssessment(
+        role=role,
+        criteria=criteria,
+        qualified=bool(verdict["qualified"]),
+        reasons=list(verdict["reasons"]),
+        qualified_models=list(verdict["qualified_models"]),
+        fallback_qualified=bool(verdict["fallback_qualified"]),
+        fallback_model=verdict["fallback_model"],
+        configured_model=verdict["configured_model"],
+        evidence={cid: summary_payload(r) for cid, r in live_results.items()},
+        unsafe_production_qualification=False,
+    )
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=assessment,
+            artifact_type="routing_readiness_assessment",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-readiness",
+        )
+    )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+def summary_payload(result: Any) -> dict[str, Any]:
+    return {
+        "repetitions": result.repetitions,
+        "deterministic_pass_rate_mean": result.deterministic_pass_rate_mean,
+        "structured_output_success_rate": result.structured_output_success_rate,
+        "provider_error_frequency": result.provider_error_frequency,
+        "critical_grounding_failures": result.critical_grounding_failures,
+        "qualified": result.qualification,
+    }
+
+
+# ---------------------------------------------------------------------------
 # publication_packaging workflow (Phase 7A.1): real Phase 4C formatter +
 # exporters + submission package
 # ---------------------------------------------------------------------------

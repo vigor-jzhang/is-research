@@ -68,6 +68,11 @@ class RoutingRequest(BaseModel):
     leaderboard_ids: list[str] | None = Field(
         default=None, description="Explicit leaderboard artifacts to use (default: latest for role)"
     )
+    evidence_types: list[str] | None = Field(
+        default=None,
+        description="Required leaderboard evidence types, e.g. ['live_quality_evidence'] "
+        "(default: any). Production routing requires live_quality_evidence.",
+    )
     task_context: str = ""
 
     model_config = {"extra": "forbid"}

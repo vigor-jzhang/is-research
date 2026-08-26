@@ -1077,14 +1077,88 @@ fallback selection, role isolation. Metrics (`evaluator.model_routing`):
 `deterministic_tiebreak_accuracy`, `unsafe_selection_rate` (any selection of a
 deterministically ineligible model is a critical failure).
 
+## Live-quality validation + production-routing readiness (Phase 7D.0)
+
+Scripted-fixture benchmarks are not valid live-quality proxies. Phase 7D.0 adds
+trustworthy live-quality evidence for routing readiness before any production
+activation (which remains off).
+
+### Live-quality benchmarks
+
+- `live-quality-reasoning-v1` — evidence extraction, synthesis, gap analysis,
+  mechanism generation, model specification, proposition generation over the
+  REAL production pipelines with realistic, model-agnostic inputs and
+  structural references. `evaluator.live_quality_reasoning` measures
+  structured-output success, grounding correctness, unsupported-reference rate,
+  instruction adherence, required-field completeness, deterministic downstream
+  validation (e.g. proposition verification), and task completion.
+- `live-quality-critic-v1` — mechanism/model/proposition/results/manuscript
+  critique over the REAL critic services with reference cases containing known
+  INJECTED DEFECTS. `evaluator.live_quality_critic` measures defect_recall,
+  false_positive_rate, severity_accuracy, required-category coverage,
+  actionable_revision_rate, structured-output success.
+- `live-quality-fast-v1` — real screening pipeline fast-role decisions.
+  `evaluator.live_quality_fast` measures decision accuracy, uncertain-case
+  handling, false-exclusion rate, structured-output success (latency/cost are
+  aggregated by the service from call records).
+
+Inputs live in the immutable benchmark definitions (small frozen realistic
+corpus); references are semantic/structural (valid ids/pages, required
+concepts, allowed gap types, injected defects, expected decision class,
+required mathematical structure) — never exact natural-language matching.
+
+### Artifacts (`research/schemas/live_quality.py`)
+
+`LiveQualityTaskResult` (per repetition), `LiveQualityModelResult` (mean/worst/
+variance pass rates, structured-output failure frequency, provider-error
+frequency, critical grounding failures, latency/tokens/cost),
+`LiveQualityRun`, `QualificationCriteria`, `RoutingReadinessAssessment`
+(qualified, reasons, qualified/fallback models, configured model,
+`unsafe_production_qualification` always False).
+
+### Repetitions / reliability
+
+Configurable repetitions (default 3). Mean/worst-case pass rate + variance,
+structured-output failure frequency and provider-error frequency are tracked.
+A single successful call never qualifies production routing.
+
+### Production qualification rules (`research/routing/readiness.py`)
+
+Role-specific `QualificationCriteria` (fast is stricter than reasoning/critic):
+min deterministic quality, min structured-output success, max provider-error
+rate, min repetitions, no critical grounding failures, min cases, evidence
+freshness. Live-quality evidence (`RoleLeaderboard.evidence_type ==
+live_quality_evidence`) is REQUIRED — offline fixture tournaments alone can
+never authorize routing.
+
+### Routing readiness benchmark (`production-routing-readiness-v1`)
+
+9 offline cases: no live evidence, below threshold, qualified, critical
+grounding failure, high provider-error rate, stale live evidence, role evidence
+mismatch, qualified primary + fallback, no qualified fallback.
+`evaluator.routing_readiness` with the critical metric
+`unsafe_production_qualification_rate = 0`.
+
+### CLI
+
+```bash
+uv run research-agent evaluation live-quality run --role reasoning --repetitions 3
+uv run research-agent evaluation live-quality inspect <run-id>
+uv run research-agent routing readiness --role reasoning
+uv run research-agent eval run production-routing-readiness-v1
+```
+
+Production routing is never enabled automatically: each role reports
+ready/not_ready; Phase 7D (controlled activation) is a separate future phase.
+
 ## Recommended next increment
 
-Post-Phase-7C: the evaluation program covers every core pipeline stage with
-deterministic gating, the six targeted gaps are closed (7A + 7A.1 + 5C-5D +
-7C shadow routing), and shadow routing provides decision support over the
-frozen tournaments. The verdict remains `ready_with_gaps` because non-blocking
+Post-Phase-7D.0: the evaluation program covers 28 benchmark families with
+deterministic gating; the readiness gate requires live-quality evidence for
+production routing. The verdict remains `ready_with_gaps` because non-blocking
 gaps remain (live provider connectors/publisher endpoints, advisory LLM-quality
-judging). Phase 7D would add controlled production routing: opt-in automatic
-role switching with hard quality/cost budgets, deterministic fallback, circuit
-breakers, observability, and immediate rollback to static configuration —
-explicitly not implemented in Phase 7C.
+judging) and automatic routing activation is deliberately not implemented.
+Phase 7D (controlled activation) would build opt-in automatic role switching
+with hard quality/cost budgets, deterministic fallback, circuit breakers,
+observability, and immediate rollback to static configuration — reusing the
+live-quality-qualified leaderboards and the readiness gate from 7D.0.

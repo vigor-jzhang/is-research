@@ -523,6 +523,46 @@ def _create_policy_router() -> Plugin:
     return PolicyModelRouterPlugin()
 
 
+def _create_evaluator_live_quality_reasoning() -> Plugin:
+    from research_harness.plugins.research.evaluator_live_quality_reasoning.plugin import (
+        LiveQualityReasoningEvaluatorPlugin,
+    )
+
+    return LiveQualityReasoningEvaluatorPlugin()
+
+
+def _create_evaluator_live_quality_critic() -> Plugin:
+    from research_harness.plugins.research.evaluator_live_quality_critic.plugin import (
+        LiveQualityCriticEvaluatorPlugin,
+    )
+
+    return LiveQualityCriticEvaluatorPlugin()
+
+
+def _create_evaluator_live_quality_fast() -> Plugin:
+    from research_harness.plugins.research.evaluator_live_quality_fast.plugin import (
+        LiveQualityFastEvaluatorPlugin,
+    )
+
+    return LiveQualityFastEvaluatorPlugin()
+
+
+def _create_evaluator_routing_readiness() -> Plugin:
+    from research_harness.plugins.research.evaluator_routing_readiness.plugin import (
+        RoutingReadinessEvaluatorPlugin,
+    )
+
+    return RoutingReadinessEvaluatorPlugin()
+
+
+def _create_live_quality() -> Plugin:
+    from research_harness.plugins.research.evaluation_live_quality.plugin import (
+        LiveQualityPlugin,
+    )
+
+    return LiveQualityPlugin()
+
+
 def _create_blobs_filesystem() -> Plugin:
     from research_harness.plugins.storage.blobs_filesystem.plugin import BlobsFilesystemPlugin
 
@@ -629,7 +669,12 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "evaluator.publication_packaging": _create_evaluator_publication_packaging,
     "evaluator.evidence_enrichment": _create_evaluator_evidence_enrichment,
     "evaluator.model_routing": _create_evaluator_model_routing,
+    "evaluator.live_quality_reasoning": _create_evaluator_live_quality_reasoning,
+    "evaluator.live_quality_critic": _create_evaluator_live_quality_critic,
+    "evaluator.live_quality_fast": _create_evaluator_live_quality_fast,
+    "evaluator.routing_readiness": _create_evaluator_routing_readiness,
     "routing.policy_router": _create_policy_router,
+    "evaluation.live_quality": _create_live_quality,
     "storage.blobs_filesystem": _create_blobs_filesystem,
     "documents.locator.metadata": _create_locator_metadata,
     "documents.locator.unpaywall": _create_locator_unpaywall,

@@ -49,8 +49,10 @@ app.add_typer(evaluation_app, name="eval")
 model_evaluation_app = typer.Typer(help="Model tournaments + role leaderboards (Phase 7B)")
 tournament_app = typer.Typer(help="Model tournament commands")
 leaderboard_app = typer.Typer(help="Role leaderboard commands")
+live_quality_app = typer.Typer(help="Live-quality model validation (Phase 7D.0)")
 model_evaluation_app.add_typer(tournament_app, name="tournament")
 model_evaluation_app.add_typer(leaderboard_app, name="leaderboard")
+model_evaluation_app.add_typer(live_quality_app, name="live-quality")
 app.add_typer(model_evaluation_app, name="evaluation")
 
 routing_app = typer.Typer(help="Policy-constrained model routing (Phase 7C, shadow mode)")
@@ -5947,6 +5949,10 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.publication_packaging",
         "evaluator.evidence_enrichment",
         "evaluator.model_routing",
+        "evaluator.live_quality_reasoning",
+        "evaluator.live_quality_critic",
+        "evaluator.live_quality_fast",
+        "evaluator.routing_readiness",
         "storage.blobs_filesystem",
     ):
         if pid not in cfg.plugins:
@@ -6482,6 +6488,14 @@ def _routing_config(config: pathlib.Path | None, extra_plugins: list[str]) -> An
     return cfg
 
 
+def _live_quality_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
+    cfg = _routing_config(config, list(_EVAL_REQUIRED))
+    for pid in ("evaluation.live_quality",):
+        if pid not in cfg.plugins:
+            cfg.plugins.append(pid)
+    return cfg
+
+
 @routing_app.command("decide")
 def routing_decide(
     role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
@@ -6603,6 +6617,45 @@ def routing_inspect(
     asyncio.run(_run())
 
 
+@routing_app.command("readiness")
+def routing_readiness(
+    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Compute per-role production-routing readiness from live-quality evidence
+    (Phase 7D.0). Reports ready/not_ready; never enables routing automatically."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("live_quality.default")
+            assessment = await svc.assess_readiness(role)
+            color = "green" if assessment.qualified else "red"
+            console.print(
+                f"[bold {color}]role {assessment.role}: "
+                f"{'ready' if assessment.qualified else 'not_ready'}[/bold {color}]"
+            )
+            console.print(f"  configured model: {assessment.configured_model}")
+            console.print(f"  qualified models: {assessment.qualified_models}")
+            console.print(
+                f"  fallback qualified: {assessment.fallback_qualified} ({assessment.fallback_model})"
+            )
+            console.print(f"  assessment: {assessment.id}")
+            for reason in assessment.reasons:
+                console.print(f"    [yellow]{reason}[/yellow]")
+            console.print(
+                f"  unsafe_production_qualification: {assessment.unsafe_production_qualification}"
+            )
+
+    asyncio.run(_run())
+
+
 @routing_policies_app.command("list")
 def routing_policies_list() -> None:
     """List the documented routing policies (Phase 7C)."""
@@ -6613,6 +6666,122 @@ def routing_policies_list() -> None:
         console.print(f"  {spec.description}")
         console.print(f"  gate: {spec.selection_rules.get('gate')}")
         console.print(f"  rank: {spec.selection_rules.get('rank')}")
+
+
+@live_quality_app.command("run")
+def live_quality_run(
+    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    repetitions: Annotated[
+        int, typer.Option(help="Runs per model/task (reliability validation)")
+    ] = 3,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Run the live-quality benchmark for a role's configured model (Phase 7D.0).
+
+    Runs the real live-quality benchmark (real provider, realistic inputs) with
+    the configured number of repetitions, aggregates pass rates/variance/
+    structured-output/provider-failure/latency/cost, and persists a
+    LiveQualityRun + live-quality RoleLeaderboard. Production routing is never
+    enabled automatically.
+    """
+    import asyncio
+
+    from research_harness.research.schemas.tournament import TournamentModelConfig
+
+    BENCHMARK_BY_ROLE = {
+        "fast": "live-quality-fast-v1",
+        "reasoning": "live-quality-reasoning-v1",
+        "critic": "live-quality-critic-v1",
+    }
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            models_cfg = runtime.config.models
+            role_cfg = models_cfg.roles.get(role)
+            if role_cfg is None:
+                console.print(f"[red]no configured model for role {role!r}[/red]")
+                raise typer.Exit(code=1)
+            model_config = TournamentModelConfig(
+                candidate_id=f"{role}:{role_cfg.model}",
+                provider=role_cfg.provider,
+                requested_model=role_cfg.model,
+            )
+            svc = runtime.services.require("live_quality.default")
+            run = await svc.run_live_quality(
+                role,
+                BENCHMARK_BY_ROLE[role],
+                model_config,
+                repetitions=repetitions,
+            )
+            result = run.result
+            console.print(f"[bold]LiveQualityRun {run.id}[/bold] role {run.role}")
+            console.print(f"  benchmark {run.benchmark_id}  model {result.resolved_model}")
+            console.print(f"  repetitions {result.repetitions}  leaderboard {run.leaderboard_id}")
+            console.print(
+                f"  deterministic pass rate mean {result.deterministic_pass_rate_mean}  "
+                f"worst {result.deterministic_pass_rate_worst}"
+            )
+            console.print(
+                f"  structured-output success {result.structured_output_success_rate}  "
+                f"provider-error frequency {result.provider_error_frequency}"
+            )
+            console.print(
+                f"  latency p50 {result.latency_ms_p50_mean} ms  tokens {result.total_tokens}  "
+                f"cost {result.estimated_cost}"
+            )
+            console.print(f"  qualification: {result.qualification}")
+            for reason in result.qualification_reasons:
+                console.print(f"    [yellow]{reason}[/yellow]")
+
+    asyncio.run(_run())
+
+
+@live_quality_app.command("inspect")
+def live_quality_inspect(
+    run: Annotated[str, typer.Argument(help="LiveQualityRun artifact id")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Inspect a live-quality run (Phase 7D.0)."""
+    import asyncio
+
+    from research_harness.research.schemas.live_quality import LiveQualityRun
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            store = runtime.services.require("artifact_store.default")
+            env = await store.get(run)
+            if env.artifact_type != "live_quality_run":
+                console.print(f"[red]artifact {run!r} is not a live_quality_run[/red]")
+                raise typer.Exit(code=1)
+            r = env.parse_payload(LiveQualityRun)
+            result = r.result
+            console.print(
+                f"[bold]LiveQualityRun {r.id}[/bold] role {r.role} benchmark {r.benchmark_id}"
+            )
+            console.print(f"  model {result.resolved_model}  repetitions {result.repetitions}")
+            console.print(f"  qualification {result.qualification}")
+            for reason in result.qualification_reasons:
+                console.print(f"    - {reason}")
+            for t in result.task_results:
+                console.print(
+                    f"  rep {t.repetition}  {t.report_status}  "
+                    f"{t.cases_passed}/{t.cases_total}  pass_rate {t.task_pass_rate:.3f}  "
+                    f"run {t.run_id}"
+                )
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

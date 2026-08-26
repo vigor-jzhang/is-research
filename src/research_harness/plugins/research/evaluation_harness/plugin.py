@@ -33,6 +33,7 @@ from research_harness.research.benchmarks.workflows import (
     run_gap_selection_workflow,
     run_gap_workflow,
     run_ingestion_identity_workflow,
+    run_lq_critique_workflow,
     run_manuscript_grounding_workflow,
     run_mechanism_workflow,
     run_model_routing_workflow,
@@ -45,6 +46,7 @@ from research_harness.research.benchmarks.workflows import (
     run_results_assembly_workflow,
     run_retrieval_workflow,
     run_revalidation_workflow,
+    run_routing_readiness_workflow,
     run_screening_workflow,
     run_synthesis_workflow,
 )
@@ -504,6 +506,21 @@ class EvaluationHarnessService:
                 producer=self._producer,
             )
             return produced, None
+        if workflow == "lq_critique":
+            produced = await run_lq_critique_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+                model_router=model_router,
+            )
+            return produced, None
+        if workflow == "routing_readiness":
+            produced = await run_routing_readiness_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         if workflow == "literature_synthesis":
             produced = await run_synthesis_workflow(
                 artifact_store=self._store,
@@ -889,6 +906,10 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.publication_packaging",
                 "evaluator.evidence_enrichment",
                 "evaluator.model_routing",
+                "evaluator.live_quality_reasoning",
+                "evaluator.live_quality_critic",
+                "evaluator.live_quality_fast",
+                "evaluator.routing_readiness",
             ],
             optional_requires=["blob_store.default"],
         )
@@ -933,6 +954,10 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.publication_packaging": ctx.require("evaluator.publication_packaging"),
                 "evaluator.evidence_enrichment": ctx.require("evaluator.evidence_enrichment"),
                 "evaluator.model_routing": ctx.require("evaluator.model_routing"),
+                "evaluator.live_quality_reasoning": ctx.require("evaluator.live_quality_reasoning"),
+                "evaluator.live_quality_critic": ctx.require("evaluator.live_quality_critic"),
+                "evaluator.live_quality_fast": ctx.require("evaluator.live_quality_fast"),
+                "evaluator.routing_readiness": ctx.require("evaluator.routing_readiness"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),

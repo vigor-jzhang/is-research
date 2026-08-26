@@ -266,6 +266,11 @@ class RoleLeaderboard(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="e.g. repetitions used for this leaderboard"
     )
+    evidence_type: str = Field(
+        default="fixture_evidence",
+        description="fixture_evidence (offline tournaments) | live_quality_evidence "
+        "(live-quality runs). Production routing requires live_quality_evidence.",
+    )
 
     @property
     def schema_version(self) -> int:

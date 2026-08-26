@@ -288,3 +288,19 @@ tournaments), applies capability/quality/reliability/constraint gates, and
 selects under an explicit policy. Decision support + shadow only — the
 configured production role model is never changed. The `routing` commands
 require `routing.policy_router` (included in `configs/example.yaml`).
+
+## Live-quality validation + routing readiness (Phase 7D.0)
+
+```bash
+uv run research-agent evaluation live-quality run --role reasoning --repetitions 3   # real model, real pipelines, N reps
+uv run research-agent evaluation live-quality inspect <run-id>                        # per-rep results + qualification reasons
+uv run research-agent routing readiness --role reasoning                              # ready / not_ready (never auto-enables routing)
+uv run research-agent eval run production-routing-readiness-v1                        # offline readiness-gate benchmark (9 cases)
+```
+
+Live-quality benchmarks (`live-quality-reasoning-v1`, `live-quality-critic-v1`,
+`live-quality-fast-v1`) run against real models with realistic inputs and
+structural references; `evaluator.*` validate grounding/defects/decisions
+deterministically. Live evidence (`live_quality_evidence` leaderboards) is
+required for production-qualification; per-role standards live in
+`research/routing/readiness.py`.

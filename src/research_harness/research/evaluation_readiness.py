@@ -57,6 +57,10 @@ def _deterministic_evaluators() -> set[str]:
         "evaluator.publication_packaging",
         "evaluator.evidence_enrichment",
         "evaluator.model_routing",
+        "evaluator.live_quality_reasoning",
+        "evaluator.live_quality_critic",
+        "evaluator.live_quality_fast",
+        "evaluator.routing_readiness",
     }
 
 
@@ -75,7 +79,7 @@ def _known_untested_behaviors() -> tuple[str, ...]:
         "live provider corpora and live publisher/download endpoints",
         "live provider connectors (Phase 2A) over real APIs",
         "long-document prose quality (advisory-only critique)",
-        "automatic production model routing / switching (Phase 7D+, not implemented)",
+        "automatic production routing activation / switching (Phase 7D, not implemented)",
     )
 
 
@@ -150,14 +154,14 @@ def readiness_report() -> ReadinessResult:
     elif gaps_exist:
         verdict = "ready_with_gaps"
         narrative = (
-            "Deterministic gating is complete across all 24 benchmark families "
-            "(incl. ingestion/identity, gap selection, novelty revalidation, "
-            "publication packaging, evidence enrichment, and model routing) and "
-            "the e2e pipeline passes; the six targeted deterministic gaps are "
-            "closed (7A + 7A.1 + 5C-5D + 7C shadow routing). Residual gaps are "
-            "non-blocking: live provider connectors/publisher endpoints, "
-            "advisory LLM-quality judging, and automatic production routing "
-            "(Phase 7D+). See uncovered_capabilities."
+            "Deterministic gating is complete across all 28 benchmark families "
+            "(incl. evidence enrichment, model routing, live-quality reasoning/"
+            "critic/fast, and production-routing readiness) and the e2e pipeline "
+            "passes. Live-quality benchmarks (7D.0) provide real-model evidence; "
+            "the readiness gate requires live_quality_evidence for production "
+            "routing. Residual gaps are non-blocking: live provider connectors/"
+            "publisher endpoints, advisory LLM-quality judging, and automatic "
+            "routing activation (Phase 7D). See uncovered_capabilities."
         )
     else:
         verdict = "ready"

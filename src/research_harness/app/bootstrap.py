@@ -220,6 +220,7 @@ def _derived_plugin_configs(
     derived: dict[str, dict[str, Any]] = {
         "routing.role_router": {"models": config.models.model_dump()},
         "routing.policy_router": {"models": config.models.model_dump()},
+        "evaluation.live_quality": {"models": config.models.model_dump()},
         "session.jsonl": {"session": config.session.model_dump()},
         "loop.simple_tool_loop": {"loop": config.loop.model_dump()},
         "autonomy.configurable": {"autonomy": config.runtime.autonomy},
