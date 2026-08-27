@@ -128,6 +128,89 @@ class ProductionQualificationMatrix(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class TaskQualificationResult(BaseModel):
+    """One model's qualification verdict for one canonical research task (Phase 7D.3).
+
+    Task qualification uses the SAME deterministic thresholds as the role
+    criteria (never relaxed); a model may be `qualified_for_task` without being
+    qualified for the entire role."""
+
+    role: str
+    task: str
+    task_label: str = ""
+    candidate_id: str
+    model: dict[str, Any] = Field(default_factory=dict)
+    resolved_model: str | None = None
+    benchmark_id: str
+    repetitions: int = 0
+    deterministic_pass_rate_mean: float | None = None
+    deterministic_pass_rate_worst: float | None = None
+    deterministic_pass_rate_variance: float | None = None
+    structured_output_success_rate: float | None = None
+    provider_error_frequency: float | None = None
+    critical_grounding_failures: int = 0
+    critical_failure_frequency: float | None = None
+    latency_ms_p50: float | None = None
+    total_tokens: int | None = None
+    estimated_cost: float | None = None
+    qualified: bool = False
+    rejection_reasons: list[str] = Field(default_factory=list)
+    evidence_diagnostics: dict[str, int] = Field(default_factory=dict)
+    live_quality_run_id: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class TaskQualificationMatrix(BaseModel):
+    """Per-role task-qualification matrix (Phase 7D.3).
+
+    Rows are (model, task) verdicts. `qualified_tasks_by_model` and
+    `qualified_models_by_task` summarize coverage; role qualification is kept
+    separate (a task-qualified model is not role-qualified)."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    role: str
+    benchmark_id: str
+    tasks: list[str] = Field(default_factory=list)
+    rows: list[TaskQualificationResult] = Field(default_factory=list)
+    qualified_models_by_task: dict[str, list[str]] = Field(default_factory=dict)
+    ranked_models_by_task: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="qualified models per task ranked: correctness, reliability, "
+        "structured-output, latency, cost, deterministic tie-break (Phase 7D.3)",
+    )
+    qualified_tasks_by_model: dict[str, list[str]] = Field(default_factory=dict)
+    role_qualified_models: list[str] = Field(default_factory=list)
+    criteria: Any = None
+    repetitions: int = 0
+    created_at: datetime = Field(default_factory=_utcnow)
+
+    model_config = {"extra": "forbid"}
+
+
+class ModelCapabilityProfile(BaseModel):
+    """One model's production capability summary across tasks and roles (Phase 7D.3).
+
+    `task_qualifications`: canonical task -> qualified_for_task |
+    not_qualified_for_task. `role_qualified` reflects the separate role-level
+    qualification. Raw dimensions (latency/tokens/cost) are preserved."""
+
+    model: str
+    resolved_model: str | None = None
+    role: str
+    benchmark_id: str
+    task_qualifications: dict[str, str] = Field(default_factory=dict)
+    role_qualified: bool = False
+    stability: str | None = None
+    repetitions: int = 0
+    latency_ms_p50: float | None = None
+    total_tokens: int | None = None
+    estimated_cost: float | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+
+    model_config = {"extra": "forbid"}
+
+
 class RoleQualificationSummary(BaseModel):
     """Per-role qualification verdict (primary/fallback/status)."""
 

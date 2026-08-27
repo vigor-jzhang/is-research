@@ -61,6 +61,7 @@ ALL_EVALUATORS = [
     "evaluator.live_quality_fast",
     "evaluator.routing_readiness",
     "evaluator.model_qualification",
+    "evaluator.task_model_qualification",
 ]
 
 

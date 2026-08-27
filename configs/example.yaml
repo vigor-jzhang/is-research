@@ -74,6 +74,7 @@ plugins:
   - evaluator.live_quality_fast
   - evaluator.routing_readiness
   - evaluator.model_qualification
+  - evaluator.task_model_qualification
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -259,16 +260,23 @@ live_quality:
       - "meta-llama/llama-3.3-70b-instruct:free"
       - "mistralai/mistral-small-3.1-24b-instruct:free"
       - "google/gemini-2.5-flash:free"
+      - "anthropic/claude-3.7-sonnet"
+      - "openai/gpt-4o"
+      - "google/gemini-2.5-pro"
     critic:
       - "nvidia/nemotron-3-ultra-550b-a55b:free"
       - "deepseek/deepseek-v4-flash-0731"
       - "meta-llama/llama-3.3-70b-instruct:free"
       - "mistralai/mistral-small-3.1-24b-instruct:free"
+      - "anthropic/claude-3.7-sonnet"
+      - "google/gemini-2.5-pro"
     fast:
       - "deepseek/deepseek-v4-flash-0731"
       - "nvidia/nemotron-3-ultra-550b-a55b:free"
       - "meta-llama/llama-3.3-70b-instruct:free"
       - "mistralai/mistral-small-3.1-24b-instruct:free"
+      - "google/gemini-2.5-flash:free"
+      - "openai/gpt-4o"
 
 loop:
   max_steps: 8

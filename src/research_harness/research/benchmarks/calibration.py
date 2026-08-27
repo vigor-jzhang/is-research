@@ -112,6 +112,36 @@ def _placeholder_targets(payload: Any) -> list[str]:
     return [s for s in _strings(payload) if s.startswith("{") and s.endswith("}")]
 
 
+def _fixture_schema(artifact_type: str) -> Any:
+    """Artifact schema used to inject critic fixtures (matches the workflow)."""
+    from research_harness.research.schemas.gap import ResearchGap
+    from research_harness.research.schemas.manuscript import ManuscriptDraft, ManuscriptSection
+    from research_harness.research.schemas.mechanism import (
+        MechanismCandidate,
+        SelectedMechanism,
+    )
+    from research_harness.research.schemas.model import FormalAnalyticalModel
+    from research_harness.research.schemas.proposition import Proposition
+    from research_harness.research.schemas.results import (
+        ContributionClaim,
+        ResearchFinding,
+        ResearchResultsPackage,
+    )
+
+    return {
+        "research_gap": ResearchGap,
+        "mechanism_candidate": MechanismCandidate,
+        "selected_mechanism": SelectedMechanism,
+        "formal_analytical_model": FormalAnalyticalModel,
+        "proposition": Proposition,
+        "research_results_package": ResearchResultsPackage,
+        "research_finding": ResearchFinding,
+        "contribution_claim": ContributionClaim,
+        "manuscript_draft": ManuscriptDraft,
+        "manuscript_section": ManuscriptSection,
+    }.get(artifact_type)
+
+
 def audit_live_quality_benchmark(benchmark_id: str) -> BenchmarkCalibrationAudit:
     """Audit one live-quality benchmark against the calibration checklist."""
     definition = BUILTIN_BENCHMARKS.get(benchmark_id)
@@ -235,11 +265,37 @@ def audit_live_quality_benchmark(benchmark_id: str) -> BenchmarkCalibrationAudit
                     case_id=c.id,
                     kind="benchmark_reference_defect",
                 )
+    # fixtures must actually validate against their artifact schemas (Phase 7D.3:
+    # an invalid fixture silently errors the case every run and corrupts the
+    # deterministic pass rate)
+    for c in cases:
+        fixtures = c.input.get("fixtures") or {}
+        for atype, payloads in fixtures.items():
+            schema = _fixture_schema(atype)
+            if schema is None:
+                _fail(
+                    "schema_achievable",
+                    f"no schema for fixture type {atype!r}",
+                    case_id=c.id,
+                    kind="benchmark_reference_defect",
+                )
+                continue
+            for i, payload in enumerate(payloads or []):
+                try:
+                    schema.model_validate(payload)
+                except Exception as e:  # noqa: BLE001
+                    _fail(
+                        "schema_achievable",
+                        f"fixture {atype}[{i}] fails schema validation: {e}",
+                        case_id=c.id,
+                        kind="benchmark_reference_defect",
+                    )
     checks.append(
         CalibrationCheck(
             name="schema_achievable",
             passed=all(f.check != "schema_achievable" for f in findings),
-            details="injected defect categories and required structures are achievable",
+            details="injected defect categories and required structures are achievable; "
+            "fixtures validate against their schemas",
         )
     )
 

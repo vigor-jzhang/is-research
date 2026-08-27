@@ -5956,6 +5956,7 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.live_quality_fast",
         "evaluator.routing_readiness",
         "evaluator.model_qualification",
+        "evaluator.task_model_qualification",
         "storage.blobs_filesystem",
     ):
         if pid not in cfg.plugins:
@@ -7056,6 +7057,138 @@ def routing_qualification_summary(
                 console.print(
                     f"  {r}: [{'green' if s.status == 'qualified' else 'yellow'}]{s.status}[/]  "
                     f"primary={s.primary} fallback={s.fallback} qualified={s.qualified_models}"
+                )
+
+    asyncio.run(_run())
+
+
+@routing_qualification_app.command("tasks")
+def routing_qualification_tasks(
+    role: Annotated[str | None, typer.Option(help="Filter by role (default: all)")] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Show the task-specific qualification matrix per role (Phase 7D.3)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("live_quality.default")
+            roles = [role] if role else ("fast", "reasoning", "critic")
+            for r in roles:
+                try:
+                    rows = await svc.task_qualification(r)
+                except Exception as e:  # noqa: BLE001
+                    console.print(f"  {r}: {e}")
+                    continue
+                by_task: dict[str, list[str]] = {}
+                qualified: dict[str, list[str]] = {}
+                for row in rows:
+                    by_task.setdefault(row.task, []).append(
+                        f"{row.candidate_id}={'OK' if row.qualified else 'no'}"
+                    )
+                    if row.qualified:
+                        qualified.setdefault(row.task, []).append(row.candidate_id)
+                console.print(f"[bold]{r}:[/bold] task qualification")
+                for task in sorted(by_task):
+                    console.print(
+                        f"  {task}: qualified={qualified.get(task, [])} -> {by_task[task]}"
+                    )
+
+    asyncio.run(_run())
+
+
+@routing_app.command("qualify-task")
+def routing_qualify_task(
+    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    task: Annotated[
+        str,
+        typer.Option(
+            help="Canonical task, e.g. evidence_extraction, synthesis, mechanism_critique, screening"
+        ),
+    ],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Show task-level qualification for one task from the latest campaign (Phase 7D.3).
+
+    Uses the same deterministic thresholds as the role criteria (never relaxed).
+    A model may be qualified_for_task without being qualified for the whole role.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("live_quality.default")
+            rows = await svc.task_qualification(role, task)
+            if not rows:
+                console.print(f"  no results for task {task!r} role {role!r}")
+                return
+            for row in rows:
+                mark = (
+                    "[green]qualified_for_task[/green]"
+                    if row.qualified
+                    else "[red]not_qualified_for_task[/red]"
+                )
+                console.print(
+                    f"  {row.candidate_id} {mark} det={row.deterministic_pass_rate_mean} "
+                    f"worst={row.deterministic_pass_rate_worst} "
+                    f"var={row.deterministic_pass_rate_variance}"
+                )
+                for reason in row.rejection_reasons:
+                    console.print(f"    [yellow]{reason}[/yellow]")
+                if row.evidence_diagnostics:
+                    console.print(f"    evidence diagnostics: {row.evidence_diagnostics}")
+
+    asyncio.run(_run())
+
+
+@routing_app.command("capability-profile")
+def routing_capability_profile(
+    model: Annotated[str, typer.Argument(help="Model id / candidate slug")],
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Show the ModelCapabilityProfile for a model across roles (Phase 7D.3)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("live_quality.default")
+            profiles = await svc.capability_profile(model)
+            if not profiles:
+                console.print(f"  no capability profile for model {model!r}")
+                return
+            for profile in profiles:
+                role_mark = (
+                    "[green]qualified[/green]"
+                    if profile.role_qualified
+                    else "[red]not_qualified[/red]"
+                )
+                console.print(
+                    f"[bold]{model}[/bold] role={profile.role} role-wide={role_mark} "
+                    f"stability={profile.stability}"
+                )
+                for task, verdict in sorted(profile.task_qualifications.items()):
+                    console.print(f"  {task}: {verdict}")
+                console.print(
+                    f"  latency {profile.latency_ms_p50} ms  tokens {profile.total_tokens}  "
+                    f"cost {profile.estimated_cost}  reps {profile.repetitions}"
                 )
 
     asyncio.run(_run())

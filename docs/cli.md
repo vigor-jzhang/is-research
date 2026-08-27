@@ -333,3 +333,19 @@ structured_output_failure, grounding_failure, instruction_following_failure,
 provider_error, timeout, rate_limit, benchmark_reference_defect,
 evaluator_defect, infrastructure_failure). Confirmed benchmark/evaluator
 defects are excluded from qualification.
+
+## Strong-model expansion + task qualification (Phase 7D.3)
+
+```bash
+uv run research-agent routing qualify --role reasoning --repetitions 3       # expanded pools incl. paid models
+uv run research-agent routing qualify-task --role reasoning --task evidence_extraction
+uv run research-agent routing qualification tasks --role reasoning           # TaskQualificationMatrix per role
+uv run research-agent routing capability-profile <model-id>                  # ModelCapabilityProfile across roles
+uv run research-agent eval run task-specific-model-qualification-v1          # 10 offline task-qualification cases
+```
+
+Task qualification reuses the exact role thresholds; a model can be
+`qualified_for_task` without being role-qualified. Per-task ranking considers
+only qualified models. Evidence-extraction diagnostics (hallucinated IDs,
+wrong page locators, unsupported claims, invalid categories, missing evidence,
+malformed output) are persisted per model.

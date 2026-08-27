@@ -9055,7 +9055,7 @@ def _lq_critic_fixtures(task: str) -> dict[str, list[dict[str, Any]]]:
                     "model_id": "lq-model",
                     "equilibrium_candidate_id": "lq-eq",
                     "statement": "Algorithmic pricing reduces consumer welfare.",
-                    "finding_type": "result",
+                    "finding_type": "analytical_result",
                     "supporting_proposition_ids": ["lq-prop"],
                     "conditions": [],
                 }
@@ -9082,7 +9082,7 @@ def _lq_critic_fixtures(task: str) -> dict[str, list[dict[str, Any]]]:
                     "contribution_claim_ids": ["{contribution_claim#0}"],
                     "implication_ids": [],
                     "limitations": [],
-                    "status": "completed",
+                    "status": "assembled",
                     "summary": "Results package.",
                 }
             ],
@@ -9111,7 +9111,7 @@ def _lq_critic_fixtures(task: str) -> dict[str, list[dict[str, Any]]]:
                 "contribution_claim_ids": ["{contribution_claim#0}"],
                 "implication_ids": [],
                 "limitations": ["small model"],
-                "status": "completed",
+                "status": "assembled",
                 "summary": "Results package.",
             }
         ],
@@ -9136,7 +9136,13 @@ def _lq_critic_fixtures(task: str) -> dict[str, list[dict[str, Any]]]:
                         "grounding_artifact_id": "lq-finding",
                     }
                 ],
-                "citations": [{"citation_id": "smith2019", "paper_identity_id": "lq-paper"}],
+                "citations": [
+                    {
+                        "citation_id": "smith2019",
+                        "paper_identity_id": "lq-paper",
+                        "evidence_item_id": "lq-evidence",
+                    }
+                ],
             },
             {
                 "outline_id": "lq-outline",
@@ -9436,6 +9442,135 @@ def _lq_result(
         ],
         "evidence_timestamp": created.isoformat(),
     }
+
+
+def _lq_task_perf(
+    task_id: str,
+    *,
+    det: float = 0.9,
+    worst: float | None = None,
+    variance: float = 0.0,
+    reps: int = 3,
+    structured: float = 0.9,
+    provider: float = 0.0,
+    grounding: int = 0,
+    pass_rates: list[float] | None = None,
+    evidence_diagnostics: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    if pass_rates is None:
+        rates = [det] * reps
+    else:
+        rates = list(pass_rates)
+        reps = len(rates)
+    from statistics import fmean, pvariance
+
+    return {
+        "task_id": task_id,
+        "task_name": task_id,
+        "repetitions": reps,
+        "pass_rate_mean": fmean(rates) if rates else None,
+        "pass_rate_worst": min(rates) if rates else (worst if worst is not None else det),
+        "pass_rate_variance": pvariance(rates) if len(rates) > 1 else variance,
+        "pass_rates": rates,
+        "structured_output_success_rate": structured,
+        "provider_error_frequency": provider,
+        "critical_grounding_failures": grounding,
+        "failure_attribution": {},
+        "excluded_failure_attribution": {},
+        "evidence_diagnostics": evidence_diagnostics or {},
+    }
+
+
+# canonical case ids per role for synthetic task performance
+_REASONING_CASES = [
+    "lq-evidence-extraction",
+    "lq-literature-synthesis",
+    "lq-gap-analysis",
+    "lq-mechanism-development",
+    "lq-model-specification",
+    "lq-proposition-generation",
+]
+_CRITIC_CASES = [
+    "lq-mechanism-critique",
+    "lq-model-critique",
+    "lq-proposition-critique",
+    "lq-results-critique",
+    "lq-manuscript-critique",
+]
+_FAST_CASES = ["lq-fast-screening-clear", "lq-fast-screening-uncertain"]
+
+
+def _lq_tasks_result(
+    candidate_id: str,
+    *,
+    role: str,
+    tasks: dict[str, dict[str, Any]],
+    benchmark_id: str = "live-quality-reasoning-v1",
+    repetitions: int = 3,
+    cost: float | None = None,
+    age_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Build a synthetic LiveQualityModelResult with per-task performance whose
+    overall deterministic pass rate equals the mean of the per-task rates."""
+    from statistics import fmean
+
+    perfs = []
+    all_rates: list[float] = []
+    total_grounding = 0
+    for case_id, spec in tasks.items():
+        rates = spec.get("pass_rates") or [spec.get("det", 0.9)] * repetitions
+        all_rates.extend(rates)
+        total_grounding += int(spec.get("grounding", 0))
+        perfs.append(
+            _lq_task_perf(
+                case_id,
+                det=spec.get("det", 0.9),
+                worst=spec.get("worst"),
+                variance=spec.get("variance", 0.0),
+                reps=repetitions,
+                structured=spec.get("structured", 0.9),
+                provider=spec.get("provider", 0.0),
+                grounding=spec.get("grounding", 0),
+                pass_rates=spec.get("pass_rates"),
+                evidence_diagnostics=spec.get("evidence_diagnostics"),
+            )
+        )
+    return _lq_result(
+        candidate_id,
+        det=fmean(all_rates) if all_rates else 0.0,
+        role=role,
+        repetitions=repetitions,
+        grounding_failures=total_grounding,
+        cost=cost,
+        age_seconds=age_seconds,
+        task_performance=perfs,
+    )
+
+
+def _task_qualification_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    role: str,
+    reference: dict[str, Any],
+    live_results: dict[str, dict[str, Any]],
+    criteria: dict[str, Any] | None = None,
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={
+            "workflow": "task_qualification",
+            "role": role,
+            "live_results": live_results,
+            "criteria": criteria or {},
+        },
+        reference=reference,
+        evaluation_dimensions=["task_model_qualification"],
+        tags=["task_qualification", "offline"],
+    )
 
 
 def _readiness_case(
@@ -9957,6 +10092,318 @@ MODEL_QUALIFICATION_POLICY_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+TASK_SPECIFIC_MODEL_QUALIFICATION_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="task-specific-model-qualification-v1",
+    version=1,
+    name="Task-Specific Model Qualification (Phase 7D.3)",
+    description=(
+        "Offline benchmark over the real deterministic task-specific "
+        "qualification logic (same thresholds as the role criteria, never "
+        "relaxed). Verifies per-task qualified model sets, per-task ranking "
+        "among qualified models only, role vs task separation, structured "
+        "rejection reasons (grounding/provider/stale/insufficient repetitions), "
+        "deterministic tie-breaks, and that unsafe_task_qualification_rate "
+        "stays 0."
+    ),
+    category="task_model_qualification",
+    config={"evaluators": ["evaluator.task_model_qualification"]},
+    cases=[
+        _task_qualification_case(
+            "tq-one-task-qualified-other-fails",
+            "model qualifies for one reasoning task but fails another",
+            "A model passes synthesis but fails evidence extraction; only the "
+            "passing task is qualified, and the role is not.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-literature-synthesis": {"det": 0.9},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            reference={
+                "expected_role": "reasoning",
+                "expected_qualified_by_task": {
+                    "synthesis": ["m-a"],
+                    "evidence_extraction": [],
+                },
+                "expected_ranked_by_task": {"synthesis": ["m-a"]},
+                "expected_role_qualified_models": [],
+            },
+        ),
+        _task_qualification_case(
+            "tq-task-not-role",
+            "task qualification does not imply role qualification",
+            "A model qualified for some tasks is still not role-qualified "
+            "because other tasks fail.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={
+                        "lq-evidence-extraction": {"det": 0.9},
+                        "lq-literature-synthesis": {"det": 0.9},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            reference={
+                "expected_qualified_by_task": {
+                    "evidence_extraction": ["m-a"],
+                    "synthesis": ["m-a"],
+                },
+                "expected_role_qualified_models": [],
+            },
+        ),
+        _task_qualification_case(
+            "tq-critical-grounding-blocks-task",
+            "critical grounding failure blocks task qualification",
+            "A strong task pass rate never overrides a critical grounding "
+            "failure at the task level.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={
+                        "lq-literature-synthesis": {"det": 0.9, "grounding": 1},
+                        "lq-evidence-extraction": {"det": 0.9},
+                        "lq-gap-analysis": {"det": 0.9},
+                        "lq-mechanism-development": {"det": 0.9},
+                        "lq-model-specification": {"det": 0.9},
+                        "lq-proposition-generation": {"det": 0.9},
+                    },
+                ),
+            },
+            reference={
+                "expected_qualified_by_task": {
+                    "synthesis": [],
+                    "evidence_extraction": ["m-a"],
+                },
+                "expected_rejections": {"m-a/synthesis": "grounding"},
+            },
+        ),
+        _task_qualification_case(
+            "tq-provider-error-blocks",
+            "provider error blocks task qualification",
+            "A task with a provider-error frequency above the cap is not "
+            "qualified regardless of pass rate.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={
+                        "lq-literature-synthesis": {"det": 0.9, "provider": 0.5},
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            reference={
+                "expected_qualified_by_task": {"synthesis": []},
+                "expected_rejections": {"m-a/synthesis": "provider_error"},
+            },
+        ),
+        _task_qualification_case(
+            "tq-strong-expensive-beats-cheap-failing",
+            "stronger expensive qualified model beats cheap failing model",
+            "An unqualified cheap model is never ranked for a task over a "
+            "qualified (more expensive) model.",
+            role="reasoning",
+            live_results={
+                "m-good": _lq_tasks_result(
+                    "m-good",
+                    role="reasoning",
+                    cost=0.05,
+                    tasks={
+                        "lq-literature-synthesis": {"det": 0.9},
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+                "m-cheap-bad": _lq_tasks_result(
+                    "m-cheap-bad",
+                    role="reasoning",
+                    cost=0.0001,
+                    tasks={
+                        "lq-literature-synthesis": {"det": 0.5},
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            reference={
+                "expected_qualified_by_task": {"synthesis": ["m-good"]},
+                "expected_ranked_by_task": {"synthesis": ["m-good"]},
+            },
+        ),
+        _task_qualification_case(
+            "tq-qualified-critic-fallback",
+            "qualified critic fallback",
+            "Two independent candidates qualified for every critic task give "
+            "the critic role a primary and a qualified fallback.",
+            role="critic",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="critic",
+                    benchmark_id="live-quality-critic-v1",
+                    tasks={case_id: {"det": 0.9} for case_id in _CRITIC_CASES},
+                ),
+                "m-b": _lq_tasks_result(
+                    "m-b",
+                    role="critic",
+                    benchmark_id="live-quality-critic-v1",
+                    tasks={case_id: {"det": 0.9} for case_id in _CRITIC_CASES},
+                ),
+            },
+            reference={
+                "expected_role": "critic",
+                "expected_qualified_by_task": {
+                    "mechanism_critique": ["m-a", "m-b"],
+                    "results_critique": ["m-a", "m-b"],
+                },
+                "expected_role_qualified_models": ["m-a", "m-b"],
+            },
+        ),
+        _task_qualification_case(
+            "tq-deterministic-tiebreak",
+            "deterministic task-specific tie break",
+            "Identical per-task metrics break ties deterministically by candidate_id.",
+            role="reasoning",
+            live_results={
+                "m-beta": _lq_tasks_result(
+                    "m-beta",
+                    role="reasoning",
+                    tasks={
+                        "lq-literature-synthesis": {"det": 0.9},
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+                "m-alpha": _lq_tasks_result(
+                    "m-alpha",
+                    role="reasoning",
+                    tasks={
+                        "lq-literature-synthesis": {"det": 0.9},
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            reference={
+                "expected_ranked_by_task": {"synthesis": ["m-alpha", "m-beta"]},
+                "expected_qualified_by_task": {"synthesis": ["m-alpha", "m-beta"]},
+            },
+        ),
+        _task_qualification_case(
+            "tq-insufficient-repetitions",
+            "insufficient repetitions",
+            "A task evaluated over fewer repetitions than required never qualifies.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    repetitions=1,
+                    tasks={
+                        "lq-literature-synthesis": {"det": 0.9},
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            reference={
+                "expected_qualified_by_task": {"synthesis": []},
+                "expected_rejections": {"m-a/synthesis": "insufficient repetitions"},
+            },
+        ),
+        _task_qualification_case(
+            "tq-stale-evidence",
+            "stale live evidence",
+            "Task evidence older than the freshness limit is rejected.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    age_seconds=5000,
+                    tasks={
+                        "lq-literature-synthesis": {"det": 0.9},
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            criteria={"role": "reasoning", "leaderboard_max_age_seconds": 100},
+            reference={
+                "expected_qualified_by_task": {"synthesis": []},
+                "expected_rejections": {"m-a/synthesis": "stale"},
+            },
+        ),
+        _task_qualification_case(
+            "tq-no-qualified",
+            "no qualified candidate",
+            "When no candidate qualifies for any task, every task has an empty "
+            "qualified set and the role is not qualified.",
+            role="fast",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="fast",
+                    benchmark_id="live-quality-fast-v1",
+                    tasks={case_id: {"det": 0.5} for case_id in _FAST_CASES},
+                ),
+                "m-b": _lq_tasks_result(
+                    "m-b",
+                    role="fast",
+                    benchmark_id="live-quality-fast-v1",
+                    tasks={case_id: {"det": 0.6} for case_id in _FAST_CASES},
+                ),
+            },
+            reference={
+                "expected_role": "fast",
+                "expected_qualified_by_task": {"screening": []},
+                "expected_role_qualified_models": [],
+            },
+        ),
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -9987,4 +10434,5 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     LIVE_QUALITY_FAST_V1.benchmark_id: LIVE_QUALITY_FAST_V1,
     PRODUCTION_ROUTING_READINESS_V1.benchmark_id: PRODUCTION_ROUTING_READINESS_V1,
     MODEL_QUALIFICATION_POLICY_V1.benchmark_id: MODEL_QUALIFICATION_POLICY_V1,
+    TASK_SPECIFIC_MODEL_QUALIFICATION_V1.benchmark_id: TASK_SPECIFIC_MODEL_QUALIFICATION_V1,
 }

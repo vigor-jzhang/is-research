@@ -1277,17 +1277,66 @@ uv run research-agent routing qualification inspect <campaign-id>
 uv run research-agent eval run model-qualification-policy-v1
 ```
 
+## Strong-model expansion + task-specific qualification (Phase 7D.3)
+
+Expands the candidate pools (reasoning 8, critic 6, fast 6 — including paid
+models where configured) and adds task-specific qualification that reuses the
+exact role thresholds (never relaxed). A model may be `qualified_for_task`
+without being qualified for the whole role. Production switching stays disabled.
+
+### Task qualification
+
+Canonical tasks per role (see `research/routing/tasks.py`): reasoning —
+evidence_extraction, synthesis, gap_analysis, mechanism_generation,
+model_specification, proposition_generation; critic — mechanism_critique,
+model_specification_critique, proposition_critique, results_critique,
+manuscript_critique; fast — screening. Each model gets a
+`TaskQualificationResult` per task (repetitions, det mean/worst/variance,
+structured-output, provider-error, critical grounding, latency/tokens/cost,
+qualified, rejection reasons) and the role gets a `TaskQualificationMatrix`
+(qualified_models_by_task, ranked_models_by_task, qualified_tasks_by_model,
+role_qualified_models). Per-task ranking considers only qualified models:
+correctness, reliability (worst), structured-output, latency, cost,
+deterministic tie-break.
+
+### Evidence-extraction diagnostics
+
+`evidence_extraction_diagnostics` persists per-model counts of hallucinated
+evidence IDs, wrong page locators, unsupported claims, invalid categories,
+missing required evidence, and malformed structured output — diagnostic only,
+never changes the evidence benchmark to make models pass.
+
+### Calibration audit extension
+
+The 7D.2 audit now also validates every critic fixture against its artifact
+schema. This exposed three genuine fixture defects (results_critique
+`finding_type` value, research_results_package `status` value, manuscript
+citation missing `evidence_item_id`) that had silently errored
+lq-results-critique and lq-manuscript-critique for every model since 7D.0 and
+inflated the critic deterministic pass rate (errors were excluded from the
+denominator). All three were repaired; the audit now passes with zero confirmed
+defects, and the honest critic result is no_qualified_model.
+
+### CLI
+
+```bash
+uv run research-agent routing qualify --role reasoning --repetitions 3
+uv run research-agent routing qualify-task --role reasoning --task evidence_extraction
+uv run research-agent routing qualification tasks --role reasoning
+uv run research-agent routing capability-profile <model-id>
+uv run research-agent eval run task-specific-model-qualification-v1
+```
+
 ## Recommended next increment
 
-Post-Phase-7D.2: the evaluation program covers 29 benchmark families with
-deterministic gating; live qualification campaigns identify per-role
-primary/fallback over real live-quality evidence with a strict
-unsafe_model_qualification_rate = 0 gate, structured failure attribution,
-per-task diagnostics, and a production-qualification matrix. The verdict
-remains `ready_with_gaps` (non-blocking: live provider connectors, advisory
-LLM-quality judging). Phase 7D (controlled activation) would build opt-in
-automatic role switching with hard quality/cost budgets, deterministic
-fallback, circuit breakers, observability, and immediate rollback to static
-configuration — reusing only roles with sufficient qualified live evidence.
-Only the critic role currently has a qualified (stable) primary; fast and
-reasoning have none.
+Post-Phase-7D.3: the evaluation program covers 30 benchmark families with
+deterministic gating; task-specific qualification identifies per-task
+capabilities (reasoning synthesis is the only qualified reasoning task).
+The verdict remains `ready_with_gaps` (non-blocking: live provider connectors,
+advisory LLM-quality judging, task-aware routing). Phase 7D.4 should build
+task-aware SHADOW routing (advisory, no production switching) using the
+TaskQualificationMatrix, or continue model search — no role currently has a
+qualified primary+fallback on the repaired benchmarks (critic no_qualified_model
+once the fixture defects were fixed; fast and reasoning no_qualified_model).
+gemini-2.5-pro is borderline for critic (passed all tasks in 2 of 3 reps; one
+errored rep) and deserves a 5-repetition re-validation.

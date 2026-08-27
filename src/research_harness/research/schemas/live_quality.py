@@ -87,7 +87,7 @@ class LiveQualityTaskResult(BaseModel):
 
 
 class LiveQualityTaskPerformance(BaseModel):
-    """Per-task (per-case) live-quality performance across repetitions (Phase 7D.2)."""
+    """Per-task (per-case) live-quality performance across repetitions (Phase 7D.2/7D.3)."""
 
     task_id: str
     task_name: str = ""
@@ -95,9 +95,22 @@ class LiveQualityTaskPerformance(BaseModel):
     pass_rate_mean: float | None = None
     pass_rate_worst: float | None = None
     pass_rate_variance: float | None = None
+    pass_rates: list[float] = Field(
+        default_factory=list, description="per-repetition task pass rates (Phase 7D.3)"
+    )
+    structured_output_success_rate: float | None = Field(
+        default=None, description="per-task structured-output success across reps (Phase 7D.3)"
+    )
+    provider_error_frequency: float | None = Field(
+        default=None, description="per-task provider-error frequency across reps (Phase 7D.3)"
+    )
     critical_grounding_failures: int = 0
     failure_attribution: dict[str, int] = Field(default_factory=dict)
     excluded_failure_attribution: dict[str, int] = Field(default_factory=dict)
+    evidence_diagnostics: dict[str, int] = Field(
+        default_factory=dict,
+        description="evidence-extraction failure diagnostics (Phase 7D.3)",
+    )
 
     model_config = {"extra": "forbid"}
 

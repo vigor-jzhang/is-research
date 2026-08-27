@@ -102,6 +102,9 @@ class LiveQualityService:
         case_names: dict[str, str] = {}
         case_grounding: dict[str, int] = {}
         case_failures: dict[str, list[str]] = {}
+        case_structured: dict[str, list[float]] = {}
+        case_evidence: dict[str, list[dict[str, Any]]] = {}
+        case_evidence_source: dict[str, str] = {}
         for rep in range(1, repetitions + 1):
             router = await self._make_router(
                 role, benchmark_id, model_config, timeout_seconds, retries
@@ -132,7 +135,14 @@ class LiveQualityService:
             report = (await self._store.get(report_id)).parse_payload(EvaluationReport)
             critical_grounding += self._report_metric(report, "critical_grounding_failures")
             await self._collect_case_stats(
-                report, case_rates, case_names, case_grounding, case_failures
+                report,
+                case_rates,
+                case_names,
+                case_grounding,
+                case_failures,
+                case_structured,
+                case_evidence,
+                case_evidence_source,
             )
             task_results.append(
                 LiveQualityTaskResult(
@@ -208,7 +218,13 @@ class LiveQualityService:
         criteria = criteria or criteria_for_role(role)
         self._apply_attribution(result, case_failures, benchmark_id)
         result.task_performance = self._build_task_performance(
-            case_rates, case_names, case_grounding, case_failures
+            case_rates,
+            case_names,
+            case_grounding,
+            case_failures,
+            case_structured,
+            case_evidence,
+            case_evidence_source,
         )
         result.stability = stability_status(result, criteria)
         qualified, reasons = qualify_model(result, criteria)
@@ -498,6 +514,112 @@ class LiveQualityService:
 
         return (await self._store.get(matrix_id)).parse_payload(ProductionQualificationMatrix)
 
+    async def _live_results_for_campaign(self, campaign: Any) -> dict[str, Any]:
+        """Reconstruct {candidate_id: LiveQualityModelResult} from a campaign's
+        live-quality runs (full task performance incl. Phase 7D.3 fields)."""
+        from research_harness.research.schemas.live_quality import LiveQualityRun
+
+        live_results: dict[str, Any] = {}
+        for run_id in campaign.live_quality_run_ids:
+            try:
+                run = (await self._store.get(run_id)).parse_payload(LiveQualityRun)
+            except Exception:  # noqa: BLE001
+                continue
+            live_results[run.result.candidate_id] = run.result
+        return live_results
+
+    async def task_qualification(
+        self,
+        role: str,
+        task: str | None = None,
+    ) -> list[Any]:
+        """Build (and persist) the role's TaskQualificationMatrix from the latest
+        campaign (Phase 7D.3). Task-level qualification uses the same thresholds;
+        it never implies role qualification. Optionally filter to one task."""
+        from research_harness.research.routing.qualification import build_task_matrix
+        from research_harness.research.routing.readiness import criteria_for_role
+        from research_harness.research.routing.roles import validate_role
+        from research_harness.research.routing.tasks import tasks_for_role
+
+        validate_role(role)
+        campaigns = await self.list_campaigns(role=role)
+        if not campaigns:
+            raise ValueError(
+                f"no qualification campaign for role {role!r}; run `routing qualify` first"
+            )
+        campaign = campaigns[0]
+        live_results = await self._live_results_for_campaign(campaign)
+        if not live_results:
+            raise ValueError(f"no live-quality runs available for role {role!r} campaign")
+        criteria = criteria_for_role(role)
+        matrix, _rows = build_task_matrix(
+            live_results,
+            role=role,
+            benchmark_id=campaign.benchmark_id,
+            repetitions=campaign.repetitions,
+            criteria=criteria,
+        )
+        await self._store.put(
+            ArtifactEnvelope.create(
+                payload=matrix,
+                artifact_type="task_qualification_matrix",
+                producer=self._producer,
+                artifact_id=matrix.id,
+            )
+        )
+        if task is not None:
+            tasks_for_role(role)  # validate role's task set
+            if task not in tasks_for_role(role):
+                raise ValueError(
+                    f"unknown task {task!r} for role {role!r}; expected {tasks_for_role(role)}"
+                )
+            return [r for r in matrix.rows if r.task == task]
+        return matrix.rows
+
+    async def get_task_matrix(self, matrix_id: str) -> Any:
+        from research_harness.research.schemas.qualification import TaskQualificationMatrix
+
+        return (await self._store.get(matrix_id)).parse_payload(TaskQualificationMatrix)
+
+    async def capability_profile(self, model_id: str) -> list[Any]:
+        """Build ModelCapabilityProfile(s) for a model across roles with
+        campaigns (Phase 7D.3)."""
+        from research_harness.research.routing.qualification import (
+            build_model_capability_profiles,
+            build_task_matrix,
+        )
+        from research_harness.research.schemas.qualification import ModelCapabilityProfile
+
+        profiles: list[ModelCapabilityProfile] = []
+        for role in ("fast", "reasoning", "critic"):
+            campaigns = await self.list_campaigns(role=role)
+            if not campaigns:
+                continue
+            campaign = campaigns[0]
+            live_results = await self._live_results_for_campaign(campaign)
+            if model_id not in live_results:
+                continue
+            matrix, _rows = build_task_matrix(
+                live_results,
+                role=role,
+                benchmark_id=campaign.benchmark_id,
+                repetitions=campaign.repetitions,
+            )
+            stability_by_model = {c.candidate_id: c.stability for c in campaign.candidates}
+            latency_by_model = {c.candidate_id: c.latency_ms_p50 for c in campaign.candidates}
+            cost_by_model = {c.candidate_id: c.estimated_cost for c in campaign.candidates}
+            tokens_by_model = {c.candidate_id: c.total_tokens for c in campaign.candidates}
+            for profile in build_model_capability_profiles(
+                matrix,
+                stability_by_model=stability_by_model,
+                latency_by_model=latency_by_model,
+                cost_by_model=cost_by_model,
+                tokens_by_model=tokens_by_model,
+            ):
+                if profile.model == model_id:
+                    profiles.append(profile)
+        return profiles
+
     def _report_metric(self, report: EvaluationReport, metric_id: str) -> int:
         for m in report.metrics:
             if m.metric_id == metric_id:
@@ -515,9 +637,13 @@ class LiveQualityService:
         case_names: dict[str, str],
         case_grounding: dict[str, int],
         case_failures: dict[str, list[str]],
+        case_structured: dict[str, list[float]],
+        case_evidence: dict[str, list[dict[str, Any]]],
+        case_evidence_source: dict[str, str],
     ) -> None:
-        """Accumulate per-case pass rates, names, grounding counts, and failure
-        texts across repetitions (from the stored report + evaluator results)."""
+        """Accumulate per-case pass rates, names, grounding counts, structured-
+        output success, failure texts, and evidence artifacts for diagnostics
+        across repetitions (from the stored report + evaluator results)."""
         for cr in report.case_results:
             case_rates.setdefault(cr.case_id, []).append(
                 1.0 if cr.status.value == "passed" else 0.0
@@ -525,10 +651,41 @@ class LiveQualityService:
             case_names.setdefault(cr.case_id, cr.case_name)
             if cr.status.value != "passed":
                 texts = await self._case_failure_texts(cr.evaluator_result_ids)
+                if cr.error:
+                    texts.append(str(cr.error))
                 case_failures.setdefault(cr.case_id, []).extend(texts)
                 case_grounding[cr.case_id] = case_grounding.get(cr.case_id, 0) + (
                     await self._evaluator_grounding(cr.evaluator_result_ids)
                 )
+            structured = (cr.metrics or {}).get("structured_output_success")
+            if structured is not None:
+                case_structured.setdefault(cr.case_id, []).append(float(structured))
+            if cr.case_id == "lq-evidence-extraction":
+                evidence, source = await self._evidence_diagnostics_inputs(cr.produced_artifact_ids)
+                if evidence:
+                    case_evidence.setdefault(cr.case_id, []).extend(evidence)
+                if source:
+                    case_evidence_source[cr.case_id] = source
+
+    async def _evidence_diagnostics_inputs(
+        self, produced_artifact_ids: list[str]
+    ) -> tuple[list[dict[str, Any]], str]:
+        evidence: list[dict[str, Any]] = []
+        source_text = ""
+        for aid in produced_artifact_ids:
+            try:
+                env = await self._store.get(aid)
+            except Exception:  # noqa: BLE001
+                continue
+            payload = env.payload
+            if env.artifact_type == "evidence_item":
+                evidence.append(dict(payload))
+            elif env.artifact_type in ("document", "paper_record"):
+                text_parts: list[str] = []
+                for page in payload.get("pages") or []:
+                    text_parts.append(str(page.get("text") or ""))
+                source_text += " ".join(text_parts)
+        return evidence, source_text
 
     async def _case_failure_texts(self, evaluator_result_ids: list[str]) -> list[str]:
         texts: list[str] = []
@@ -593,9 +750,18 @@ class LiveQualityService:
         case_names: dict[str, str],
         case_grounding: dict[str, int],
         case_failures: dict[str, list[str]],
+        case_structured: dict[str, list[float]] | None = None,
+        case_evidence: dict[str, list[dict[str, Any]]] | None = None,
+        case_evidence_source: dict[str, str] | None = None,
     ) -> list[LiveQualityTaskPerformance]:
-        from research_harness.research.routing.qualification import attribute_failure_text
+        from research_harness.research.routing.qualification import (
+            attribute_failure_text,
+            evidence_extraction_diagnostics,
+        )
 
+        case_structured = case_structured or {}
+        case_evidence = case_evidence or {}
+        case_evidence_source = case_evidence_source or {}
         performance: list[LiveQualityTaskPerformance] = []
         for case_id in sorted(case_rates):
             rates = case_rates[case_id]
@@ -603,6 +769,15 @@ class LiveQualityService:
             for text in case_failures.get(case_id, []):
                 kind = attribute_failure_text(text).value
                 attribution[kind] = attribution.get(kind, 0) + 1
+            provider_errors = sum(
+                attribution.get(kind, 0)
+                for kind in (
+                    FailureAttributionKind.provider_error.value,
+                    FailureAttributionKind.timeout.value,
+                    FailureAttributionKind.rate_limit.value,
+                )
+            )
+            structured_rates = case_structured.get(case_id, [])
             performance.append(
                 LiveQualityTaskPerformance(
                     task_id=case_id,
@@ -611,8 +786,18 @@ class LiveQualityService:
                     pass_rate_mean=fmean(rates) if rates else None,
                     pass_rate_worst=min(rates) if rates else None,
                     pass_rate_variance=(pvariance(rates) if len(rates) > 1 else 0.0),
+                    pass_rates=list(rates),
+                    structured_output_success_rate=(
+                        fmean(structured_rates) if structured_rates else None
+                    ),
+                    provider_error_frequency=(provider_errors / len(rates) if rates else None),
                     critical_grounding_failures=case_grounding.get(case_id, 0),
                     failure_attribution=attribution,
+                    evidence_diagnostics=evidence_extraction_diagnostics(
+                        case_failures.get(case_id, []),
+                        produced_evidence=case_evidence.get(case_id),
+                        source_text=case_evidence_source.get(case_id, ""),
+                    ),
                 )
             )
         return performance

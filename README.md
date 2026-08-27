@@ -115,6 +115,13 @@ uv run research-agent eval calibration                                   # audit
 uv run research-agent routing qualify --role fast --repetitions 3        # expanded config-driven candidate pools
 uv run research-agent routing qualification matrix                       # ProductionQualificationMatrix (activation input for Phase 7D)
 uv run research-agent eval run model-qualification-policy-v1             # 16 offline cases incl. defect-exclusion/stability/eligibility
+
+# Strong-model expansion + task-specific qualification (Phase 7D.3)
+uv run research-agent routing qualify --role reasoning --repetitions 3   # expanded pools incl. paid models (8 reasoning / 6 critic / 6 fast)
+uv run research-agent routing qualify-task --role reasoning --task evidence_extraction
+uv run research-agent routing qualification tasks --role reasoning       # TaskQualificationMatrix (task-by-task coverage)
+uv run research-agent routing capability-profile <model-id>              # ModelCapabilityProfile across roles
+uv run research-agent eval run task-specific-model-qualification-v1      # 10 offline task-qualification cases
 ```
 
 The complete command reference (including kernel commands, `run` demo,
@@ -220,6 +227,7 @@ tests/           # unit/ 80, integration/ 48, live/ 18 (opt-in markers)
 - **Phase 7D.0** — live-quality model validation + routing readiness: real-model live-quality benchmarks (reasoning/critic/fast) with structural references and deterministic evaluators, configurable repetitions with variance, role-specific production-qualification gates (live_quality_evidence required), production-routing-readiness benchmark, and per-role ready/not_ready verdicts — no automatic routing activation
 - **Phase 7D.1** — live-model qualification campaigns: config-driven candidate sets per role, >=3 repetitions each over the live-quality benchmarks, structured rejection kinds, primary/fallback selection among qualified models only, offline model-qualification-policy benchmark (unsafe_model_qualification_rate = 0), per-role qualified status — production switching stays off
 - **Phase 7D.2** — qualification expansion & benchmark calibration: expanded candidate pools (fast 4, reasoning 5, critic 4), model-independent calibration audit of every live-quality task (reference validity, achievable schema, no leakage/impossible-evidence/provider assumptions), structured failure attribution (model/grounding/instruction/provider/timeout/rate-limit/benchmark-defect/evaluator-defect/infrastructure), per-task diagnostics (evidence extraction dominates reasoning grounding failures), stability (stable/borderline/unstable) with unstable candidates never eligible, ProductionQualificationMatrix (activation input for Phase 7D), and 6 new offline qualification cases (defect exclusion, extra repetitions, unstable rejection, primary+fallback, role-partial matrix) — thresholds never loosened
+- **Phase 7D.3** — strong-model expansion & task-specific qualification: expanded pools incl. paid models (reasoning 8, critic 6, fast 6), task-level qualification reusing the exact role thresholds (qualified_for_task without role qualification), TaskQualificationMatrix + TaskQualificationResult + ModelCapabilityProfile, per-task ranking (qualified only), detailed evidence-extraction diagnostics (hallucinated IDs / page locators / unsupported claims / invalid categories / missing evidence / malformed output), and task-specific-model-qualification-v1 (10 offline cases, unsafe_task_qualification_rate = 0). Calibration audit extended to validate critic fixtures against their schemas — this exposed and repaired three genuine fixture defects (results_critique finding_type, results_package status, manuscript citation evidence_item_id) that had silently errored 2 of 5 critic tasks and inflated the critic det rate since 7D.0
 - **Post-Phase-5 (not implemented)** — automatic journal submission, peer-review response generation, open-access full-text prioritization
 - **Post-Phase-6 (not implemented)** — leaderboards, live benchmark corpora, publication-quality scoring (see the readiness report's uncovered capabilities)
 - **Post-Phase-7A.1 (not implemented)** — live provider-connector/publisher-endpoint coverage, advisory LLM-quality judging

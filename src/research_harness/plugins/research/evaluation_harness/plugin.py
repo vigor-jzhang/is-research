@@ -51,6 +51,7 @@ from research_harness.research.benchmarks.workflows import (
     run_routing_readiness_workflow,
     run_screening_workflow,
     run_synthesis_workflow,
+    run_task_qualification_workflow,
 )
 from research_harness.research.envelope import ArtifactEnvelope
 from research_harness.research.provenance.relations import ProvenanceLink, ProvenanceRelation
@@ -537,6 +538,13 @@ class EvaluationHarnessService:
                 producer=self._producer,
             )
             return produced, None
+        if workflow == "task_qualification":
+            produced = await run_task_qualification_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         if workflow == "literature_synthesis":
             produced = await run_synthesis_workflow(
                 artifact_store=self._store,
@@ -927,6 +935,7 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.live_quality_fast",
                 "evaluator.routing_readiness",
                 "evaluator.model_qualification",
+                "evaluator.task_model_qualification",
             ],
             optional_requires=["blob_store.default"],
         )
@@ -976,6 +985,9 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.live_quality_fast": ctx.require("evaluator.live_quality_fast"),
                 "evaluator.routing_readiness": ctx.require("evaluator.routing_readiness"),
                 "evaluator.model_qualification": ctx.require("evaluator.model_qualification"),
+                "evaluator.task_model_qualification": ctx.require(
+                    "evaluator.task_model_qualification"
+                ),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),

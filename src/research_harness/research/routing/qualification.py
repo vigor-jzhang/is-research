@@ -1,4 +1,4 @@
-"""Deterministic live-model qualification (Phase 7D.1/7D.2).
+"""Deterministic live-model qualification (Phase 7D.1/7D.2/7D.3).
 
 Pure functions — no network, no LLM. Qualification reuses Phase 7D.0
 QualificationCriteria exactly (never loosened to obtain a winner). Produces
@@ -8,30 +8,62 @@ An unqualified model can never be primary or fallback.
 
 Phase 7D.2 adds structured failure attribution, per-task performance,
 stability (stable/borderline/unstable), and the ProductionQualificationMatrix.
-Confirmed benchmark/evaluator defects are excluded from qualification; only
-genuine model/provider outcomes count.
+Phase 7D.3 adds task-specific qualification (same thresholds), the
+TaskQualificationMatrix, ModelCapabilityProfile, and evidence-extraction
+diagnostics. Task qualification never implies role qualification.
 """
 
 from __future__ import annotations
 
+from statistics import fmean, pvariance
 from typing import Any
 
 from research_harness.research.routing.readiness import criteria_for_role, qualify_model
+from research_harness.research.routing.tasks import (
+    TASK_LABELS,
+    canonical_task,
+    tasks_for_role,
+)
 from research_harness.research.schemas.live_quality import (
     FailureAttributionKind,
     LiveQualityModelResult,
+    LiveQualityTaskPerformance,
     QualificationCriteria,
 )
 from research_harness.research.schemas.qualification import (
+    ModelCapabilityProfile,
     ProductionQualificationMatrix,
     ProductionQualificationMatrixRow,
     QualificationCandidateResult,
     QualificationRejectionKind,
     RoleQualificationSummary,
+    TaskQualificationMatrix,
+    TaskQualificationResult,
 )
 
 _STABILITY_STABLE_MARGIN = 0.05
 _STABILITY_MAX_VARIANCE = 0.02
+
+_PROVIDER_ATTRIBUTION_KINDS = {
+    FailureAttributionKind.provider_error.value,
+    FailureAttributionKind.timeout.value,
+    FailureAttributionKind.rate_limit.value,
+}
+
+_EVIDENCE_CATEGORIES = {
+    "research_question",
+    "theory",
+    "construct",
+    "mechanism",
+    "assumption",
+    "method",
+    "data",
+    "variable",
+    "finding",
+    "result",
+    "boundary_condition",
+    "limitation",
+}
 
 
 def classify_rejection_kinds(reasons: list[str]) -> list[str]:
@@ -347,3 +379,299 @@ def summarize_role_live(
     return build_role_summary(
         candidates, criteria, benchmark_id=benchmark_id, repetitions=repetitions
     ), candidates
+
+
+# ---------------------------------------------------------------------------
+# Phase 7D.3: task-specific qualification
+# ---------------------------------------------------------------------------
+
+
+def evidence_extraction_diagnostics(
+    failures: list[str],
+    *,
+    produced_evidence: list[dict[str, Any]] | None = None,
+    source_text: str = "",
+) -> dict[str, int]:
+    """Deterministic evidence-extraction failure diagnostics (Phase 7D.3).
+
+    Diagnostic only — never changes the evidence benchmark or pass criteria.
+    Buckets: hallucinated evidence IDs (unsupported reference ids), wrong page
+    locators, unsupported claims (statement terms absent from the source),
+    invalid categories, missing required evidence, malformed structured output.
+    """
+    diag = {
+        "hallucinated_evidence_ids": 0,
+        "wrong_page_locators": 0,
+        "unsupported_claims": 0,
+        "invalid_categories": 0,
+        "missing_required_evidence": 0,
+        "malformed_structured_output": 0,
+    }
+    for f in failures:
+        if "unsupported reference" in f:
+            diag["hallucinated_evidence_ids"] += 1
+        if "locator page" in f:
+            diag["wrong_page_locators"] += 1
+        if "no evidence_item produced" in f:
+            diag["missing_required_evidence"] += 1
+        if "empty statement" in f:
+            diag["malformed_structured_output"] += 1
+    if produced_evidence:
+        source_lower = (source_text or "").lower()
+        for ev in produced_evidence:
+            statement = str(ev.get("statement") or "").strip()
+            if statement and source_lower:
+                terms = [w for w in statement.lower().split() if len(w) > 4 and w.isalpha()]
+                if terms and not any(t in source_lower for t in terms):
+                    diag["unsupported_claims"] += 1
+            category = str(ev.get("category") or "")
+            if category and category not in _EVIDENCE_CATEGORIES:
+                diag["invalid_categories"] += 1
+    return diag
+
+
+def aggregate_task_performance(
+    result: LiveQualityModelResult, task: str
+) -> LiveQualityTaskPerformance | None:
+    """Combine the model's per-case task results into one canonical-task
+    performance (Phase 7D.3). Multiple cases may map to one task (fast
+    screening). Returns None when the model has no data for the task."""
+    entries = [tp for tp in (result.task_performance or []) if canonical_task(tp.task_id) == task]
+    if not entries:
+        return None
+    rates = [r for tp in entries for r in (tp.pass_rates or [])]
+    if not rates:
+        rates = [tp.pass_rate_mean or 0.0 for tp in entries if tp.pass_rate_mean is not None]
+    structured = [
+        tp.structured_output_success_rate
+        for tp in entries
+        if tp.structured_output_success_rate is not None
+    ]
+    provider = [
+        tp.provider_error_frequency for tp in entries if tp.provider_error_frequency is not None
+    ]
+    return LiveQualityTaskPerformance(
+        task_id=task,
+        task_name=TASK_LABELS.get(task, ""),
+        repetitions=max((tp.repetitions for tp in entries), default=0),
+        pass_rate_mean=fmean(rates) if rates else None,
+        pass_rate_worst=min(rates) if rates else None,
+        pass_rate_variance=pvariance(rates) if len(rates) > 1 else 0.0,
+        pass_rates=list(rates),
+        structured_output_success_rate=fmean(structured) if structured else None,
+        provider_error_frequency=fmean(provider) if provider else None,
+        critical_grounding_failures=sum(tp.critical_grounding_failures for tp in entries),
+        failure_attribution=_merge_counts(tp.failure_attribution for tp in entries),
+        excluded_failure_attribution=_merge_counts(
+            tp.excluded_failure_attribution for tp in entries
+        ),
+        evidence_diagnostics=_merge_counts(tp.evidence_diagnostics for tp in entries),
+    )
+
+
+def _merge_counts(count_maps: Any) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for m in count_maps:
+        for k, v in (m or {}).items():
+            merged[str(k)] = merged.get(str(k), 0) + int(v)
+    return merged
+
+
+def qualify_task(
+    result: LiveQualityModelResult,
+    task: str,
+    criteria: QualificationCriteria,
+) -> tuple[bool, list[str]]:
+    """Deterministic task-level qualification (Phase 7D.3).
+
+    Uses the SAME thresholds as the role criteria (never relaxed). A model may
+    be qualified_for_task without being qualified for the entire role."""
+    task = canonical_task(task)
+    tp = aggregate_task_performance(result, task)
+    reasons: list[str] = []
+    if tp is None:
+        return False, [f"no task-level results for task {task!r}"]
+    if criteria.leaderboard_max_age_seconds is not None:
+        from datetime import UTC, datetime
+
+        age = (datetime.now(UTC) - result.evidence_timestamp).total_seconds()
+        if age > criteria.leaderboard_max_age_seconds:
+            reasons.append(
+                f"stale live evidence: {age:.0f}s > {criteria.leaderboard_max_age_seconds}s"
+            )
+    if tp.repetitions < criteria.min_repetitions:
+        reasons.append(f"insufficient repetitions: {tp.repetitions} < {criteria.min_repetitions}")
+    det = tp.pass_rate_mean if tp.pass_rate_mean is not None else 0.0
+    if det < criteria.min_deterministic_pass_rate:
+        reasons.append(
+            f"task deterministic_pass_rate {det:.3f} < {criteria.min_deterministic_pass_rate}"
+        )
+    structured = (
+        tp.structured_output_success_rate if tp.structured_output_success_rate is not None else 0.0
+    )
+    if structured < criteria.min_structured_output_success_rate:
+        reasons.append(
+            f"task structured_output_success_rate {structured:.3f} < "
+            f"{criteria.min_structured_output_success_rate}"
+        )
+    provider = tp.provider_error_frequency if tp.provider_error_frequency is not None else 1.0
+    if provider > criteria.max_provider_error_rate:
+        reasons.append(
+            f"task provider_error_frequency {provider:.3f} > {criteria.max_provider_error_rate}"
+        )
+    if criteria.require_no_critical_grounding_failures and tp.critical_grounding_failures:
+        reasons.append(f"{tp.critical_grounding_failures} critical grounding failure(s)")
+    return not reasons, reasons
+
+
+def task_candidate_result(
+    result: LiveQualityModelResult,
+    task: str,
+    criteria: QualificationCriteria,
+    *,
+    live_quality_run_id: str | None = None,
+) -> TaskQualificationResult | None:
+    """Build one (model, task) TaskQualificationResult (Phase 7D.3)."""
+    task = canonical_task(task)
+    tp = aggregate_task_performance(result, task)
+    if tp is None:
+        return None
+    qualified, reasons = qualify_task(result, task, criteria)
+    total = max(tp.repetitions, 1)
+    return TaskQualificationResult(
+        role=result.role,
+        task=task,
+        task_label=tp.task_name or TASK_LABELS.get(task, ""),
+        candidate_id=result.candidate_id,
+        model=result.model,
+        resolved_model=result.resolved_model or result.model.get("requested_model"),
+        benchmark_id=result.benchmark_id,
+        repetitions=tp.repetitions,
+        deterministic_pass_rate_mean=tp.pass_rate_mean,
+        deterministic_pass_rate_worst=tp.pass_rate_worst,
+        deterministic_pass_rate_variance=tp.pass_rate_variance,
+        structured_output_success_rate=tp.structured_output_success_rate,
+        provider_error_frequency=tp.provider_error_frequency,
+        critical_grounding_failures=tp.critical_grounding_failures,
+        critical_failure_frequency=tp.critical_grounding_failures / total,
+        latency_ms_p50=result.latency_ms_p50_mean,
+        total_tokens=result.total_tokens,
+        estimated_cost=result.estimated_cost,
+        qualified=qualified,
+        rejection_reasons=reasons,
+        evidence_diagnostics=dict(tp.evidence_diagnostics or {}),
+        live_quality_run_id=live_quality_run_id,
+    )
+
+
+def task_rank_key(row: TaskQualificationResult) -> tuple[Any, ...]:
+    """Per-task ranking among qualified models: deterministic correctness,
+    reliability (worst), structured-output success, latency, cost, tie-break."""
+    det = row.deterministic_pass_rate_mean if row.deterministic_pass_rate_mean is not None else -1.0
+    worst = (
+        row.deterministic_pass_rate_worst if row.deterministic_pass_rate_worst is not None else -1.0
+    )
+    structured = (
+        row.structured_output_success_rate
+        if row.structured_output_success_rate is not None
+        else -1.0
+    )
+    latency = row.latency_ms_p50 if row.latency_ms_p50 is not None else float("inf")
+    cost = row.estimated_cost if row.estimated_cost is not None else float("inf")
+    return (-det, -worst, -structured, latency, cost, row.candidate_id)
+
+
+def build_task_matrix(
+    live_results: dict[str, LiveQualityModelResult],
+    *,
+    role: str,
+    benchmark_id: str,
+    repetitions: int,
+    criteria: QualificationCriteria | None = None,
+) -> tuple[TaskQualificationMatrix, list[TaskQualificationResult]]:
+    """Build the role's task-qualification matrix from live-quality results
+    (Phase 7D.3). Role isolation enforced; role qualification is computed
+    separately and recorded so task coverage never implies role qualification."""
+    criteria = criteria or criteria_for_role(role)
+    if criteria.role != role:
+        criteria = criteria.model_copy(update={"role": role})
+    tasks = tasks_for_role(role)
+    rows: list[TaskQualificationResult] = []
+    qualified_models_by_task: dict[str, list[str]] = {t: [] for t in tasks}
+    ranked_models_by_task: dict[str, list[str]] = {}
+    qualified_tasks_by_model: dict[str, list[str]] = {}
+    for result in live_results.values():
+        if result.role != role:
+            continue
+        qualified_tasks_by_model[result.candidate_id] = []
+        for task in tasks:
+            row = task_candidate_result(result, task, criteria, live_quality_run_id=None)
+            if row is None:
+                continue
+            rows.append(row)
+            if row.qualified:
+                qualified_models_by_task[task].append(result.candidate_id)
+                qualified_tasks_by_model[result.candidate_id].append(task)
+
+    # per-task ranking among qualified models only
+    for task in tasks:
+        task_rows = [r for r in rows if r.task == task and r.qualified]
+        ranked_models_by_task[task] = [r.candidate_id for r in sorted(task_rows, key=task_rank_key)]
+
+    _role_summary, _candidates = summarize_role_live(
+        live_results,
+        role=role,
+        benchmark_id=benchmark_id,
+        repetitions=repetitions,
+        criteria=criteria,
+    )
+    matrix = TaskQualificationMatrix(
+        role=role,
+        benchmark_id=benchmark_id,
+        tasks=tasks,
+        rows=rows,
+        qualified_models_by_task=qualified_models_by_task,
+        ranked_models_by_task=ranked_models_by_task,
+        qualified_tasks_by_model=qualified_tasks_by_model,
+        role_qualified_models=list(_role_summary.qualified_models),
+        criteria=criteria.model_dump(mode="json"),
+        repetitions=repetitions,
+    )
+    return matrix, rows
+
+
+def build_model_capability_profiles(
+    matrix: TaskQualificationMatrix,
+    *,
+    stability_by_model: dict[str, str] | None = None,
+    latency_by_model: dict[str, float | None] | None = None,
+    cost_by_model: dict[str, float | None] | None = None,
+    tokens_by_model: dict[str, int | None] | None = None,
+) -> list[ModelCapabilityProfile]:
+    """Build per-model capability profiles from a task matrix (Phase 7D.3)."""
+    profiles: list[ModelCapabilityProfile] = []
+    by_model: dict[str, list[TaskQualificationResult]] = {}
+    for row in matrix.rows:
+        by_model.setdefault(row.candidate_id, []).append(row)
+    for candidate_id, rows in by_model.items():
+        first = rows[0]
+        task_qualifications = {
+            row.task: ("qualified_for_task" if row.qualified else "not_qualified_for_task")
+            for row in rows
+        }
+        profiles.append(
+            ModelCapabilityProfile(
+                model=candidate_id,
+                resolved_model=first.resolved_model,
+                role=matrix.role,
+                benchmark_id=matrix.benchmark_id,
+                task_qualifications=task_qualifications,
+                role_qualified=candidate_id in matrix.role_qualified_models,
+                stability=(stability_by_model or {}).get(candidate_id),
+                repetitions=max((r.repetitions for r in rows), default=0),
+                latency_ms_p50=(latency_by_model or {}).get(candidate_id),
+                total_tokens=(tokens_by_model or {}).get(candidate_id),
+                estimated_cost=(cost_by_model or {}).get(candidate_id),
+            )
+        )
+    return profiles

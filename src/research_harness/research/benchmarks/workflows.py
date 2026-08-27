@@ -5269,6 +5269,60 @@ async def run_qualification_policy_workflow(
 
 
 # ---------------------------------------------------------------------------
+# task_qualification workflow (Phase 7D.3): per-task qualification matrix over
+# synthetic live-quality results
+# ---------------------------------------------------------------------------
+
+
+async def run_task_qualification_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Drives the real `build_task_matrix` logic over synthetic
+    LiveQualityModelResult fixtures (with per-task performance) and persists the
+    TaskQualificationMatrix for the evaluator. No network."""
+    from research_harness.research.routing.qualification import build_task_matrix
+    from research_harness.research.schemas.live_quality import (
+        LiveQualityModelResult,
+        QualificationCriteria,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    role = str(case.input.get("role") or "reasoning")
+
+    live_results: dict[str, LiveQualityModelResult] = {}
+    for candidate_id, payload in (case.input.get("live_results") or {}).items():
+        live_results[str(candidate_id)] = LiveQualityModelResult.model_validate(
+            dict(payload, candidate_id=str(candidate_id))
+        )
+
+    criteria_data = dict(case.input.get("criteria") or {})
+    criteria = QualificationCriteria.model_validate(criteria_data) if criteria_data else None
+
+    matrix, _rows = build_task_matrix(
+        live_results,
+        role=role,
+        benchmark_id=str(case.input.get("benchmark_id") or "live-quality-reasoning-v1"),
+        repetitions=int(case.input.get("repetitions") or 3),
+        criteria=criteria,
+    )
+    await artifact_store.put(
+        ArtifactEnvelope.create(
+            payload=matrix,
+            artifact_type="task_qualification_matrix",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-task-qualification",
+        )
+    )
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
 # qualification_matrix workflow (Phase 7D.2): the production-qualification
 # matrix across roles over synthetic live-quality results
 # ---------------------------------------------------------------------------
