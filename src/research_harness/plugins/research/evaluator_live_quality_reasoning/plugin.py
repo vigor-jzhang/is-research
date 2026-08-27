@@ -80,7 +80,11 @@ class LiveQualityReasoningEvaluator:
         def _check_refs(payload: dict[str, Any], artifact_type: str, label: str) -> None:
             nonlocal total_refs, unsupported_refs, grounding_ok_count, critical_grounding
             for field in _REF_FIELDS.get(artifact_type, []):
-                for rid in payload.get(field) or []:
+                value = payload.get(field)
+                # scalar reference fields (source_artifact_id, gap_id, model_id,
+                # ...) are single ids; only list fields carry multiple ids
+                refs = value if isinstance(value, list) else ([value] if value else [])
+                for rid in refs:
                     total_refs += 1
                     if str(rid) in produced_ids:
                         grounding_ok_count += 1

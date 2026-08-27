@@ -1327,16 +1327,60 @@ uv run research-agent routing capability-profile <model-id>
 uv run research-agent eval run task-specific-model-qualification-v1
 ```
 
+## Focused model qualification (Phase 7D.3A)
+
+Resolves the remaining capability blockers before task-aware routing.
+
+### Evidence-ID interface audit (conclusion: option B — no change needed)
+
+The production evidence extractor returns `EvidenceCandidate`
+(category/statement/page_numbers/confidence/excerpt) with **no artifact IDs**;
+`EvidenceOrchestratorService._persist_evidence` assigns `source_artifact_id`
+(the FullTextDocument id) and the EvidenceItem id deterministically after
+validation. So the model never invents internal UUIDs — the interface is
+correct.
+
+### Genuine evaluator defect found and repaired
+
+The live-quality reasoning evaluator iterated scalar reference fields
+(`source_artifact_id`, `gap_id`, `selected_mechanism_id`, `model_id`, ...)
+character-by-character (a string was treated as a list of characters), so every
+model since 7D.0 looked like it hallucinated evidence IDs (e.g. 296
+"unsupported reference 'l','q','-',..."). Repaired: scalar fields are treated as
+single references; only list fields iterate. With the fix, evidence grounding
+failures collapse (gemini-2.5-pro: 558 -> 3) and **evidence_extraction now
+qualifies for nemotron, deepseek, and gemini-2.5-pro (det 1.0)**; nemotron also
+qualifies for synthesis.
+
+### Critic requalification (repaired fixtures, 5 repetitions)
+
+google/gemini-2.5-pro: det 0.40 < 0.85 (rejected); nemotron: provider-failed;
+claude-3.7-sonnet and gpt-4o: provider-failed on this gateway. **critic:
+no_qualified_model** — no primary, no fallback.
+
+### Fast/screening
+
+All candidates below the 0.9 threshold: gpt-4o det 0.333 (decision-accuracy
+failures, model_reasoning_failure), deepseek det 0.5. **fast:
+no_qualified_model.**
+
+### Corrected reasoning task matrix (fixed evaluator, 3 reps)
+
+| task | qualified models |
+|---|---|
+| evidence_extraction | **nemotron, deepseek, gemini-2.5-pro** (det 1.0) |
+| synthesis | **nemotron** |
+| gap_analysis / mechanism_generation / model_specification / proposition_generation | none |
+
 ## Recommended next increment
 
-Post-Phase-7D.3: the evaluation program covers 30 benchmark families with
-deterministic gating; task-specific qualification identifies per-task
-capabilities (reasoning synthesis is the only qualified reasoning task).
-The verdict remains `ready_with_gaps` (non-blocking: live provider connectors,
-advisory LLM-quality judging, task-aware routing). Phase 7D.4 should build
-task-aware SHADOW routing (advisory, no production switching) using the
-TaskQualificationMatrix, or continue model search — no role currently has a
-qualified primary+fallback on the repaired benchmarks (critic no_qualified_model
-once the fixture defects were fixed; fast and reasoning no_qualified_model).
-gemini-2.5-pro is borderline for critic (passed all tasks in 2 of 3 reps; one
-errored rep) and deserves a 5-repetition re-validation.
+Post-Phase-7D.3A: the evaluation program covers 30 benchmark families with
+deterministic gating. The evidence-extraction blocker was a genuine evaluator
+bug (scalar reference char-splitting), now repaired — evidence_extraction and
+synthesis now have qualified models. Remaining task gaps: gap_analysis,
+mechanism_generation, model_specification, proposition_generation (reasoning);
+all five critic tasks and screening still lack qualified models. Phase 7D.4
+should build task-aware SHADOW routing (advisory, no production switching) over
+the qualified-task set (evidence_extraction/synthesis), or continue model
+search for the critical tasks. No role currently has a qualified
+primary+fallback; production activation NOT recommended.
