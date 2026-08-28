@@ -984,12 +984,56 @@ async def run_gap_workflow(
 
     before = {e.artifact_id for e in await artifact_store.list()}
     run_suffix = uuid.uuid4().hex[:8]
+    # Genuine fixture repair (Phase 7D.3C/7D.3D): the gap fixture artifacts
+    # (evidence, statements, profiles, themes, corpus) used stable case-scoped
+    # ids with idempotent _put_explicit. For LIVE (real-model) runs that means
+    # every repetition after the first reuses the same fixture ids, so they are
+    # NOT "produced by this run" and the grounding check flags every correct
+    # gap as referencing unsupported ids. Run-scoped id mapping: LIVE runs get
+    # run-unique fixture ids (fresh puts, no stale reuse); OFFLINE (scripted)
+    # runs keep stable ids + idempotent _put_explicit, so research-gap-analysis-v1
+    # behaviour is unchanged. GapAnalyzerService is untouched.
+    live = model_router is not None
+    id_map: dict[str, str] = {}
+    if live:
+        for i in range(len(case.input.get("evidence") or [])):
+            id_map[f"{case.id}-evidence-{i}"] = f"{case.id}-{run_suffix}-evidence-{i}"
+        for i in range(len(case.input.get("statements") or [])):
+            id_map[f"{case.id}-statement-{i}"] = f"{case.id}-{run_suffix}-statement-{i}"
+        for i in range(len(case.input.get("profiles") or [])):
+            id_map[f"{case.id}-profile-{i}"] = f"{case.id}-{run_suffix}-profile-{i}"
+        for i in range(len(case.input.get("themes") or [])):
+            id_map[f"{case.id}-theme-{i}"] = f"{case.id}-{run_suffix}-theme-{i}"
+        id_map[f"{case.id}-corpus"] = f"{case.id}-{run_suffix}-corpus"
+        id_map[f"{case.id}-paper"] = f"{case.id}-{run_suffix}-paper"
+        id_map[f"{case.id}-paper-record"] = f"{case.id}-{run_suffix}-paper-record"
+        id_map[f"{case.id}-doc"] = f"{case.id}-{run_suffix}-doc"
+    else:
+        for i in range(len(case.input.get("evidence") or [])):
+            id_map[f"{case.id}-evidence-{i}"] = f"{case.id}-evidence-{i}"
+        for i in range(len(case.input.get("statements") or [])):
+            id_map[f"{case.id}-statement-{i}"] = f"{case.id}-statement-{i}"
+        for i in range(len(case.input.get("profiles") or [])):
+            id_map[f"{case.id}-profile-{i}"] = f"{case.id}-profile-{i}"
+        for i in range(len(case.input.get("themes") or [])):
+            id_map[f"{case.id}-theme-{i}"] = f"{case.id}-theme-{i}"
+        id_map[f"{case.id}-corpus"] = f"{case.id}-corpus"
+        id_map[f"{case.id}-paper"] = f"{case.id}-paper"
+        id_map[f"{case.id}-paper-record"] = f"{case.id}-paper-record"
+        id_map[f"{case.id}-doc"] = f"{case.id}-doc"
+
+    async def put_fixture(env: ArtifactEnvelope[Any]) -> None:
+        """Uniform fixture persistence: live runs always write fresh (run-unique
+        ids never collide), offline runs stay idempotent (_put_explicit)."""
+        if live:
+            await artifact_store.put(env)
+        else:
+            await _put_explicit(artifact_store, env)
 
     evidence_ids: list[str] = []
     for i, ev in enumerate(case.input.get("evidence") or []):
-        eid = f"{case.id}-evidence-{i}"
-        await _put_explicit(
-            artifact_store,
+        eid = id_map[f"{case.id}-evidence-{i}"]
+        await put_fixture(
             ArtifactEnvelope.create(
                 payload=EvidenceItem(
                     statement=ev["statement"],
@@ -1006,18 +1050,55 @@ async def run_gap_workflow(
         )
         evidence_ids.append(eid)
 
+    # Genuine fixture repair (Phase 7D.3D): the profiles reference a
+    # paper_identity_id; the model may legitimately cite relevant_paper_identity_ids
+    # in a gap. Without a produced paper_identity artifact that reference was
+    # flagged "not produced by this run". Produce one per distinct paper id.
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+
+    paper_identity_ids: list[str] = []
+    for prof in case.input.get("profiles") or []:
+        pid = id_map.get(
+            prof.get("paper_identity_id") or f"{case.id}-paper",
+            prof.get("paper_identity_id") or f"{case.id}-paper",
+        )
+        if pid in paper_identity_ids:
+            continue
+        paper_identity_ids.append(pid)
+        await put_fixture(
+            ArtifactEnvelope.create(
+                payload=PaperIdentity(
+                    member_paper_artifact_ids=[
+                        id_map.get(
+                            prof.get("member_record_id") or f"{case.id}-paper-record",
+                            prof.get("member_record_id") or f"{case.id}-paper-record",
+                        )
+                    ],
+                    resolution_method=ResolutionMethod.exact_identifier,
+                ),
+                artifact_type="paper_identity",
+                producer=producer,
+                artifact_id=pid,
+            ),
+        )
+
     for i, prof in enumerate(case.input.get("profiles") or []):
-        await _put_explicit(
-            artifact_store,
+        await put_fixture(
             ArtifactEnvelope.create(
                 payload=PaperResearchProfile(
-                    paper_identity_id=prof.get("paper_identity_id") or f"{case.id}-paper",
-                    full_text_document_id=prof.get("document_id") or f"{case.id}-doc",
+                    paper_identity_id=id_map.get(
+                        prof.get("paper_identity_id") or f"{case.id}-paper",
+                        prof.get("paper_identity_id") or f"{case.id}-paper",
+                    ),
+                    full_text_document_id=id_map.get(
+                        prof.get("document_id") or f"{case.id}-doc",
+                        prof.get("document_id") or f"{case.id}-doc",
+                    ),
                     evidence_item_ids=list(evidence_ids),
                 ),
                 artifact_type="paper_research_profile",
                 producer=producer,
-                artifact_id=f"{case.id}-profile-{i}",
+                artifact_id=id_map[f"{case.id}-profile-{i}"],
             ),
         )
 
@@ -1046,9 +1127,8 @@ async def run_gap_workflow(
             support_type=st.get("support_type", "single_paper"),
             confidence=st.get("confidence", 0.9),
         )
-        sid = f"{case.id}-statement-{i}"
-        await _put_explicit(
-            artifact_store,
+        sid = id_map[f"{case.id}-statement-{i}"]
+        await put_fixture(
             ArtifactEnvelope.create(
                 payload=statement,
                 artifact_type="synthesis_statement",
@@ -1079,22 +1159,21 @@ async def run_gap_workflow(
                 ),
                 artifact_type="synthesis_theme",
                 producer=producer,
-                artifact_id=f"{case.id}-theme-{i}",
+                artifact_id=id_map[f"{case.id}-theme-{i}"],
             ),
         )
 
     corpus = EvidenceCorpus(
         evidence_extraction_execution_id=f"{case.id}-ev-exec",
-        full_text_corpus_id=f"{case.id}-corpus",
+        full_text_corpus_id=id_map[f"{case.id}-corpus"],
         paper_profile_ids=[
-            f"{case.id}-profile-{i}" for i in range(len(case.input.get("profiles") or []))
+            id_map[f"{case.id}-profile-{i}"] for i in range(len(case.input.get("profiles") or []))
         ],
         evidence_item_ids=evidence_ids,
         documents_without_evidence=list(case.input.get("documents_without_evidence") or []),
     )
-    corpus_id = f"{case.id}-corpus"
-    await _put_explicit(
-        artifact_store,
+    corpus_id = id_map[f"{case.id}-corpus"]
+    await put_fixture(
         ArtifactEnvelope.create(
             payload=corpus,
             artifact_type="evidence_corpus",
@@ -1105,7 +1184,9 @@ async def run_gap_workflow(
 
     synthesis = LiteratureSynthesis(
         evidence_corpus_id=corpus_id,
-        theme_ids=[f"{case.id}-theme-{i}" for i in range(len(case.input.get("themes") or []))],
+        theme_ids=[
+            id_map[f"{case.id}-theme-{i}"] for i in range(len(case.input.get("themes") or []))
+        ],
         statement_ids=stmt_ids,
         counts={"statements": len(stmt_ids), "themes": len(case.input.get("themes") or [])},
     )
@@ -1121,7 +1202,7 @@ async def run_gap_workflow(
 
     gap_config = dict(case.input.get("gap_config") or {})
     analyzer = GapAnalyzerService(
-        model_router=_case_router(case, model_router),
+        model_router=_case_router(case, model_router, id_map=id_map),
         artifact_store=artifact_store,
         model_role="reasoning",
         max_statements=gap_config.get("max_statements", 200),

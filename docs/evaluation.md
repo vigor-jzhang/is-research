@@ -1477,15 +1477,64 @@ for EVERY task it routes, so it is not yet sufficient; partial shadow routing
 over the six covered tasks is technically feasible but not recommended until
 the critical uncovered tasks have coverage.
 
+## Gap-workflow repair + final critical-task qualification (Phase 7D.3D)
+
+### Gap workflow defect root cause
+The live gap workflow reused stable case-scoped fixture ids with idempotent
+`_put_explicit`. On every live-quality repetition after the first, the fixture
+statements/evidence existed from a previous rep, so they were not "produced by
+this run" and the grounding check flagged every correct gap as referencing
+unsupported ids — suppressing gap qualification entirely. The profiles also
+referenced a `paper_identity_id` that was never produced, so
+`relevant_paper_identity_ids` always failed grounding.
+
+### Repair design (benchmark/workflow infrastructure only)
+A run-scoped ID mapping layer in `run_gap_workflow`:
+- LIVE (real-model) runs: run-unique fixture ids (`{case}-{suffix}-...`) with
+  fresh `put` (no stale reuse); a `paper_identity` artifact is produced per
+  distinct paper id the profiles reference.
+- OFFLINE (scripted) runs: stable ids + idempotent `_put_explicit` unchanged.
+`GapAnalyzerService`, evaluator grounding rules, and production pipelines are
+untouched. `task_qualification`/`build_qualification_matrix` now aggregate the
+latest live run per candidate across all of a role's campaigns so per-candidate
+campaigns can be run incrementally.
+
+### Regression tests (test_phase7d3d_gap_repair.py, 6/6)
+Live repetition 1 vs 2 use distinct fixture ids; no stale artifact reused;
+produced gap references a same-run statement; correct gap passes grounding;
+hallucinated id still fails; offline stable ids unchanged; SQLite-reopen
+provenance intact. `research-gap-analysis-v1` metrics byte-identical
+(9/10 with one designed-failure; gap_precision 0.889, gap_recall 1.0,
+grounding_accuracy 0.889).
+
+### Authoritative re-qualification (approved model set only)
+Model set restricted to: z-ai/glm-5.2:free, nvidia/nemotron-3-ultra-550b-a55b:free,
+minimax/minimax-m3:free, google/gemma-4-31b-it:free, qwen/qwen3.8-flash,
+z-ai/glm-5.3-flash, google/gemini-3.7-flash, deepseek/deepseek-v4-flash-0731,
+qwen/qwen3.7-flash, openai/gpt-5.6-luna. Preflight: 8 available; glm-5.2:free
+temporarily_unavailable (429); gemma-4 capability_mismatch.
+
+| task | primary | fallback | status |
+|---|---|---|---|
+| **gap_analysis** | **gemini-3.7-flash (det 1.0, 3/3)** | — | **ready_without_fallback (NEW)** |
+| evidence_extraction | gemini-3.7-flash | — | ready_without_fallback |
+| mechanism/model-specification/proposition critique | gemini-3.7-flash | — | ready_without_fallback |
+| results_critique | none (gemini-3.7-flash det 0.8; qwen3.8-flash det 0.933 but provider-gated) | — | not_ready |
+| mechanism/model/proposition generation | none | — | not_ready |
+| manuscript_critique | none | — | not_ready |
+| screening | none (all < 0.9) | — | not_ready |
+
+Six critical tasks remain uncovered. Dominant failure reason
+below_quality_threshold (model capability); qwen3.8-flash critic quality is
+high (det 0.933) but blocked by provider-error rate (0.32 > 0.1).
+
 ## Recommended next increment
 
-Post-Phase-7D.3C: the evaluation program covers 31 benchmark families with
-deterministic gating. Six critical tasks remain uncovered: gap_analysis,
+Post-Phase-7D.3D: the gap-workflow repair is verified and **gap_analysis now has
+a qualified primary (gemini-3.7-flash)**. Six critical tasks remain uncovered:
 mechanism_generation, model_specification, proposition_generation,
-manuscript_critique, screening. The gap workflow's stable-id-reuse defect
-needs a careful, offline-compatible repair before gap_analysis can be trusted.
-**Continue targeted qualification** (stronger or provider-diverse models for
-mechanism/manuscript/screening; a safe gap-workflow repair), and do not
-activate routing. When every critical task has a qualified primary (ideally a
-fallback), proceed to Phase 7D.4 task-aware shadow routing (advisory only).
-Production activation NOT recommended.
+results_critique, manuscript_critique, screening. Continue targeted
+qualification with the approved model set (gpt-5.6-luna and qwen3.8-flash show
+promise but need provider-stable endpoints). Full task-aware shadow routing is
+not yet justified (it needs a qualified primary for every routed task). Do not
+activate routing.

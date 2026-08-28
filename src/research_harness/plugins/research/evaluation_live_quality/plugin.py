@@ -507,8 +507,31 @@ class LiveQualityService:
         matrices: list[ProductionQualificationMatrix] = []
         for r, campaign in sorted(latest_by_role.items()):
             criteria = criteria_for_role(r)
+            from research_harness.research.routing.qualification import candidate_result
+
+            latest = await self._latest_live_results_for_role(r)
+            candidate_results = [
+                candidate_result(lr, criteria, live_quality_run_id=None) for lr in latest.values()
+            ]
+            if not candidate_results:
+                continue
+            # eligibility (same rule as build_role_summary): qualified + not unstable
+            qualified = [c for c in candidate_results if c.qualified]
+            ranked = sorted(
+                qualified,
+                key=lambda c: (
+                    -(c.deterministic_pass_rate_mean or -1.0),
+                    c.estimated_cost if c.estimated_cost is not None else float("inf"),
+                    c.candidate_id,
+                ),
+            )
+            primary = ranked[0].candidate_id if ranked else None
+            for c in candidate_results:
+                stable_ok = (c.stability or "unstable") != "unstable"
+                c.primary_eligible = bool(c.qualified and stable_ok)
+                c.fallback_eligible = bool(c.qualified and stable_ok and c.candidate_id != primary)
             matrix = build_qualification_matrix(
-                campaign.candidates,
+                candidate_results,
                 role=r,
                 benchmark_id=campaign.benchmark_id,
                 repetitions=campaign.repetitions,
@@ -546,13 +569,37 @@ class LiveQualityService:
             live_results[run.result.candidate_id] = run.result
         return live_results
 
+    async def _latest_live_results_for_role(self, role: str) -> dict[str, Any]:
+        """Latest LiveQualityModelResult per candidate across all the role's
+        campaigns (Phase 7D.3D). Lets per-candidate campaigns be run
+        incrementally (each persists on completion) while the task matrix
+        aggregates the most recent evidence per candidate."""
+        from research_harness.research.schemas.live_quality import LiveQualityRun
+
+        campaigns = await self.list_campaigns(role=role)
+        latest: dict[str, Any] = {}
+        for campaign in campaigns:
+            for run_id in campaign.live_quality_run_ids:
+                try:
+                    run = (await self._store.get(run_id)).parse_payload(LiveQualityRun)
+                except Exception:  # noqa: BLE001
+                    continue
+                cid = run.result.candidate_id
+                if (
+                    cid not in latest
+                    or run.result.evidence_timestamp > latest[cid].evidence_timestamp
+                ):
+                    latest[cid] = run.result
+        return latest
+
     async def task_qualification(
         self,
         role: str,
         task: str | None = None,
     ) -> list[Any]:
         """Build (and persist) the role's TaskQualificationMatrix from the latest
-        campaign (Phase 7D.3). Task-level qualification uses the same thresholds;
+        live-quality run per candidate across all of the role's campaigns
+        (Phase 7D.3/7D.3D). Task-level qualification uses the same thresholds;
         it never implies role qualification. Optionally filter to one task."""
         from research_harness.research.routing.qualification import build_task_matrix
         from research_harness.research.routing.readiness import criteria_for_role
@@ -565,16 +612,15 @@ class LiveQualityService:
             raise ValueError(
                 f"no qualification campaign for role {role!r}; run `routing qualify` first"
             )
-        campaign = campaigns[0]
-        live_results = await self._live_results_for_campaign(campaign)
+        live_results = await self._latest_live_results_for_role(role)
         if not live_results:
             raise ValueError(f"no live-quality runs available for role {role!r} campaign")
         criteria = criteria_for_role(role)
         matrix, _rows = build_task_matrix(
             live_results,
             role=role,
-            benchmark_id=campaign.benchmark_id,
-            repetitions=campaign.repetitions,
+            benchmark_id=campaigns[0].benchmark_id,
+            repetitions=campaigns[0].repetitions,
             criteria=criteria,
         )
         await self._store.put(
