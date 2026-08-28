@@ -1430,7 +1430,7 @@ manuscript_critique are uncovered. No role has a qualified primary+fallback.
 
 ## Recommended next increment
 
-Post-Phase-7D.3B: the evaluation program covers 32 benchmark families (added
+Post-Phase-7D.3B: the evaluation program covers 31 benchmark families (added
 live-quality-evaluator-sanity-v1) with deterministic gating. The remaining-task
 qualification ran only preflight-passing candidates; genuine defects found and
 repaired: (1) proposition verification status vocabulary (verified vs passed),
