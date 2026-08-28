@@ -249,6 +249,73 @@ class _FakeCampaign:
         self.candidates = [type("C", (), {"candidate_id": c})() for c in candidate_ids]
 
 
+def test_remaining_task_coverage_primary_fallback_and_dominant():
+    """Coverage reports qualified primary/fallback from the ranked task matrix
+    and a provider-unavailable candidate is excluded (never a qualified count)."""
+    from research_harness.research.routing.qualification import build_remaining_task_coverage
+    from research_harness.research.schemas.qualification import (
+        ModelPreflight,
+        PreflightStatus,
+        TaskQualificationMatrix,
+        TaskQualificationResult,
+    )
+
+    def _row(cid, task, qualified, reasons):
+        return TaskQualificationResult(
+            role="critic",
+            task=task,
+            candidate_id=cid,
+            model={},
+            benchmark_id="live-quality-critic-v1",
+            qualified=qualified,
+            rejection_reasons=reasons,
+        )
+
+    matrix = TaskQualificationMatrix(
+        role="critic",
+        benchmark_id="live-quality-critic-v1",
+        tasks=["mechanism_critique", "results_critique"],
+        rows=[
+            _row("m-good", "mechanism_critique", True, []),
+            _row("m-good2", "mechanism_critique", True, []),
+            _row("m-bad", "mechanism_critique", False, ["task deterministic_pass_rate 0.4 < 0.85"]),
+            _row("m-good", "results_critique", False, ["task deterministic_pass_rate 0.4 < 0.85"]),
+        ],
+        qualified_models_by_task={
+            "mechanism_critique": ["m-good", "m-good2"],
+            "results_critique": [],
+        },
+        ranked_models_by_task={"mechanism_critique": ["m-good", "m-good2"], "results_critique": []},
+        qualified_tasks_by_model={
+            "m-good": ["mechanism_critique"],
+            "m-good2": ["mechanism_critique"],
+            "m-bad": [],
+        },
+        role_qualified_models=["m-good", "m-good2"],
+    )
+    preflight = ModelPreflight(
+        role="critic",
+        candidate_id="m-unavail",
+        provider="openrouter",
+        requested_model="m-unavail",
+        status=PreflightStatus.provider_error,
+    )
+    campaign = _FakeCampaign(
+        role="critic",
+        candidate_ids=["m-good", "m-good2", "m-bad", "m-unavail"],
+    )
+    coverage = build_remaining_task_coverage([matrix], preflights=[preflight], campaigns=[campaign])
+    mech = next(r for r in coverage.rows if r.task == "mechanism_critique")
+    assert mech.qualified_primary == "m-good"
+    assert mech.qualified_fallback == "m-good2"
+    assert mech.qualified_model_count == 2
+    assert mech.tested_model_count == 4
+    assert mech.provider_unavailable_count == 1
+    results = next(r for r in coverage.rows if r.task == "results_critique")
+    assert results.qualified_model_count == 0
+    assert results.dominant_failure_reason == "below_quality_threshold"
+
+
 def test_proposition_verification_verified_status_is_a_pass():
     """Genuine defect repair: the production verifier emits status 'verified'
     (enum vocabulary), never the literal 'passed'. A verified verification must

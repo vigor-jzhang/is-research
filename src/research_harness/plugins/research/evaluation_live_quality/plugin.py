@@ -666,7 +666,7 @@ class LiveQualityService:
         roles = [role] if role else ("fast", "reasoning", "critic")
         preflights: list[ModelPreflight] = []
         for r in roles:
-            slugs = [model] if model else list(self._candidates.get(r, []))
+            slugs = [model] if model else self._preflight_candidates_for_role(r)
             if not slugs:
                 continue
             benchmark_id = _BENCHMARK_BY_ROLE[r]
@@ -722,6 +722,20 @@ class LiveQualityService:
         elif definition is not None:
             cases = [asdict(c) for c in definition.cases]
         return cases
+
+    def _preflight_candidates_for_role(self, role: str) -> list[str]:
+        """Union of the role-level candidates and every per-task pool for the
+        role (Phase 7D.3C), so stronger per-task candidates are preflighted too.
+        Config-driven; no slugs in service logic."""
+        from research_harness.research.routing.tasks import tasks_for_role
+
+        seen: dict[str, None] = {}
+        for slug in self._candidates.get(role, []):
+            seen.setdefault(slug, None)
+        for task in tasks_for_role(role):
+            for slug in self._candidates_per_task.get(task, []):
+                seen.setdefault(slug, None)
+        return list(seen)
 
     def _candidates_for_tasks(self, role: str, tasks: list[str] | None) -> list[str]:
         """Config-driven candidate selection for the requested tasks.

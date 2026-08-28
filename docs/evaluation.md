@@ -1428,23 +1428,64 @@ successes. Genuine defects found and repaired:
 Critic role remains no_qualified_model because results_critique and
 manuscript_critique are uncovered. No role has a qualified primary+fallback.
 
+## Targeted qualification of remaining tasks (Phase 7D.3C)
+
+Expanded the config-driven per-task candidate pools with stronger/paid models
+(qwen3-32b, meta-llama/llama-3.3-70b-instruct, gpt-4o-mini, gemini-2.5-flash)
+and preflighted every candidate; only `available` candidates entered
+campaigns. Task-specific, never restricted to a role's historical model.
+
+### Production prompt/schema audit findings
+
+- **mechanism_generation**: the generator prompt already enumerates the allowed
+  `_MECH_DOMAINS`; models still emit out-of-taxonomy domains
+  ('Agent-based modeling', 'Game Theory') → genuine model capability, no
+  production change warranted.
+- **model_specification / proposition_generation**: `ModelBuilderService` and
+  `PropositionGeneratorService` INJECT the required artifact ids
+  (`selected_mechanism_id`, `gap_id`, `model_id`, `equilibrium_candidate_id`,
+  `comparative_statics_analysis_id`) themselves, so grounding refs are correct;
+  the remaining failures are structural (malformed SymPy expressions,
+  verification/sign mismatches) → model capability.
+- **gap_analysis**: the gap workflow reuses stable case-scoped fixture ids with
+  idempotent `_put_explicit`, so on every repetition after the first the
+  statements/evidence are NOT "produced by this run" and correct gaps are
+  flagged as referencing unsupported ids. This is a genuine benchmark-workflow
+  defect that has suppressed gap qualification. A run-unique-id repair was
+  attempted but regresses the offline gap benchmark's scripted grounding; the
+  defect is documented, not safely repairable without changing offline gap
+  semantics.
+
+### Updated coverage (7D.3C, 5 reps critic / 3 reps reasoning+fast)
+
+| task | primary | fallback | status |
+|---|---|---|---|
+| mechanism_critique | llama-3.3-70b-instruct | gemini-2.5-pro | ready_with_fallback |
+| model_specification_critique | llama-3.3-70b-instruct | gemini-2.5-pro | ready_with_fallback |
+| proposition_critique | llama-3.3-70b-instruct | gemini-2.5-pro | ready_with_fallback |
+| **results_critique** | **gemini-2.5-pro** | — | **ready_without_fallback** (NEW) |
+| evidence_extraction | nemotron / qwen3-32b / llama / gemini / deepseek | — | ready_without_fallback |
+| synthesis | nemotron / qwen3-32b / llama | — | ready_without_fallback |
+| manuscript_critique | none | — | not_ready |
+| gap_analysis / mechanism_generation / model_specification / proposition_generation | none | — | not_ready |
+| screening | none | — | not_ready |
+
+Six uncovered tasks remain (all four reasoning-generation tasks,
+manuscript_critique, screening), dominant reason below_quality_threshold
+(model capability). Full task-aware shadow routing requires a qualified model
+for EVERY task it routes, so it is not yet sufficient; partial shadow routing
+over the six covered tasks is technically feasible but not recommended until
+the critical uncovered tasks have coverage.
+
 ## Recommended next increment
 
-Post-Phase-7D.3B: the evaluation program covers 31 benchmark families (added
-live-quality-evaluator-sanity-v1) with deterministic gating. The remaining-task
-qualification ran only preflight-passing candidates; genuine defects found and
-repaired: (1) proposition verification status vocabulary (verified vs passed),
-(2) critic/fast evaluator `None` numeric dimension scores that errored entire
-benchmarks, (3) three live-quality reasoning fixtures that silently errored at
-the workflow level so gap/mechanism/model-spec/proposition had never evaluated
-a model. With the repairs, mechanism_critique, model_specification_critique and
-proposition_critique each qualify nemotron + gemini-2.5-pro (primary + fallback
-per task); evidence_extraction (nemotron/deepseek/gemini-pro) and synthesis
-(nemotron) remain qualified. Still uncovered: results_critique,
-manuscript_critique, gap_analysis, mechanism_generation, model_specification,
-proposition_generation, screening — dominant failure reason
-below_quality_threshold (model capability), not provider availability.
-Phase 7D.4 should build task-aware SHADOW routing (advisory, no production
-switching) over the qualified-task set, or continue model search for the
-critical uncovered tasks. No role has a qualified primary+fallback; production
-activation NOT recommended.
+Post-Phase-7D.3C: the evaluation program covers 31 benchmark families with
+deterministic gating. Six critical tasks remain uncovered: gap_analysis,
+mechanism_generation, model_specification, proposition_generation,
+manuscript_critique, screening. The gap workflow's stable-id-reuse defect
+needs a careful, offline-compatible repair before gap_analysis can be trusted.
+**Continue targeted qualification** (stronger or provider-diverse models for
+mechanism/manuscript/screening; a safe gap-workflow repair), and do not
+activate routing. When every critical task has a qualified primary (ideally a
+fallback), proceed to Phase 7D.4 task-aware shadow routing (advisory only).
+Production activation NOT recommended.

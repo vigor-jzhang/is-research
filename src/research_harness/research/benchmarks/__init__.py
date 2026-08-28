@@ -9723,6 +9723,59 @@ LIVE_QUALITY_EVALUATOR_SANITY_V1: BenchmarkDefinition = BenchmarkDefinition(
             },
         ),
         _lq_sanity_case(
+            "lq-sanity-model-malformed-expression-fails",
+            "production-prompt repair never weakens the model-spec gate",
+            "A malformed mathematical expression (unbalanced parentheses) must "
+            "STILL fail the model-specification evaluator after any production "
+            "prompt/schema improvement — the deterministic gate is never "
+            "weakened.",
+            task="analytical_model_specification",
+            produced={
+                "formal_analytical_model": [
+                    {
+                        "selected_mechanism_id": "lq-mech",
+                        "title": "Model",
+                        "description": "A model of surplus extraction.",
+                        "actors": [{"actor_id": "seller", "name": "Seller", "strategic": True}],
+                        "variables": [
+                            {
+                                "symbol": "p",
+                                "name": "price",
+                                "meaning": "retail price",
+                                "domain": "R_+",
+                                "kind": "decision_variable",
+                                "owner_actor_id": "seller",
+                            }
+                        ],
+                        "parameters": [],
+                        "timing": [
+                            {
+                                "stage_number": 0,
+                                "name": "pricing",
+                                "description": "seller sets price",
+                                "actor_ids": ["seller"],
+                            }
+                        ],
+                        "payoffs": [
+                            {
+                                "actor_id": "seller",
+                                "expression": {
+                                    "expression": "(p - c * (10 - p",
+                                    "symbols_used": ["p"],
+                                },
+                                "decision_variables": ["p"],
+                                "parameters": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+            reference={
+                "expected_evaluator_status": "failed",
+                "expect_task_diagnostics_positive": ["malformed_mathematical_expression"],
+            },
+        ),
+        _lq_sanity_case(
             "lq-sanity-critic-known-good",
             "critic known-good response passes",
             "A mechanism critique that detects the injected defect with an "
@@ -11027,6 +11080,77 @@ TASK_SPECIFIC_MODEL_QUALIFICATION_V1: BenchmarkDefinition = BenchmarkDefinition(
                 "expected_qualified_by_task": {
                     "mechanism_critique": [],
                     "results_critique": [],
+                },
+                "expected_role_qualified_models": [],
+            },
+        ),
+        _task_qualification_case(
+            "tq-task-primary-without-fallback",
+            "per-task primary without fallback",
+            "A task with exactly one qualified model gets a primary but no "
+            "fallback; fallback eligibility is never invented.",
+            role="critic",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="critic",
+                    benchmark_id="live-quality-critic-v1",
+                    tasks={case_id: {"det": 0.9} for case_id in _CRITIC_CASES},
+                ),
+                "m-b": _lq_tasks_result(
+                    "m-b",
+                    role="critic",
+                    benchmark_id="live-quality-critic-v1",
+                    tasks={case_id: {"det": 0.5} for case_id in _CRITIC_CASES},
+                ),
+            },
+            reference={
+                "expected_role": "critic",
+                "expected_qualified_by_task": {
+                    "mechanism_critique": ["m-a"],
+                    "results_critique": ["m-a"],
+                },
+                "expected_ranked_by_task": {"mechanism_critique": ["m-a"]},
+                "expected_role_qualified_models": ["m-a"],
+            },
+        ),
+        _task_qualification_case(
+            "tq-task-pool-model-covers-role-default-failure",
+            "stronger task-pool model covers a task the role default fails",
+            "A model that is not role-qualified can still qualify for an "
+            "individual task, so a stronger task-specific candidate pool can "
+            "cover a task the role's default cannot.",
+            role="reasoning",
+            live_results={
+                "m-role-default": _lq_tasks_result(
+                    "m-role-default",
+                    role="reasoning",
+                    tasks={
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-literature-synthesis": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.9},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+                "m-task-pool": _lq_tasks_result(
+                    "m-task-pool",
+                    role="reasoning",
+                    tasks={
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-literature-synthesis": {"det": 0.5},
+                        "lq-gap-analysis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.9},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            reference={
+                "expected_qualified_by_task": {
+                    "gap_analysis": ["m-role-default"],
+                    "mechanism_generation": ["m-task-pool"],
                 },
                 "expected_role_qualified_models": [],
             },
