@@ -10,6 +10,7 @@ enabled automatically.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from statistics import fmean, pvariance
 from typing import Any
@@ -18,6 +19,8 @@ from research_harness.kernel.plugin import Plugin, PluginContext, PluginMetadata
 from research_harness.research.benchmarks import BUILTIN_BENCHMARKS
 from research_harness.research.envelope import ArtifactEnvelope
 from research_harness.research.schemas.evaluation import (
+    Benchmark,
+    BenchmarkCase,
     EvaluationReport,
     EvaluatorResult,
     EvaluatorStatus,
@@ -59,7 +62,9 @@ class LiveQualityService:
         service_lookup: Any,
         current_roles: dict[str, dict[str, str]] | None = None,
         candidates: dict[str, list[str]] | None = None,
+        candidates_per_task: dict[str, list[str]] | None = None,
         repetitions: int = 3,
+        preflight: dict[str, Any] | None = None,
         producer: str = _PRODUCER,
     ) -> None:
         self._store = artifact_store
@@ -68,7 +73,9 @@ class LiveQualityService:
         self._lookup = service_lookup
         self._current_roles = dict(current_roles or {})
         self._candidates = dict(candidates or {})
+        self._candidates_per_task = dict(candidates_per_task or {})
         self._repetitions = repetitions
+        self._preflight_cfg = dict(preflight or {})
         self._producer = producer
 
     @property
@@ -105,6 +112,7 @@ class LiveQualityService:
         case_structured: dict[str, list[float]] = {}
         case_evidence: dict[str, list[dict[str, Any]]] = {}
         case_evidence_source: dict[str, str] = {}
+        case_diagnostics: dict[str, dict[str, int]] = {}
         for rep in range(1, repetitions + 1):
             router = await self._make_router(
                 role, benchmark_id, model_config, timeout_seconds, retries
@@ -143,6 +151,7 @@ class LiveQualityService:
                 case_structured,
                 case_evidence,
                 case_evidence_source,
+                case_diagnostics,
             )
             task_results.append(
                 LiveQualityTaskResult(
@@ -225,6 +234,7 @@ class LiveQualityService:
             case_structured,
             case_evidence,
             case_evidence_source,
+            case_diagnostics,
         )
         result.stability = stability_status(result, criteria)
         qualified, reasons = qualify_model(result, criteria)
@@ -386,12 +396,16 @@ class LiveQualityService:
         candidates: list[str] | None = None,
         repetitions: int | None = None,
         benchmark_id: str | None = None,
+        tasks: list[str] | None = None,
     ) -> Any:
         """Run a live-model qualification campaign for a role: each candidate ->
         live-quality benchmark (>=3 reps) -> LiveQualityModelResult -> verdict.
 
         Uses config-driven candidates (no slugs hard-coded in service logic).
-        Production routing stays disabled."""
+        Phase 7D.3B: `tasks` selects config-driven per-task candidate pools
+        (candidates_per_task with role fallback, deduplicated) so remaining
+        tasks are targeted without re-running qualified evidence/synthesis
+        unnecessarily. Production routing stays disabled."""
         from research_harness.research.routing.qualification import (
             build_role_summary,
             candidate_result,
@@ -401,7 +415,10 @@ class LiveQualityService:
         from research_harness.research.schemas.qualification import QualificationCampaign
 
         validate_role(role)
-        candidates = list(candidates if candidates is not None else self._candidates.get(role, []))
+        if candidates is None:
+            candidates = self._candidates_for_tasks(role, tasks)
+        else:
+            candidates = list(candidates)
         if not candidates:
             raise ValueError(f"no qualification candidates configured for role {role!r}")
         repetitions = repetitions or self._repetitions
@@ -441,6 +458,7 @@ class LiveQualityService:
             live_quality_run_ids=run_ids,
             leaderboard_ids=leaderboard_ids,
             criteria=criteria,
+            metadata={"tasks": list(tasks or [])},
         )
         await self._store.put(
             ArtifactEnvelope.create(
@@ -627,6 +645,151 @@ class LiveQualityService:
         return 0
 
     # ------------------------------------------------------------------
+    # Phase 7D.3B: provider/model preflight + remaining-task coverage
+    # ------------------------------------------------------------------
+
+    async def preflight(self, role: str | None = None, model: str | None = None) -> list[Any]:
+        """Run the lightweight provider/model capability preflight (Phase 7D.3B).
+
+        Probes each candidate (config-driven; no slugs in service logic) for
+        reachability, structured JSON output, required context size, and the
+        timeout/retry path. Classifies: available | temporarily_unavailable |
+        capability_mismatch | provider_error. A provider-unavailable model is
+        never interpreted as academically incapable and is never qualified."""
+        from research_harness.research.routing.preflight import (
+            preflight_required_context_chars,
+            run_candidate_preflight,
+        )
+        from research_harness.research.schemas.qualification import ModelPreflight
+        from research_harness.research.schemas.tournament import TournamentModelConfig
+
+        roles = [role] if role else ("fast", "reasoning", "critic")
+        preflights: list[ModelPreflight] = []
+        for r in roles:
+            slugs = [model] if model else list(self._candidates.get(r, []))
+            if not slugs:
+                continue
+            benchmark_id = _BENCHMARK_BY_ROLE[r]
+            cases = await self._benchmark_case_inputs(benchmark_id)
+            required_context = await preflight_required_context_chars(role=r, benchmark_cases=cases)
+            for slug in slugs:
+                candidate = TournamentModelConfig(
+                    candidate_id=slug, provider="openrouter", requested_model=slug
+                )
+                preflight = await run_candidate_preflight(
+                    role=r,
+                    candidate=candidate,
+                    service_lookup=self._lookup,
+                    base_router=self._role_router,
+                    timeout_seconds=float(self._preflight_cfg.get("timeout_seconds", 120.0)),
+                    retries=int(self._preflight_cfg.get("retries", 2)),
+                    required_context_chars=required_context,
+                    probe_max_tokens=int(self._preflight_cfg.get("probe_max_tokens", 200)),
+                )
+                await self._store.put(
+                    ArtifactEnvelope.create(
+                        payload=preflight,
+                        artifact_type="model_preflight",
+                        producer=self._producer,
+                        artifact_id=preflight.id,
+                    )
+                )
+                preflights.append(preflight)
+        return preflights
+
+    async def _benchmark_case_inputs(self, benchmark_id: str) -> list[dict[str, Any]]:
+        """Load a role's live-quality benchmark case inputs for context sizing.
+
+        Prefers the registered benchmark; falls back to the builtin definition
+        so preflight works before the benchmark has been registered on a store."""
+        from research_harness.research.benchmarks import BUILTIN_BENCHMARKS
+
+        definition = BUILTIN_BENCHMARKS.get(benchmark_id)
+        cases: list[dict[str, Any]] = []
+        try:
+            benchmark_env = await self._store.get(benchmark_id)
+        except Exception:  # noqa: BLE001
+            benchmark_env = None
+        if benchmark_env is not None:
+            benchmark = benchmark_env.parse_payload(Benchmark)
+            for case_id in benchmark.case_ids:
+                try:
+                    env = await self._store.get(case_id)
+                except Exception:  # noqa: BLE001
+                    continue
+                case = env.parse_payload(BenchmarkCase)
+                cases.append(case.model_dump(mode="json"))
+        elif definition is not None:
+            cases = [asdict(c) for c in definition.cases]
+        return cases
+
+    def _candidates_for_tasks(self, role: str, tasks: list[str] | None) -> list[str]:
+        """Config-driven candidate selection for the requested tasks.
+
+        Prefers `live_quality.candidates_per_task[task]` and falls back to the
+        role candidate list; candidates are deduplicated so each model is
+        tested once. No model slugs in service logic."""
+        from research_harness.research.routing.tasks import tasks_for_role
+
+        if not tasks:
+            return list(self._candidates.get(role, []))
+        requested = {str(t) for t in tasks}
+        unknown = [t for t in requested if t not in set(tasks_for_role(role))]
+        if unknown:
+            raise ValueError(f"unknown tasks for role {role!r}: {sorted(unknown)}")
+        slugs: list[str] = []
+        for task in tasks_for_role(role):
+            if task not in requested:
+                continue
+            slugs.extend(self._candidates_per_task.get(task) or self._candidates.get(role, []))
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for slug in slugs:
+            if slug not in seen:
+                seen.add(slug)
+                ordered.append(slug)
+        return ordered
+
+    async def remaining_task_coverage(self) -> Any:
+        """Build (and persist) the RemainingTaskCoverage (Phase 7D.3B)."""
+        from research_harness.research.routing.qualification import (
+            build_remaining_task_coverage,
+        )
+        from research_harness.research.schemas.qualification import (
+            ModelPreflight,
+            QualificationCampaign,
+            TaskQualificationMatrix,
+        )
+
+        campaigns = [
+            env.parse_payload(QualificationCampaign)
+            for env in await self._store.list(artifact_type="qualification_campaign")
+        ]
+        matrices: list[Any] = []
+        latest: dict[str, Any] = {}
+        for env in await self._store.list(artifact_type="task_qualification_matrix"):
+            matrix = env.parse_payload(TaskQualificationMatrix)
+            if matrix.role not in latest or matrix.created_at > latest[matrix.role].created_at:
+                latest[matrix.role] = matrix
+        matrices = list(latest.values())
+        preflights = [
+            env.parse_payload(ModelPreflight)
+            for env in await self._store.list(artifact_type="model_preflight")
+        ]
+        coverage = build_remaining_task_coverage(
+            matrices, preflights=preflights, campaigns=campaigns
+        )
+        await self._store.put(
+            ArtifactEnvelope.create(
+                payload=coverage,
+                artifact_type="remaining_task_coverage",
+                producer=self._producer,
+                artifact_id=coverage.id,
+            )
+        )
+        return coverage
+
+    # ------------------------------------------------------------------
     # Phase 7D.2: per-task performance + failure attribution
     # ------------------------------------------------------------------
 
@@ -640,10 +803,11 @@ class LiveQualityService:
         case_structured: dict[str, list[float]],
         case_evidence: dict[str, list[dict[str, Any]]],
         case_evidence_source: dict[str, str],
+        case_diagnostics: dict[str, dict[str, int]],
     ) -> None:
         """Accumulate per-case pass rates, names, grounding counts, structured-
-        output success, failure texts, and evidence artifacts for diagnostics
-        across repetitions (from the stored report + evaluator results)."""
+        output success, failure texts, evidence artifacts, and task-specific
+        diagnostics (Phase 7D.3B) across repetitions from the stored report."""
         for cr in report.case_results:
             case_rates.setdefault(cr.case_id, []).append(
                 1.0 if cr.status.value == "passed" else 0.0
@@ -660,12 +824,30 @@ class LiveQualityService:
             structured = (cr.metrics or {}).get("structured_output_success")
             if structured is not None:
                 case_structured.setdefault(cr.case_id, []).append(float(structured))
+            diag = await self._evaluator_diagnostics(cr.evaluator_result_ids)
+            if diag:
+                merged = case_diagnostics.setdefault(cr.case_id, {})
+                for key, value in diag.items():
+                    merged[key] = merged.get(key, 0) + int(value)
             if cr.case_id == "lq-evidence-extraction":
                 evidence, source = await self._evidence_diagnostics_inputs(cr.produced_artifact_ids)
                 if evidence:
                     case_evidence.setdefault(cr.case_id, []).extend(evidence)
                 if source:
                     case_evidence_source[cr.case_id] = source
+
+    async def _evaluator_diagnostics(self, evaluator_result_ids: list[str]) -> dict[str, int]:
+        """Collect Phase 7D.3B task-specific diagnostics from evaluator values."""
+        merged: dict[str, int] = {}
+        for rid in evaluator_result_ids:
+            try:
+                env = await self._store.get(rid)
+                result = env.parse_payload(EvaluatorResult)
+            except Exception:  # noqa: BLE001
+                continue
+            for key, value in ((result.value or {}).get("task_diagnostics") or {}).items():
+                merged[str(key)] = merged.get(str(key), 0) + int(value)
+        return merged
 
     async def _evidence_diagnostics_inputs(
         self, produced_artifact_ids: list[str]
@@ -753,6 +935,7 @@ class LiveQualityService:
         case_structured: dict[str, list[float]] | None = None,
         case_evidence: dict[str, list[dict[str, Any]]] | None = None,
         case_evidence_source: dict[str, str] | None = None,
+        case_diagnostics: dict[str, dict[str, int]] | None = None,
     ) -> list[LiveQualityTaskPerformance]:
         from research_harness.research.routing.qualification import (
             attribute_failure_text,
@@ -762,6 +945,7 @@ class LiveQualityService:
         case_structured = case_structured or {}
         case_evidence = case_evidence or {}
         case_evidence_source = case_evidence_source or {}
+        case_diagnostics = case_diagnostics or {}
         performance: list[LiveQualityTaskPerformance] = []
         for case_id in sorted(case_rates):
             rates = case_rates[case_id]
@@ -798,6 +982,7 @@ class LiveQualityService:
                         produced_evidence=case_evidence.get(case_id),
                         source_text=case_evidence_source.get(case_id, ""),
                     ),
+                    task_diagnostics=dict(case_diagnostics.get(case_id, {})),
                 )
             )
         return performance
@@ -856,7 +1041,12 @@ class LiveQualityPlugin(Plugin):
             str(role): [str(m) for m in models]
             for role, models in (live_cfg.get("candidates") or {}).items()
         }
+        candidates_per_task = {
+            str(task): [str(m) for m in models]
+            for task, models in (live_cfg.get("candidates_per_task") or {}).items()
+        }
         repetitions = int(live_cfg.get("repetitions") or 3)
+        preflight = dict(live_cfg.get("preflight") or {})
 
         service = LiveQualityService(
             artifact_store=ctx.require("artifact_store.default"),
@@ -865,6 +1055,8 @@ class LiveQualityPlugin(Plugin):
             service_lookup=_lookup,
             current_roles=current_roles,
             candidates=candidates,
+            candidates_per_task=candidates_per_task,
             repetitions=repetitions,
+            preflight=preflight,
         )
         ctx.register("live_quality.default", service)

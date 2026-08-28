@@ -28,6 +28,7 @@ from research_harness.research.benchmarks.workflows import (
     run_comparative_statics_workflow,
     run_e2e_workflow,
     run_equilibrium_workflow,
+    run_evaluator_sanity_workflow,
     run_evidence_enrichment_workflow,
     run_evidence_workflow,
     run_gap_selection_workflow,
@@ -101,11 +102,15 @@ class EvaluationHarnessService:
         cost_per_million_tokens: dict[str, float] | None = None,
         blob_store: Any | None = None,
         producer: str = _PRODUCER,
+        optional_evaluators: dict[str, Any] | None = None,
     ) -> None:
         self._store = artifact_store
         self._ingestor = ingestor
         self._resolver = identity_resolver
         self._evaluators = dict(evaluators)
+        for eid, evaluator in (optional_evaluators or {}).items():
+            if evaluator is not None:
+                self._evaluators[eid] = evaluator
         self._blob_store = blob_store
         self._config = dict(config or {})
         self._judge_role = judge_role
@@ -540,6 +545,13 @@ class EvaluationHarnessService:
             return produced, None
         if workflow == "task_qualification":
             produced = await run_task_qualification_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
+        if workflow == "evaluator_sanity":
+            produced = await run_evaluator_sanity_workflow(
                 artifact_store=self._store,
                 case=case,
                 producer=self._producer,
@@ -988,6 +1000,9 @@ class EvaluationHarnessPlugin(Plugin):
                 "evaluator.task_model_qualification": ctx.require(
                     "evaluator.task_model_qualification"
                 ),
+            },
+            optional_evaluators={
+                "evaluator.evaluator_sanity": ctx.try_get("evaluator.evaluator_sanity"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),

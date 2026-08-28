@@ -5,6 +5,11 @@ Validates a real model's output STRUCTURALLY against model-agnostic references
 (no exact scripted-output matching): structured-output success, grounding
 correctness, unsupported-reference rate, instruction adherence, required-field
 completeness, deterministic downstream validation, and task completion.
+
+Phase 7D.3B adds task-specific FAILURE DIAGNOSTICS for the remaining reasoning
+tasks (gap analysis, mechanism generation, model specification, proposition
+generation). Diagnostics are persisted separately and NEVER change the pass
+criteria.
 """
 
 from __future__ import annotations
@@ -43,9 +48,290 @@ _REF_FIELDS = {
     ],
 }
 
+_KNOWLEDGE_BASIS = {
+    "literature_supported",
+    "research_inference",
+    "new_hypothesis",
+    "modeling_assumption",
+}
+
+_SWEEPING_CLAIM_TERMS = (
+    "first",
+    "first-ever",
+    "novel",
+    "unprecedented",
+    "definitive",
+    "the first",
+    "no study",
+    "never before",
+    "for the first time",
+    "proves",
+)
+
 
 def _concept_present(text: str, concept: str) -> bool:
     return concept.lower() in text.lower()
+
+
+def _parens_balanced(expr: str) -> bool:
+    depth = 0
+    for ch in expr:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _sweeping_claim(text: str) -> bool:
+    t = text.lower()
+    return any(term in t for term in _SWEEPING_CLAIM_TERMS)
+
+
+def _refs(payload: dict[str, Any], field: str) -> list[str]:
+    value = payload.get(field)
+    if isinstance(value, list):
+        return [str(v) for v in value if v]
+    return [str(value)] if value else []
+
+
+# ---------------------------------------------------------------------------
+# Phase 7D.3B: task-specific diagnostics (pure, deterministic)
+# ---------------------------------------------------------------------------
+
+
+def gap_diagnostics(
+    gaps: list[dict[str, Any]],
+    *,
+    produced_ids: set[str],
+    allowed_gap_types: set[str],
+) -> dict[str, int]:
+    diag: dict[str, int] = {
+        "hallucinated_synthesis_evidence_refs": 0,
+        "unsupported_gap": 0,
+        "incorrect_gap_type": 0,
+        "sweeping_novelty_claim": 0,
+        "support_count_mismatch": 0,
+        "structured_output_failure": 0,
+    }
+    if not gaps:
+        diag["structured_output_failure"] += 1
+        return diag
+    for gap in gaps:
+        unsupported = sum(
+            1
+            for f in (
+                "supporting_synthesis_statement_ids",
+                "supporting_evidence_ids",
+                "contradiction_statement_ids",
+                "relevant_paper_identity_ids",
+            )
+            for rid in _refs(gap, f)
+            if rid not in produced_ids
+        )
+        diag["hallucinated_synthesis_evidence_refs"] += unsupported
+        anchored = any(
+            _refs(gap, f)
+            for f in (
+                "supporting_synthesis_statement_ids",
+                "supporting_evidence_ids",
+                "contradiction_statement_ids",
+                "relevant_paper_identity_ids",
+            )
+        )
+        if not anchored:
+            diag["unsupported_gap"] += 1
+        gap_type = str(gap.get("gap_type") or "")
+        if allowed_gap_types and gap_type not in allowed_gap_types:
+            diag["incorrect_gap_type"] += 1
+        text = f"{gap.get('title') or ''} {gap.get('description') or ''}"
+        if _sweeping_claim(text):
+            diag["sweeping_novelty_claim"] += 1
+        ev_ids = _refs(gap, "supporting_evidence_ids")
+        paper_ids = _refs(gap, "relevant_paper_identity_ids")
+        declared_evidence = gap.get("supporting_evidence_items")
+        declared_papers = gap.get("supporting_papers")
+        if (declared_evidence is not None and int(declared_evidence) != len(ev_ids)) or (
+            declared_papers is not None and int(declared_papers) != len(paper_ids)
+        ):
+            diag["support_count_mismatch"] += 1
+    return diag
+
+
+def mechanism_diagnostics(
+    candidates: list[dict[str, Any]],
+    *,
+    produced_ids: set[str],
+    gaps: list[dict[str, Any]],
+) -> dict[str, int]:
+    diag: dict[str, int] = {
+        "invalid_literature_support": 0,
+        "knowledge_basis_misclassification": 0,
+        "unsupported_source_ids": 0,
+        "weak_gap_alignment": 0,
+        "missing_actor_incentive": 0,
+        "structurally_invalid_candidate": 0,
+    }
+    if not candidates:
+        diag["structurally_invalid_candidate"] += 1
+        return diag
+    for m in candidates:
+        support = _refs(m, "literature_support_ids")
+        unsupported = [rid for rid in support if rid not in produced_ids]
+        if support and not unsupported:
+            pass
+        if unsupported:
+            diag["invalid_literature_support"] += 1
+            diag["unsupported_source_ids"] += len(unsupported)
+        for element in m.get("grounding") or []:
+            basis = str(element.get("knowledge_basis") or element.get("basis") or "")
+            if basis and basis not in _KNOWLEDGE_BASIS:
+                diag["knowledge_basis_misclassification"] += 1
+        if not _refs(m, "literature_support_ids"):
+            diag["weak_gap_alignment"] += 1
+        if gaps and not unsupported:
+            gap_title = str(gaps[0].get("title") or "")
+            terms = [
+                w for w in gap_title.lower().replace(":", " ").split() if len(w) > 3 and w.isalpha()
+            ]
+            mtext = (
+                f"{m.get('name') or ''} {m.get('description') or ''} "
+                f"{m.get('causal_logic') or ''}".lower()
+            )
+            if terms and not any(t in mtext for t in terms):
+                diag["weak_gap_alignment"] += 1
+        if not (m.get("actors") or []) or not (m.get("incentives") or []):
+            diag["missing_actor_incentive"] += 1
+        for field in ("name", "description", "causal_logic"):
+            if not str(m.get(field) or "").strip():
+                diag["structurally_invalid_candidate"] += 1
+    return diag
+
+
+def model_specification_diagnostics(
+    models: list[dict[str, Any]],
+    *,
+    produced_ids: set[str],
+) -> dict[str, int]:
+    diag: dict[str, int] = {
+        "undefined_symbols": 0,
+        "duplicate_symbols": 0,
+        "invalid_ownership": 0,
+        "timing_inconsistency": 0,
+        "information_structure_inconsistency": 0,
+        "unsupported_assumption_grounding": 0,
+        "missing_payoff": 0,
+        "malformed_mathematical_expression": 0,
+    }
+    if not models:
+        diag["malformed_mathematical_expression"] += 1
+        return diag
+    for model in models:
+        actors = [
+            str(a.get("actor_id") or a.get("id") or a.get("name") or "")
+            for a in model.get("actors") or []
+        ]
+        actor_ids = {a for a in actors if a}
+        variables = list(model.get("variables") or [])
+        parameters = list(model.get("parameters") or [])
+        var_symbols = {str(v.get("symbol") or "") for v in variables if v.get("symbol")}
+        param_symbols = {str(p.get("symbol") or "") for p in parameters if p.get("symbol")}
+        all_symbols = var_symbols | param_symbols
+        seen: set[str] = set()
+        for v in variables:
+            sym = str(v.get("symbol") or "")
+            if sym:
+                if sym in seen:
+                    diag["duplicate_symbols"] += 1
+                seen.add(sym)
+        for p in parameters:
+            sym = str(p.get("symbol") or "")
+            if sym:
+                if sym in seen:
+                    diag["duplicate_symbols"] += 1
+                seen.add(sym)
+        for v in variables:
+            owner = str(v.get("owner_actor_id") or "")
+            if owner and owner not in actor_ids:
+                diag["invalid_ownership"] += 1
+        for stage in model.get("timing") or []:
+            for aid in stage.get("actor_ids") or []:
+                if aid and aid != "nature" and aid not in actor_ids:
+                    diag["timing_inconsistency"] += 1
+        info = model.get("information_structure") or {}
+        for item in info.get("items") or []:
+            for sym in item.get("variable_symbols") or []:
+                if sym and sym not in all_symbols:
+                    diag["information_structure_inconsistency"] += 1
+        for unc in info.get("uncertainty") or []:
+            sym = str(unc.get("variable_symbol") or "")
+            if sym and sym not in all_symbols:
+                diag["information_structure_inconsistency"] += 1
+        for assumption in model.get("assumptions") or []:
+            basis = str(assumption.get("knowledge_basis") or "")
+            sources = _refs(assumption, "source_ids")
+            if (basis == "literature_supported" or not basis) and sources:
+                unsupported = [rid for rid in sources if rid not in produced_ids]
+                diag["unsupported_assumption_grounding"] += len(unsupported)
+        payoff_actors = {str(p.get("actor_id") or "") for p in model.get("payoffs") or []}
+        for aid in actor_ids:
+            if aid not in payoff_actors:
+                diag["missing_payoff"] += 1
+        for payoff in model.get("payoffs") or []:
+            expr = payoff.get("expression") or {}
+            expression = str(expr.get("expression") or "")
+            symbols_used = _refs(expr, "symbols_used")
+            if expression and not _parens_balanced(expression):
+                diag["malformed_mathematical_expression"] += 1
+            for sym in symbols_used:
+                if sym and sym not in all_symbols:
+                    diag["undefined_symbols"] += 1
+    return diag
+
+
+def proposition_diagnostics(
+    props: list[dict[str, Any]],
+    *,
+    produced_ids: set[str],
+    verifications: list[dict[str, Any]],
+) -> dict[str, int]:
+    diag: dict[str, int] = {
+        "hallucinated_static_id": 0,
+        "incorrect_expected_sign": 0,
+        "missing_conditions": 0,
+        "invalid_equality": 0,
+        "unsupported_proposition": 0,
+        "structured_output_failure": 0,
+    }
+    if not props:
+        diag["structured_output_failure"] += 1
+        return diag
+    allowed_signs = {"positive", "negative", "zero"}
+    for p in props:
+        unsupported = sum(
+            1
+            for f in ("model_id", "equilibrium_candidate_id", "comparative_statics_analysis_id")
+            for rid in _refs(p, f)
+            if rid not in produced_ids
+        )
+        for rid in _refs(p, "supporting_static_ids"):
+            if rid not in produced_ids:
+                unsupported += 1
+        diag["hallucinated_static_id"] += unsupported
+        sign = str(p.get("expected_sign") or "")
+        if sign and sign not in allowed_signs:
+            diag["incorrect_expected_sign"] += 1
+        if not (p.get("conditions") or []):
+            diag["missing_conditions"] += 1
+        math = p.get("mathematical_form") or {}
+        expression = str(math.get("expression") or "")
+        if expression and not _parens_balanced(expression):
+            diag["invalid_equality"] += 1
+    if not verifications or not all(str(v.get("status") or "") == "passed" for v in verifications):
+        diag["unsupported_proposition"] += 1
+    return diag
 
 
 class LiveQualityReasoningEvaluator:
@@ -76,6 +362,7 @@ class LiveQualityReasoningEvaluator:
         critical_grounding = 0
         verifications: list[dict[str, Any]] = []
         downstream_ok = True
+        task_diagnostics: dict[str, int] = {}
 
         def _check_refs(payload: dict[str, Any], artifact_type: str, label: str) -> None:
             nonlocal total_refs, unsupported_refs, grounding_ok_count, critical_grounding
@@ -159,6 +446,9 @@ class LiveQualityReasoningEvaluator:
             all_text = " ".join(
                 f"{g.get('title') or ''} {g.get('description') or ''}" for g in gaps
             )
+            task_diagnostics = gap_diagnostics(
+                gaps, produced_ids=produced_ids, allowed_gap_types=allowed_gap_types
+            )
 
         elif task == "mechanism_development":
             candidates = by_type.get("mechanism_candidate") or []
@@ -173,6 +463,9 @@ class LiveQualityReasoningEvaluator:
             all_text = " ".join(
                 f"{m.get('name') or ''} {m.get('description') or ''} {m.get('causal_logic') or ''}"
                 for m in candidates
+            )
+            task_diagnostics = mechanism_diagnostics(
+                candidates, produced_ids=produced_ids, gaps=by_type.get("research_gap") or []
             )
 
         elif task == "analytical_model_specification":
@@ -189,6 +482,7 @@ class LiveQualityReasoningEvaluator:
                 if not str(m.get("description") or "").strip():
                     failures.append(f"model[{idx}]: empty description (required field)")
             all_text = " ".join(str(m.get("description") or "") for m in models)
+            task_diagnostics = model_specification_diagnostics(models, produced_ids=produced_ids)
 
         elif task == "proposition_generation":
             props = by_type.get("proposition") or []
@@ -198,7 +492,15 @@ class LiveQualityReasoningEvaluator:
                 failures.append("proposition_generation: no proposition produced")
             downstream_ok = True
             if verifications:
-                downstream_ok = all(str(v.get("status") or "") == "passed" for v in verifications)
+                # Genuine defect repair (Phase 7D.3B): the production verifier
+                # writes PropositionVerification.status in the enum vocabulary
+                # (verified/conditionally_verified/failed), never the literal
+                # "passed". A verified verification is a pass; requiring the
+                # literal "passed" made proposition_generation fail for every
+                # correct model.
+                downstream_ok = all(
+                    str(v.get("status") or "") in ("passed", "verified") for v in verifications
+                )
                 if not downstream_ok:
                     critical_grounding += 1
                     failures.append(
@@ -211,6 +513,9 @@ class LiveQualityReasoningEvaluator:
                 if not str(p.get("statement") or "").strip():
                     failures.append(f"proposition[{idx}]: empty statement (required field)")
             all_text = " ".join(str(p.get("statement") or "") for p in props)
+            task_diagnostics = proposition_diagnostics(
+                props, produced_ids=produced_ids, verifications=verifications
+            )
         else:
             return EvaluatorResult(
                 case_id=ctx.case.id,
@@ -319,6 +624,7 @@ class LiveQualityReasoningEvaluator:
                 "task": task,
                 "unsupported_references": unsupported_refs,
                 "critical_grounding_failures": critical_grounding,
+                "task_diagnostics": task_diagnostics,
                 "metrics": metrics,
                 "dimension_scores": {
                     "structured_output_success": (

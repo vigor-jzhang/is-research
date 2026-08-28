@@ -5957,6 +5957,7 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.routing_readiness",
         "evaluator.model_qualification",
         "evaluator.task_model_qualification",
+        "evaluator.evaluator_sanity",
         "storage.blobs_filesystem",
     ):
         if pid not in cfg.plugins:
@@ -6862,10 +6863,72 @@ def evaluation_calibration(
     asyncio.run(_run())
 
 
+@routing_app.command("preflight")
+def routing_preflight(
+    role: Annotated[str | None, typer.Option(help="Filter by role (default: all)")] = None,
+    model: Annotated[str | None, typer.Option(help="Probe one candidate model slug only")] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Run the lightweight provider/model capability preflight (Phase 7D.3B).
+
+    Probes candidates for reachability, structured JSON output, required
+    context size, and the timeout/retry path BEFORE an expensive qualification
+    campaign. Classifies available | temporarily_unavailable |
+    capability_mismatch | provider_error. A provider-unavailable model is never
+    interpreted as academically incapable and is never qualified."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("live_quality.default")
+            preflights = await svc.preflight(role=role, model=model)
+            if not preflights:
+                console.print("  (no preflight results; no candidates configured)")
+                return
+            for p in preflights:
+                color = {
+                    "available": "green",
+                    "temporarily_unavailable": "yellow",
+                    "capability_mismatch": "red",
+                    "provider_error": "red",
+                }.get(p.status.value, "yellow")
+                console.print(
+                    f"[{color}]{p.candidate_id}[/{color}] {p.status.value} "
+                    f"resolved={p.resolved_model} ctx={p.required_context_chars}"
+                )
+                for check in p.checks:
+                    mark = "[green]PASS[/green]" if check.passed else "[red]FAIL[/red]"
+                    console.print(f"  {mark} {check.kind} {check.detail}")
+                if p.error:
+                    console.print(f"  [yellow]error: {p.error}[/yellow]")
+
+    asyncio.run(_run())
+
+
 @routing_app.command("qualify")
 def routing_qualify(
     role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
     repetitions: Annotated[int, typer.Option(help="Runs per candidate (>=3 recommended)")] = 3,
+    tasks: Annotated[
+        str | None,
+        typer.Option(
+            help="Comma-separated canonical tasks to target via config-driven "
+            "per-task candidate pools (Phase 7D.3B); default: the role list"
+        ),
+    ] = None,
+    candidates: Annotated[
+        str | None,
+        typer.Option(
+            help="Comma-separated candidate slugs (preflight-passing only); "
+            "overrides the config-driven pools (Phase 7D.3B)"
+        ),
+    ] = None,
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -6885,7 +6948,16 @@ def routing_qualify(
         runtime = build_runtime(cfg)
         async with runtime:
             svc = runtime.services.require("live_quality.default")
-            campaign = await svc.run_qualification_campaign(role, repetitions=repetitions)
+            task_list = [t.strip() for t in tasks.split(",") if t.strip()] if tasks else None
+            candidate_list = (
+                [c.strip() for c in candidates.split(",") if c.strip()] if candidates else None
+            )
+            campaign = await svc.run_qualification_campaign(
+                role,
+                repetitions=repetitions,
+                tasks=task_list,
+                candidates=candidate_list,
+            )
             summary = campaign.summary
             color = "green" if summary.status == "qualified" else "yellow"
             console.print(
@@ -7103,6 +7175,43 @@ def routing_qualification_tasks(
     asyncio.run(_run())
 
 
+@routing_qualification_app.command("remaining")
+def routing_qualification_remaining(
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Show the RemainingTaskCoverage (Phase 7D.3B).
+
+    For each task that was unqualified at the start of 7D.3B: qualified
+    primary/fallback, qualified/tested/provider-unavailable model counts, and
+    the dominant failure reason (capability vs provider availability)."""
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("live_quality.default")
+            coverage = await svc.remaining_task_coverage()
+            for row in coverage.rows:
+                color = "green" if row.qualified_model_count else "yellow"
+                console.print(
+                    f"[{color}]{row.task}[/{color}] qualified={row.qualified_model_count} "
+                    f"primary={row.qualified_primary} fallback={row.qualified_fallback}"
+                )
+                console.print(
+                    f"  tested={row.tested_model_count} "
+                    f"provider_unavailable={row.provider_unavailable_count} "
+                    f"dominant_reason={row.dominant_failure_reason}"
+                )
+            console.print(f"  coverage artifact: {coverage.id}")
+
+    asyncio.run(_run())
+
+
 @routing_app.command("qualify-task")
 def routing_qualify_task(
     role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
@@ -7149,6 +7258,8 @@ def routing_qualify_task(
                     console.print(f"    [yellow]{reason}[/yellow]")
                 if row.evidence_diagnostics:
                     console.print(f"    evidence diagnostics: {row.evidence_diagnostics}")
+                if row.task_diagnostics:
+                    console.print(f"    task diagnostics: {row.task_diagnostics}")
 
     asyncio.run(_run())
 

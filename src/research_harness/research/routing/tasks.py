@@ -85,6 +85,16 @@ def tasks_for_role(role: str) -> list[str]:
     return list(TASKS_BY_ROLE.get(role, []))
 
 
+# Tasks already qualified for at least one model as of Phase 7D.3A (frozen);
+# Phase 7D.3B targets the remaining tasks and never re-runs these unnecessarily.
+FROZEN_QUALIFIED_TASKS: frozenset[str] = frozenset({"evidence_extraction", "synthesis"})
+
+
+def remaining_tasks_for_role(role: str) -> list[str]:
+    """Canonical tasks for a role that are NOT yet qualified (Phase 7D.3B)."""
+    return [t for t in tasks_for_role(role) if t not in FROZEN_QUALIFIED_TASKS]
+
+
 def case_tasks_for_role(role: str) -> list[str]:
     """Case ids that belong to a role's canonical tasks."""
     canonical = set(tasks_for_role(role))

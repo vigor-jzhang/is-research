@@ -75,6 +75,7 @@ plugins:
   - evaluator.routing_readiness
   - evaluator.model_qualification
   - evaluator.task_model_qualification
+  - evaluator.evaluator_sanity
   - documents.locator.metadata
   - documents.locator.unpaywall
   - documents.fetcher.http
@@ -253,6 +254,10 @@ evaluation:
 
 live_quality:
   repetitions: 3
+  preflight:
+    timeout_seconds: 120.0
+    retries: 2
+    probe_max_tokens: 200
   candidates:
     reasoning:
       - "nvidia/nemotron-3-ultra-550b-a55b:free"
@@ -271,6 +276,70 @@ live_quality:
       - "anthropic/claude-3.7-sonnet"
       - "google/gemini-2.5-pro"
     fast:
+      - "deepseek/deepseek-v4-flash-0731"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "mistralai/mistral-small-3.1-24b-instruct:free"
+      - "google/gemini-2.5-flash:free"
+      - "openai/gpt-4o"
+  candidates_per_task:
+    gap_analysis:
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "deepseek/deepseek-v4-flash-0731"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "mistralai/mistral-small-3.1-24b-instruct:free"
+      - "google/gemini-2.5-flash:free"
+      - "anthropic/claude-3.7-sonnet"
+      - "openai/gpt-4o"
+      - "google/gemini-2.5-pro"
+    mechanism_generation:
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "deepseek/deepseek-v4-flash-0731"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "mistralai/mistral-small-3.1-24b-instruct:free"
+      - "google/gemini-2.5-flash:free"
+      - "anthropic/claude-3.7-sonnet"
+      - "openai/gpt-4o"
+      - "google/gemini-2.5-pro"
+    model_specification:
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "deepseek/deepseek-v4-flash-0731"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "mistralai/mistral-small-3.1-24b-instruct:free"
+      - "google/gemini-2.5-flash:free"
+      - "anthropic/claude-3.7-sonnet"
+      - "openai/gpt-4o"
+      - "google/gemini-2.5-pro"
+    proposition_generation:
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "deepseek/deepseek-v4-flash-0731"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "mistralai/mistral-small-3.1-24b-instruct:free"
+      - "google/gemini-2.5-flash:free"
+      - "anthropic/claude-3.7-sonnet"
+      - "openai/gpt-4o"
+      - "google/gemini-2.5-pro"
+    mechanism_critique:
+      - "google/gemini-2.5-pro"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "anthropic/claude-3.7-sonnet"
+    model_specification_critique:
+      - "google/gemini-2.5-pro"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "anthropic/claude-3.7-sonnet"
+    proposition_critique:
+      - "google/gemini-2.5-pro"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "anthropic/claude-3.7-sonnet"
+    results_critique:
+      - "google/gemini-2.5-pro"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "anthropic/claude-3.7-sonnet"
+    manuscript_critique:
+      - "google/gemini-2.5-pro"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "anthropic/claude-3.7-sonnet"
+    screening:
       - "deepseek/deepseek-v4-flash-0731"
       - "nvidia/nemotron-3-ultra-550b-a55b:free"
       - "meta-llama/llama-3.3-70b-instruct:free"

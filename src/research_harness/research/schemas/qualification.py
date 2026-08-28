@@ -33,6 +33,69 @@ class QualificationRejectionKind(str, Enum):
     capability_mismatch = "capability_mismatch"
 
 
+class PreflightStatus(str, Enum):
+    """Provider/model preflight classification (Phase 7D.3B).
+
+    A provider-unavailable model is never interpreted as academically
+    incapable and is never qualified from a failed probe."""
+
+    available = "available"
+    temporarily_unavailable = "temporarily_unavailable"
+    capability_mismatch = "capability_mismatch"
+    provider_error = "provider_error"
+
+
+class PreflightCheckKind(str, Enum):
+    reachability = "reachability"
+    structured_output = "structured_output"
+    context_size = "context_size"
+    timeout_retry = "timeout_retry"
+
+
+class ModelPreflightCheck(BaseModel):
+    """One capability-probe result for a candidate model (Phase 7D.3B)."""
+
+    kind: str
+    passed: bool
+    detail: str = ""
+    latency_ms: float | None = None
+    resolved_model: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class ModelPreflight(BaseModel):
+    """Lightweight provider/model capability preflight (Phase 7D.3B).
+
+    Runs BEFORE a candidate enters an expensive qualification campaign so
+    provider/gateway availability failures stay distinct from model-quality
+    failures. A model that fails preflight is never qualified; a
+    temporarily_unavailable model is not interpreted as academically
+    incapable."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    role: str | None = None
+    candidate_id: str
+    provider: str
+    requested_model: str
+    resolved_model: str | None = None
+    status: PreflightStatus
+    checks: list[ModelPreflightCheck] = Field(default_factory=list)
+    required_context_chars: int = 0
+    timeout_seconds: float = 0.0
+    retries: int = 0
+    error: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+    @property
+    def reachable(self) -> bool:
+        return any(
+            c.kind == PreflightCheckKind.reachability.value and c.passed for c in self.checks
+        )
+
+    model_config = {"extra": "forbid"}
+
+
 class QualificationCandidateResult(BaseModel):
     """One candidate's live-quality result + qualification verdict (Phase 7D.1/7D.2)."""
 
@@ -156,6 +219,11 @@ class TaskQualificationResult(BaseModel):
     qualified: bool = False
     rejection_reasons: list[str] = Field(default_factory=list)
     evidence_diagnostics: dict[str, int] = Field(default_factory=dict)
+    task_diagnostics: dict[str, int] = Field(
+        default_factory=dict,
+        description="Task-specific failure diagnostics (Phase 7D.3B); diagnostic "
+        "only, never part of the pass criteria",
+    )
     live_quality_run_id: str | None = None
 
     model_config = {"extra": "forbid"}
@@ -247,5 +315,37 @@ class QualificationCampaign(BaseModel):
     started_at: datetime = Field(default_factory=_utcnow)
     completed_at: datetime = Field(default_factory=_utcnow)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
+class RemainingTaskCoverageRow(BaseModel):
+    """One remaining-task coverage row (Phase 7D.3B).
+
+    Distinguishes model capability from provider availability so remaining
+    gaps can be attributed honestly: `provider_unavailable_count` counts
+    candidates whose preflight classified them unavailable/provider-error
+    (never interpreted as academically incapable)."""
+
+    task: str
+    qualified_primary: str | None = None
+    qualified_fallback: str | None = None
+    qualified_model_count: int = 0
+    tested_model_count: int = 0
+    provider_unavailable_count: int = 0
+    dominant_failure_reason: str = ""
+
+    model_config = {"extra": "forbid"}
+
+
+class RemainingTaskCoverage(BaseModel):
+    """Coverage of the tasks that were unqualified at the start of Phase 7D.3B.
+
+    `provider_unavailable` models are never counted as qualified and their
+    failures are attributed to availability, not capability."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    rows: list[RemainingTaskCoverageRow] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=_utcnow)
 
     model_config = {"extra": "forbid"}

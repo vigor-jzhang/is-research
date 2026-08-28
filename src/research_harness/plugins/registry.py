@@ -571,6 +571,14 @@ def _create_evaluator_task_model_qualification() -> Plugin:
     return TaskModelQualificationEvaluatorPlugin()
 
 
+def _create_evaluator_evaluator_sanity() -> Plugin:
+    from research_harness.plugins.research.evaluator_sanity.plugin import (
+        EvaluatorSanityEvaluatorPlugin,
+    )
+
+    return EvaluatorSanityEvaluatorPlugin()
+
+
 def _create_live_quality() -> Plugin:
     from research_harness.plugins.research.evaluation_live_quality.plugin import (
         LiveQualityPlugin,
@@ -691,6 +699,7 @@ BUILTIN_PLUGINS: dict[str, Callable[[], Plugin]] = {
     "evaluator.routing_readiness": _create_evaluator_routing_readiness,
     "evaluator.model_qualification": _create_evaluator_model_qualification,
     "evaluator.task_model_qualification": _create_evaluator_task_model_qualification,
+    "evaluator.evaluator_sanity": _create_evaluator_evaluator_sanity,
     "routing.policy_router": _create_policy_router,
     "evaluation.live_quality": _create_live_quality,
     "storage.blobs_filesystem": _create_blobs_filesystem,

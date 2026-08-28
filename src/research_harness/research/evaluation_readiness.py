@@ -63,6 +63,7 @@ def _deterministic_evaluators() -> set[str]:
         "evaluator.routing_readiness",
         "evaluator.model_qualification",
         "evaluator.task_model_qualification",
+        "evaluator.evaluator_sanity",
     }
 
 
@@ -156,15 +157,18 @@ def readiness_report() -> ReadinessResult:
     elif gaps_exist:
         verdict = "ready_with_gaps"
         narrative = (
-            "Deterministic gating is complete across all 30 benchmark families "
+            "Deterministic gating is complete across all 31 benchmark families "
             "(incl. evidence enrichment, model routing, live-quality reasoning/"
             "critic/fast, production-routing readiness, model qualification, "
-            "task-specific qualification, and the 7D.2 calibration audit) and "
+            "task-specific qualification, the 7D.2 calibration audit, and the "
+            "7D.3B evaluator-sanity audit) and "
             "the e2e pipeline passes. Live-quality benchmarks (7D.0) provide "
             "real-model evidence; 7D.2 adds structured failure attribution, "
             "per-task diagnostics, stability, and a production-qualification "
             "matrix; 7D.3 adds task-specific qualification (same thresholds) and "
-            "the TaskQualificationMatrix. The readiness/qualification gates "
+            "the TaskQualificationMatrix; 7D.3B adds provider preflight, "
+            "task-specific diagnostics, RemainingTaskCoverage, and the "
+            "evaluator-sanity audit. The readiness/qualification gates "
             "require live_quality_evidence for production routing. Residual gaps "
             "are non-blocking: live provider connectors/publisher endpoints, "
             "advisory LLM-quality judging, task-aware routing, and automatic "

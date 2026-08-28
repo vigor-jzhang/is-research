@@ -111,6 +111,13 @@ class LiveQualityTaskPerformance(BaseModel):
         default_factory=dict,
         description="evidence-extraction failure diagnostics (Phase 7D.3)",
     )
+    task_diagnostics: dict[str, int] = Field(
+        default_factory=dict,
+        description="Task-specific failure diagnostics, e.g. gap/mechanism/"
+        "model-specification/proposition buckets, critic defect metrics, and "
+        "screening per-class accuracy (Phase 7D.3B). Diagnostic only — never "
+        "changes the benchmark pass criteria.",
+    )
 
     model_config = {"extra": "forbid"}
 

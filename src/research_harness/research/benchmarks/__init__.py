@@ -9376,6 +9376,486 @@ LIVE_QUALITY_FAST_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+def _lq_sanity_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    task: str,
+    produced: dict[str, list[dict[str, Any]]],
+    reference: dict[str, Any],
+) -> BenchmarkCaseDefinition:
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input={"workflow": "evaluator_sanity", "task": task, "produced": produced},
+        reference={"task": task, **reference},
+        evaluation_dimensions=["evaluator_sanity"],
+        tags=["live_quality", "evaluator_sanity", "offline"],
+    )
+
+
+LIVE_QUALITY_EVALUATOR_SANITY_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="live-quality-evaluator-sanity-v1",
+    version=1,
+    name="Live Quality — Evaluator Sanity (Phase 7D.3B)",
+    description=(
+        "Offline audit of the live-quality evaluators before qualification "
+        "results are trusted (Phase 7D.3A found a genuine evaluator bug). Each "
+        "case feeds a synthetic model-shaped response to the REAL evaluator and "
+        "verifies: known-good responses pass, known-bad responses fail, scalar "
+        "reference ids vs list reference ids are handled correctly, denominators "
+        "include all legitimately exercised cases, and provider errors (no "
+        "produced artifacts) are never counted as successes. Never relaxes the "
+        "expected quality."
+    ),
+    category="live_quality",
+    config={"evaluators": ["evaluator.evaluator_sanity"]},
+    cases=[
+        _lq_sanity_case(
+            "lq-sanity-gap-known-good",
+            "gap analysis known-good response passes",
+            "A gap grounded in a produced synthesis statement with a valid gap "
+            "type passes the reasoning evaluator.",
+            task="gap_analysis",
+            produced={
+                "evidence_item": [
+                    {
+                        "source_artifact_id": "lq-paper",
+                        "statement": "Algorithmic pricing affects consumer welfare.",
+                        "category": "result",
+                    }
+                ],
+                "synthesis_statement": [
+                    {
+                        "statement": "Algorithmic pricing affects consumer welfare in online markets.",
+                        "type": "consensus",
+                        "supporting_evidence_ids": ["{evidence_item#0}"],
+                        "conflicting_evidence_ids": [],
+                        "supporting_paper_identity_ids": [],
+                        "conflicting_paper_identity_ids": [],
+                    }
+                ],
+                "research_gap": [
+                    {
+                        "title": "Mechanism linking algorithmic pricing to welfare",
+                        "gap_type": "mechanism_gap",
+                        "description": "The mechanism by which algorithmic pricing reduces welfare is unclear.",
+                        "supporting_synthesis_statement_ids": ["{synthesis_statement#0}"],
+                        "supporting_evidence_ids": [],
+                        "contradiction_statement_ids": [],
+                        "relevant_paper_identity_ids": [],
+                        "supporting_papers": 0,
+                        "supporting_evidence_items": 0,
+                    }
+                ],
+            },
+            reference={
+                "allowed_gap_types": [
+                    "mechanism_gap",
+                    "empirical_gap",
+                    "theoretical_gap",
+                    "context_gap",
+                ],
+                "required_concepts": ["algorithmic pricing"],
+                "expected_evaluator_status": "passed",
+                "expect_task_diagnostics": [
+                    "hallucinated_synthesis_evidence_refs",
+                    "unsupported_gap",
+                    "incorrect_gap_type",
+                    "sweeping_novelty_claim",
+                    "support_count_mismatch",
+                    "structured_output_failure",
+                ],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-gap-known-bad",
+            "gap analysis known-bad response fails",
+            "A gap referencing a non-produced synthesis statement id and an "
+            "invalid gap type fails the reasoning evaluator.",
+            task="gap_analysis",
+            produced={
+                "research_gap": [
+                    {
+                        "title": "Mechanism linking algorithmic pricing to welfare",
+                        "gap_type": "methodological_gap",
+                        "description": "The mechanism is unclear.",
+                        "supporting_synthesis_statement_ids": ["lq-nonexistent"],
+                        "supporting_evidence_ids": [],
+                        "contradiction_statement_ids": [],
+                        "relevant_paper_identity_ids": [],
+                        "supporting_papers": 0,
+                        "supporting_evidence_items": 0,
+                    }
+                ],
+            },
+            reference={
+                "allowed_gap_types": [
+                    "mechanism_gap",
+                    "empirical_gap",
+                    "theoretical_gap",
+                    "context_gap",
+                ],
+                "expected_evaluator_status": "failed",
+                "expect_task_diagnostics_positive": ["hallucinated_synthesis_evidence_refs"],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-evidence-scalar-ref-good",
+            "evidence scalar reference id handled correctly",
+            "An evidence item whose source_artifact_id is a single scalar id "
+            "referencing a produced document passes (regression for the 7D.3A "
+            "char-by-char scalar bug).",
+            task="evidence_extraction",
+            produced={
+                "paper_record": [
+                    {"title": "Algorithmic Pricing and Consumer Welfare in Online Markets"}
+                ],
+                "evidence_item": [
+                    {
+                        "source_artifact_id": "{paper_record#0}",
+                        "locator": {"pages": [1]},
+                        "statement": "Algorithmic pricing can reduce consumer welfare.",
+                        "category": "result",
+                    }
+                ],
+            },
+            reference={
+                "required_concepts": ["algorithmic pricing", "consumer welfare"],
+                "expected_evaluator_status": "passed",
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-evidence-scalar-ref-bad",
+            "evidence scalar reference id unsupported fails",
+            "An evidence item whose scalar source_artifact_id points to a "
+            "non-produced id fails the reasoning evaluator (genuine unsupported "
+            "scalar reference).",
+            task="evidence_extraction",
+            produced={
+                "evidence_item": [
+                    {
+                        "source_artifact_id": "lq-ghost-doc",
+                        "locator": {"pages": [1]},
+                        "statement": "Algorithmic pricing can reduce consumer welfare.",
+                        "category": "result",
+                    }
+                ],
+            },
+            reference={
+                "expected_evaluator_status": "failed",
+                "expect_task_diagnostics_positive": [],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-synthesis-list-ref-bad",
+            "synthesis list reference id unsupported fails",
+            "A synthesis statement referencing a non-produced evidence id in a "
+            "LIST field fails the reasoning evaluator.",
+            task="literature_synthesis",
+            produced={
+                "synthesis_statement": [
+                    {
+                        "statement": "Algorithmic pricing reduces consumer welfare.",
+                        "type": "consensus",
+                        "supporting_evidence_ids": ["lq-ghost-evidence"],
+                        "conflicting_evidence_ids": [],
+                        "supporting_paper_identity_ids": [],
+                        "conflicting_paper_identity_ids": [],
+                    }
+                ],
+            },
+            reference={
+                "required_concepts": ["algorithmic pricing", "welfare"],
+                "expected_evaluator_status": "failed",
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-proposition-known-good",
+            "proposition generation known-good response passes",
+            "A proposition grounded in a produced model with a passing "
+            "deterministic verification passes the reasoning evaluator.",
+            task="proposition_generation",
+            produced={
+                "formal_analytical_model": [
+                    {
+                        "selected_mechanism_id": "lq-mech",
+                        "title": "Model",
+                        "description": "A model of surplus extraction.",
+                    }
+                ],
+                "equilibrium_candidate": [
+                    {
+                        "model_id": "{formal_analytical_model#0}",
+                        "expressions": [],
+                        "decision_variables": ["p"],
+                    }
+                ],
+                "comparative_statics_analysis": [
+                    {
+                        "model_id": "{formal_analytical_model#0}",
+                        "equilibrium_candidate_id": "{equilibrium_candidate#0}",
+                        "static_ids": [],
+                    }
+                ],
+                "proposition": [
+                    {
+                        "model_id": "{formal_analytical_model#0}",
+                        "equilibrium_candidate_id": "{equilibrium_candidate#0}",
+                        "comparative_statics_analysis_id": "{comparative_statics_analysis#0}",
+                        "statement": "Algorithmic pricing reduces consumer welfare.",
+                        "claim_type": "monotonicity",
+                        "conditions": ["demand uncertainty"],
+                        "expected_sign": "negative",
+                        "supporting_static_ids": [],
+                    }
+                ],
+                "proposition_verification": [
+                    {
+                        "proposition_id": "lq-prop",
+                        "model_id": "{formal_analytical_model#0}",
+                        "status": "verified",
+                    }
+                ],
+            },
+            reference={
+                "required_concepts": ["algorithmic pricing"],
+                "expected_evaluator_status": "passed",
+                "expect_task_diagnostics": [
+                    "hallucinated_static_id",
+                    "incorrect_expected_sign",
+                    "missing_conditions",
+                    "invalid_equality",
+                    "unsupported_proposition",
+                    "structured_output_failure",
+                ],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-proposition-provider-not-success",
+            "provider error (no artifacts) is never a success",
+            "When the provider returns nothing, the proposition evaluator must "
+            "FAIL — a provider error can never count as a success.",
+            task="proposition_generation",
+            produced={},
+            reference={
+                "expected_evaluator_status": "failed",
+                "expect_provider_not_success": True,
+                "expect_task_diagnostics_positive": ["structured_output_failure"],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-mechanism-known-bad",
+            "mechanism generation hallucinated source ids fail",
+            "A mechanism referencing a non-produced literature support id fails "
+            "the reasoning evaluator and its diagnostics are positive.",
+            task="mechanism_development",
+            produced={
+                "mechanism_candidate": [
+                    {
+                        "gap_id": "lq-gap",
+                        "name": "Surplus extraction",
+                        "description": "Sellers price discriminate using demand data.",
+                        "causal_logic": "Data enables finer price discrimination.",
+                        "actors": ["seller"],
+                        "incentives": ["profit"],
+                        "literature_support_ids": ["lq-ghost-statement"],
+                    }
+                ],
+            },
+            reference={
+                "required_concepts": ["algorithmic pricing"],
+                "expected_evaluator_status": "failed",
+                "expect_task_diagnostics_positive": [
+                    "invalid_literature_support",
+                    "unsupported_source_ids",
+                ],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-model-known-bad",
+            "model specification undefined symbol fails",
+            "A payoff expression referencing an undefined symbol fails the "
+            "reasoning evaluator with positive diagnostics.",
+            task="analytical_model_specification",
+            produced={
+                "formal_analytical_model": [
+                    {
+                        "selected_mechanism_id": "lq-mech",
+                        "title": "Model",
+                        "description": "A model of surplus extraction.",
+                        "actors": [{"actor_id": "seller", "name": "Seller", "strategic": True}],
+                        "variables": [
+                            {
+                                "symbol": "p",
+                                "name": "price",
+                                "meaning": "retail price",
+                                "domain": "R_+",
+                                "kind": "decision_variable",
+                                "owner_actor_id": "seller",
+                            }
+                        ],
+                        "parameters": [],
+                        "timing": [
+                            {
+                                "stage_number": 0,
+                                "name": "pricing",
+                                "description": "seller sets price",
+                                "actor_ids": ["seller"],
+                            }
+                        ],
+                        "payoffs": [
+                            {
+                                "actor_id": "seller",
+                                "expression": {"expression": "p * q", "symbols_used": ["p", "q"]},
+                                "decision_variables": ["p"],
+                                "parameters": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+            reference={
+                "expected_evaluator_status": "failed",
+                "expect_task_diagnostics_positive": ["undefined_symbols"],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-critic-known-good",
+            "critic known-good response passes",
+            "A mechanism critique that detects the injected defect with an "
+            "assessment and actionable revisions passes the critic evaluator.",
+            task="mechanism_critique",
+            produced={
+                "mechanism_critique": [
+                    {
+                        "mechanism_candidate_id": "lq-mech",
+                        "issues": [
+                            {
+                                "category": "unclear_causal_direction",
+                                "description": "The causal direction is ambiguous.",
+                                "severity": "high",
+                            }
+                        ],
+                        "overall_assessment": "Needs revision.",
+                        "verdict": "revise",
+                        "revision_recommendations": ["Specify the causal direction."],
+                    }
+                ],
+            },
+            reference={
+                "injected_defects": [{"category": "unclear_causal_direction", "severity": "high"}],
+                "expected_evaluator_status": "passed",
+                "expect_task_diagnostics": [
+                    "defect_recall_missed",
+                    "false_positive_issues",
+                    "severity_mismatch",
+                    "required_category_missed",
+                    "missing_actionable_revision",
+                    "structured_output_failure",
+                ],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-critic-known-bad",
+            "critic known-bad response fails",
+            "A mechanism critique that detects none of the injected defects "
+            "fails the critic evaluator.",
+            task="mechanism_critique",
+            produced={
+                "mechanism_critique": [
+                    {
+                        "mechanism_candidate_id": "lq-mech",
+                        "issues": [],
+                        "overall_assessment": "Looks fine.",
+                        "verdict": "keep",
+                        "revision_recommendations": [],
+                    }
+                ],
+            },
+            reference={
+                "injected_defects": [{"category": "unclear_causal_direction", "severity": "high"}],
+                "expected_evaluator_status": "failed",
+                "expect_task_diagnostics_positive": ["defect_recall_missed"],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-fast-known-good",
+            "screening known-good decisions pass",
+            "Correct include/exclude screening decisions pass the fast evaluator.",
+            task="screening",
+            produced={
+                "paper_record": [{"title": "Algorithmic Pricing and Consumer Welfare"}],
+                "paper_identity": [
+                    {
+                        "member_paper_artifact_ids": ["{paper_record#0}"],
+                        "resolution_method": "exact_identifier",
+                    }
+                ],
+                "screening_decision": [
+                    {
+                        "paper_identity_id": "{paper_identity#0}",
+                        "screening_view_id": "lq-view",
+                        "screening_protocol_id": "lq-protocol",
+                        "decision": "include",
+                        "rationale_summary": "Relevant to algorithmic pricing and welfare.",
+                        "confidence": 0.9,
+                    }
+                ],
+            },
+            reference={
+                "expected_decisions": {"Algorithmic Pricing and Consumer Welfare": "include"},
+                "required_decision_accuracy": 0.8,
+                "expected_evaluator_status": "passed",
+                "expect_task_diagnostics": [
+                    "include_mismatch",
+                    "exclude_mismatch",
+                    "uncertain_mismatch",
+                    "false_exclusion",
+                    "false_inclusion",
+                    "structured_output_failure",
+                    "provider_error",
+                ],
+            },
+        ),
+        _lq_sanity_case(
+            "lq-sanity-fast-known-bad",
+            "screening false exclusion fails",
+            "Excluding a clearly relevant paper is a critical false exclusion "
+            "and fails the fast evaluator.",
+            task="screening",
+            produced={
+                "paper_record": [{"title": "Algorithmic Pricing and Consumer Welfare"}],
+                "paper_identity": [
+                    {
+                        "member_paper_artifact_ids": ["{paper_record#0}"],
+                        "resolution_method": "exact_identifier",
+                    }
+                ],
+                "screening_decision": [
+                    {
+                        "paper_identity_id": "{paper_identity#0}",
+                        "screening_view_id": "lq-view",
+                        "screening_protocol_id": "lq-protocol",
+                        "decision": "exclude",
+                        "rationale_summary": "Relevant to algorithmic pricing and welfare.",
+                        "confidence": 0.9,
+                    }
+                ],
+            },
+            reference={
+                "expected_decisions": {"Algorithmic Pricing and Consumer Welfare": "include"},
+                "required_decision_accuracy": 0.8,
+                "expected_evaluator_status": "failed",
+                "expect_task_diagnostics_positive": ["false_exclusion"],
+            },
+        ),
+    ],
+)
+
+
 def _lq_result(
     candidate_id: str,
     *,
@@ -10400,6 +10880,157 @@ TASK_SPECIFIC_MODEL_QUALIFICATION_V1: BenchmarkDefinition = BenchmarkDefinition(
                 "expected_role_qualified_models": [],
             },
         ),
+        _task_qualification_case(
+            "tq-screening-denominator-includes-exercised",
+            "screening denominator includes every exercised case",
+            "Both fast screening cases map to the screening task; a failing case "
+            "can never be silently excluded from the denominator, so screening "
+            "is not qualified.",
+            role="fast",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="fast",
+                    benchmark_id="live-quality-fast-v1",
+                    tasks={
+                        "lq-fast-screening-clear": {"det": 0.9},
+                        "lq-fast-screening-uncertain": {"det": 0.0},
+                    },
+                ),
+            },
+            reference={
+                "expected_role": "fast",
+                "expected_qualified_by_task": {"screening": []},
+                "expected_rejections": {"m-a/screening": "deterministic_pass_rate"},
+            },
+        ),
+        _task_qualification_case(
+            "tq-unexercised-task-not-qualified",
+            "unexercised task cannot be silently qualified",
+            "A model with no exercised cases for a task is never qualified for "
+            "it — the task cannot be silently excluded from qualification.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={
+                        "lq-evidence-extraction": {"det": 0.9},
+                        "lq-literature-synthesis": {"det": 0.9},
+                    },
+                ),
+            },
+            reference={
+                "expected_qualified_by_task": {
+                    "evidence_extraction": ["m-a"],
+                    "synthesis": ["m-a"],
+                    "gap_analysis": [],
+                    "mechanism_generation": [],
+                    "model_specification": [],
+                    "proposition_generation": [],
+                },
+            },
+        ),
+        _task_qualification_case(
+            "tq-provider-unavailable-not-model-quality",
+            "provider unavailable is not a model-quality failure",
+            "A task with a provider-error frequency above the cap is not "
+            "qualified and the structured rejection is attributed to the "
+            "provider, never to model reasoning quality.",
+            role="reasoning",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={
+                        "lq-gap-analysis": {"det": 0.9, "provider": 0.5},
+                        "lq-evidence-extraction": {"det": 0.5},
+                        "lq-literature-synthesis": {"det": 0.5},
+                        "lq-mechanism-development": {"det": 0.5},
+                        "lq-model-specification": {"det": 0.5},
+                        "lq-proposition-generation": {"det": 0.5},
+                    },
+                ),
+            },
+            reference={
+                "expected_qualified_by_task": {"gap_analysis": []},
+                "expected_rejections": {"m-a/gap_analysis": "provider_error"},
+            },
+        ),
+        _task_qualification_case(
+            "tq-task-primary-and-fallback",
+            "per-task primary and fallback from qualified models only",
+            "Two qualified models for a critic task give a ranked primary and "
+            "fallback; a cheaper unqualified model is never ranked.",
+            role="critic",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="critic",
+                    benchmark_id="live-quality-critic-v1",
+                    cost=0.05,
+                    tasks={case_id: {"det": 0.9} for case_id in _CRITIC_CASES},
+                ),
+                "m-b": _lq_tasks_result(
+                    "m-b",
+                    role="critic",
+                    benchmark_id="live-quality-critic-v1",
+                    cost=0.06,
+                    tasks={case_id: {"det": 0.9} for case_id in _CRITIC_CASES},
+                ),
+                "m-cheap-bad": _lq_tasks_result(
+                    "m-cheap-bad",
+                    role="critic",
+                    benchmark_id="live-quality-critic-v1",
+                    cost=0.0001,
+                    tasks={case_id: {"det": 0.5} for case_id in _CRITIC_CASES},
+                ),
+            },
+            reference={
+                "expected_role": "critic",
+                "expected_qualified_by_task": {
+                    "mechanism_critique": ["m-a", "m-b"],
+                    "results_critique": ["m-a", "m-b"],
+                },
+                "expected_ranked_by_task": {"mechanism_critique": ["m-a", "m-b"]},
+                "expected_role_qualified_models": ["m-a", "m-b"],
+            },
+        ),
+        _task_qualification_case(
+            "tq-role-task-isolation-across-roles",
+            "role/task isolation across roles",
+            "A reasoning-qualified model is never considered for critic tasks; "
+            "role isolation keeps the critic matrix free of reasoning results.",
+            role="critic",
+            live_results={
+                "m-reasoning": _lq_tasks_result(
+                    "m-reasoning",
+                    role="reasoning",
+                    tasks={
+                        "lq-evidence-extraction": {"det": 0.9},
+                        "lq-literature-synthesis": {"det": 0.9},
+                        "lq-gap-analysis": {"det": 0.9},
+                        "lq-mechanism-development": {"det": 0.9},
+                        "lq-model-specification": {"det": 0.9},
+                        "lq-proposition-generation": {"det": 0.9},
+                    },
+                ),
+                "m-critic": _lq_tasks_result(
+                    "m-critic",
+                    role="critic",
+                    benchmark_id="live-quality-critic-v1",
+                    tasks={case_id: {"det": 0.5} for case_id in _CRITIC_CASES},
+                ),
+            },
+            reference={
+                "expected_role": "critic",
+                "expected_qualified_by_task": {
+                    "mechanism_critique": [],
+                    "results_critique": [],
+                },
+                "expected_role_qualified_models": [],
+            },
+        ),
     ],
 )
 
@@ -10432,6 +11063,7 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     LIVE_QUALITY_REASONING_V1.benchmark_id: LIVE_QUALITY_REASONING_V1,
     LIVE_QUALITY_CRITIC_V1.benchmark_id: LIVE_QUALITY_CRITIC_V1,
     LIVE_QUALITY_FAST_V1.benchmark_id: LIVE_QUALITY_FAST_V1,
+    LIVE_QUALITY_EVALUATOR_SANITY_V1.benchmark_id: LIVE_QUALITY_EVALUATOR_SANITY_V1,
     PRODUCTION_ROUTING_READINESS_V1.benchmark_id: PRODUCTION_ROUTING_READINESS_V1,
     MODEL_QUALIFICATION_POLICY_V1.benchmark_id: MODEL_QUALIFICATION_POLICY_V1,
     TASK_SPECIFIC_MODEL_QUALIFICATION_V1.benchmark_id: TASK_SPECIFIC_MODEL_QUALIFICATION_V1,

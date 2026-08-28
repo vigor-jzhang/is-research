@@ -1024,15 +1024,23 @@ async def run_gap_workflow(
     stmt_ids: list[str] = []
     stmt_models: list[SynthesisStatement] = []
     for i, st in enumerate(case.input.get("statements") or []):
+        # Genuine fixture repair (Phase 7D.3B): a SynthesisStatement requires
+        # >=1 supporting_evidence_ids; the LQ statement fixtures historically
+        # left evidence_ids empty, which made the gap/mechanism cases ERROR at
+        # the workflow level instead of evaluating the model. Ground such
+        # statements to the case's produced evidence items so the case runs.
+        stmt_evidence = list(st.get("evidence_ids") or []) or (
+            evidence_ids[:1] if evidence_ids else []
+        )
         statement = SynthesisStatement(
             statement=st["statement"],
             type=st["type"],
-            supporting_evidence_ids=list(st.get("evidence_ids") or []),
+            supporting_evidence_ids=stmt_evidence,
             conflicting_evidence_ids=list(st.get("conflicting_evidence_ids") or []),
             supporting_paper_identity_ids=list(st.get("paper_ids") or []),
             conflicting_paper_identity_ids=list(st.get("conflicting_paper_ids") or []),
             papers_supporting=len(st.get("paper_ids") or []),
-            evidence_items_supporting=len(st.get("evidence_ids") or []),
+            evidence_items_supporting=len(stmt_evidence),
             papers_conflicting=len(st.get("conflicting_paper_ids") or []),
             evidence_items_conflicting=len(st.get("conflicting_evidence_ids") or []),
             support_type=st.get("support_type", "single_paper"),
@@ -1194,17 +1202,21 @@ async def run_mechanism_workflow(
 
     stmt_ids: list[str] = []
     for i, st in enumerate(case.input.get("statements") or []):
+        # Genuine fixture repair (Phase 7D.3B): ground statements that the
+        # fixture left without evidence to the case's produced evidence items
+        # so the mechanism case runs instead of erroring on the schema.
+        stmt_evidence = list(st.get("evidence_ids") or []) or (
+            evidence_ids[:1] if evidence_ids else []
+        )
         statement = SynthesisStatement(
             statement=st["statement"],
             type=st["type"],
-            supporting_evidence_ids=[
-                id_map.get(str(eid), str(eid)) for eid in (st.get("evidence_ids") or [])
-            ],
+            supporting_evidence_ids=[id_map.get(str(eid), str(eid)) for eid in stmt_evidence],
             conflicting_evidence_ids=list(st.get("conflicting_evidence_ids") or []),
             supporting_paper_identity_ids=list(st.get("paper_ids") or []),
             conflicting_paper_identity_ids=list(st.get("conflicting_paper_ids") or []),
             papers_supporting=len(st.get("paper_ids") or []),
-            evidence_items_supporting=len(st.get("evidence_ids") or []),
+            evidence_items_supporting=len(stmt_evidence),
             papers_conflicting=len(st.get("conflicting_paper_ids") or []),
             evidence_items_conflicting=len(st.get("conflicting_evidence_ids") or []),
             support_type=st.get("support_type", "single_paper"),
@@ -1376,8 +1388,20 @@ async def run_equilibrium_workflow(
                 actor_id=pf["actor_id"],
                 objective_type=pf.get("objective_type", "profit"),
                 expression=Expression(
-                    expression=pf["expression"],
-                    symbols_used=list(pf.get("symbols_used") or []),
+                    # Genuine fixture repair (Phase 7D.3B): the LQ fixtures give
+                    # `expression` as a full Expression dict (the production
+                    # format); the workflow historically assumed a raw string.
+                    expression=(
+                        pf["expression"].get("expression")
+                        if isinstance(pf["expression"], dict)
+                        else pf["expression"]
+                    ),
+                    symbols_used=(
+                        pf["expression"].get("symbols_used")
+                        if isinstance(pf["expression"], dict)
+                        else pf.get("symbols_used")
+                    )
+                    or [],
                 ),
                 decision_variables=list(pf.get("decision_variables") or []),
                 parameters=list(pf.get("parameters") or []),
@@ -1436,7 +1460,6 @@ async def run_numerical_workflow(
         EquilibriumAnalysisStatus,
         EquilibriumCandidate,
         EquilibriumExpression,
-        SolutionMethod,
         VerificationStatus,
     )
     from research_harness.research.schemas.model import (
@@ -1503,8 +1526,20 @@ async def run_numerical_workflow(
                 actor_id=pf["actor_id"],
                 objective_type=pf.get("objective_type", "profit"),
                 expression=Expression(
-                    expression=pf["expression"],
-                    symbols_used=list(pf.get("symbols_used") or []),
+                    # Genuine fixture repair (Phase 7D.3B): the LQ fixtures give
+                    # `expression` as a full Expression dict (the production
+                    # format); the workflow historically assumed a raw string.
+                    expression=(
+                        pf["expression"].get("expression")
+                        if isinstance(pf["expression"], dict)
+                        else pf["expression"]
+                    ),
+                    symbols_used=(
+                        pf["expression"].get("symbols_used")
+                        if isinstance(pf["expression"], dict)
+                        else pf.get("symbols_used")
+                    )
+                    or [],
                 ),
                 decision_variables=list(pf.get("decision_variables") or []),
                 parameters=list(pf.get("parameters") or []),
@@ -1527,18 +1562,21 @@ async def run_numerical_workflow(
         model_id=model_id,
         expressions=[
             EquilibriumExpression(
-                variable=e["variable"],
+                # Genuine fixture repair (Phase 7D.3B): the LQ fixtures name the
+                # equilibrium expression's variable `label`; the schema uses
+                # `variable`. Accept both so the case runs.
+                variable=e.get("variable") or e.get("label", ""),
                 expression=Expression(
                     expression=e["expression"],
                     symbols_used=list(e.get("symbols_used") or []),
                 ),
                 conditions=list(e.get("conditions") or []),
-                solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+                solution_method=_solution_method(candidate_cfg.get("method", "simultaneous")),
             )
             for e in candidate_cfg.get("expressions") or []
         ],
         decision_variables=list(candidate_cfg.get("decision_variables") or []),
-        solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+        solution_method=_solution_method(candidate_cfg.get("method", "simultaneous")),
         proposed_by="sympy",
         verification_status=VerificationStatus.verified,
     )
@@ -1559,7 +1597,7 @@ async def run_numerical_workflow(
         selected_candidate_id=candidate_id,
         status=EquilibriumAnalysisStatus.derived,
         solution_order=list(candidate_cfg.get("solution_order") or []),
-        solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+        solution_method=_solution_method(candidate_cfg.get("method", "simultaneous")),
         revision_rounds=0,
     )
     analysis_id = f"{case.id}-{run_suffix}-analysis"
@@ -1628,6 +1666,21 @@ async def run_numerical_workflow(
 # ---------------------------------------------------------------------------
 
 
+def _solution_method(value: Any) -> Any:
+    """Normalize a fixture/LLM method label to a valid SolutionMethod (Phase
+    7D.3B genuine repair: the LQ fixtures historically used 'symbolic')."""
+    from research_harness.research.schemas.equilibrium import SolutionMethod
+
+    if isinstance(value, SolutionMethod):
+        return value
+    text = str(value or "simultaneous")
+    mapping = {"symbolic": "sympy_solved", "sympy": "sympy_solved", "llm": "llm_proposed"}
+    text = mapping.get(text, text)
+    if text not in SolutionMethod.values():
+        return SolutionMethod.simultaneous
+    return SolutionMethod(text)
+
+
 async def _put_equilibrium_fixture(
     *,
     artifact_store: Any,
@@ -1645,7 +1698,6 @@ async def _put_equilibrium_fixture(
         EquilibriumAnalysisStatus,
         EquilibriumCandidate,
         EquilibriumExpression,
-        SolutionMethod,
         VerificationStatus,
     )
     from research_harness.research.schemas.model import (
@@ -1702,8 +1754,20 @@ async def _put_equilibrium_fixture(
                 actor_id=pf["actor_id"],
                 objective_type=pf.get("objective_type", "profit"),
                 expression=Expression(
-                    expression=pf["expression"],
-                    symbols_used=list(pf.get("symbols_used") or []),
+                    # Genuine fixture repair (Phase 7D.3B): the LQ fixtures give
+                    # `expression` as a full Expression dict (the production
+                    # format); the workflow historically assumed a raw string.
+                    expression=(
+                        pf["expression"].get("expression")
+                        if isinstance(pf["expression"], dict)
+                        else pf["expression"]
+                    ),
+                    symbols_used=(
+                        pf["expression"].get("symbols_used")
+                        if isinstance(pf["expression"], dict)
+                        else pf.get("symbols_used")
+                    )
+                    or [],
                 ),
                 decision_variables=list(pf.get("decision_variables") or []),
                 parameters=list(pf.get("parameters") or []),
@@ -1726,18 +1790,21 @@ async def _put_equilibrium_fixture(
         model_id=model_id,
         expressions=[
             EquilibriumExpression(
-                variable=e["variable"],
+                # Genuine fixture repair (Phase 7D.3B): the LQ fixtures name the
+                # equilibrium expression's variable `label`; the schema uses
+                # `variable`. Accept both so the case runs.
+                variable=e.get("variable") or e.get("label", ""),
                 expression=Expression(
                     expression=e["expression"],
                     symbols_used=list(e.get("symbols_used") or []),
                 ),
                 conditions=list(e.get("conditions") or []),
-                solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+                solution_method=_solution_method(candidate_cfg.get("method", "simultaneous")),
             )
             for e in candidate_cfg.get("expressions") or []
         ],
         decision_variables=list(candidate_cfg.get("decision_variables") or []),
-        solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+        solution_method=_solution_method(candidate_cfg.get("method", "simultaneous")),
         proposed_by="sympy",
         verification_status=VerificationStatus.verified,
     )
@@ -1758,7 +1825,7 @@ async def _put_equilibrium_fixture(
         selected_candidate_id=candidate_id,
         status=EquilibriumAnalysisStatus.derived,
         solution_order=list(candidate_cfg.get("solution_order") or []),
-        solution_method=SolutionMethod(candidate_cfg.get("method", "simultaneous")),
+        solution_method=_solution_method(candidate_cfg.get("method", "simultaneous")),
         revision_rounds=0,
     )
     analysis_id = f"{case.id}-{run_suffix}-analysis"
@@ -1868,7 +1935,7 @@ async def run_proposition_workflow(
 
     id_map: dict[str, str] = {}
     for i, (variable, param) in enumerate(
-        (e["variable"], p["symbol"])
+        (e.get("variable") or e.get("label", ""), p["symbol"])
         for e in candidate_cfg.get("expressions") or []
         for p in model_cfg.get("parameters") or []
     ):
@@ -5031,28 +5098,66 @@ def _lq_critique_service(task: str, router: Any, store: Any, producer: str):
 
 
 def _lq_fixture_schema(artifact_type: str):
+    from research_harness.research.schemas.equilibrium import EquilibriumCandidate
+    from research_harness.research.schemas.evidence import EvidenceItem
+    from research_harness.research.schemas.full_text import FullTextDocument
     from research_harness.research.schemas.gap import ResearchGap
-    from research_harness.research.schemas.manuscript import ManuscriptDraft, ManuscriptSection
-    from research_harness.research.schemas.mechanism import MechanismCandidate, SelectedMechanism
-    from research_harness.research.schemas.model import FormalAnalyticalModel
-    from research_harness.research.schemas.proposition import Proposition
+    from research_harness.research.schemas.identity import PaperIdentity
+    from research_harness.research.schemas.manuscript import (
+        ManuscriptCritique,
+        ManuscriptDraft,
+        ManuscriptSection,
+    )
+    from research_harness.research.schemas.mechanism import (
+        MechanismCandidate,
+        MechanismCritique,
+        SelectedMechanism,
+    )
+    from research_harness.research.schemas.model import (
+        FormalAnalyticalModel,
+        ModelSpecificationCritique,
+    )
+    from research_harness.research.schemas.paper import PaperRecord
+    from research_harness.research.schemas.proposition import (
+        ComparativeStaticsAnalysis,
+        Proposition,
+        PropositionCritique,
+        PropositionVerification,
+    )
     from research_harness.research.schemas.results import (
         ContributionClaim,
         ResearchFinding,
         ResearchResultsPackage,
+        ResultsCritique,
     )
+    from research_harness.research.schemas.screening_decision import ScreeningDecision
+    from research_harness.research.schemas.synthesis import SynthesisStatement
 
     return {
+        "document": FullTextDocument,
+        "evidence_item": EvidenceItem,
+        "synthesis_statement": SynthesisStatement,
+        "proposition_verification": PropositionVerification,
         "research_gap": ResearchGap,
         "mechanism_candidate": MechanismCandidate,
         "selected_mechanism": SelectedMechanism,
         "formal_analytical_model": FormalAnalyticalModel,
+        "equilibrium_candidate": EquilibriumCandidate,
+        "comparative_statics_analysis": ComparativeStaticsAnalysis,
         "proposition": Proposition,
         "research_results_package": ResearchResultsPackage,
         "research_finding": ResearchFinding,
         "contribution_claim": ContributionClaim,
         "manuscript_draft": ManuscriptDraft,
         "manuscript_section": ManuscriptSection,
+        "mechanism_critique": MechanismCritique,
+        "model_specification_critique": ModelSpecificationCritique,
+        "proposition_critique": PropositionCritique,
+        "results_critique": ResultsCritique,
+        "manuscript_critique": ManuscriptCritique,
+        "paper_record": PaperRecord,
+        "paper_identity": PaperIdentity,
+        "screening_decision": ScreeningDecision,
     }.get(artifact_type)
 
 
@@ -5120,6 +5225,57 @@ async def run_lq_critique_workflow(
 
     _artifact_type, service = _lq_critique_service(task, router, artifact_store, producer)
     await service.critique(target_id)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
+# evaluator_sanity workflow (Phase 7D.3B): places synthetic model-shaped
+# responses so the live-quality evaluators can be audited offline
+# (known-good must pass, known-bad must fail, scalar-vs-list reference ids,
+# provider-not-success must never be a success). No network.
+# ---------------------------------------------------------------------------
+
+
+async def run_evaluator_sanity_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Place the synthetic 'model-shaped' response artifacts for a sanity case.
+
+    The case input carries `produced`: {artifact_type: [payloads...]} with
+    `{artifact_type#index}` placeholders for cross-references. Payloads are
+    validated against their artifact schemas (consistent with the critic
+    workflow) and stored. No real service runs; the sanity evaluator feeds
+    these artifacts to the real live-quality evaluator and compares its
+    verdict with the expected status."""
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    produced = case.input.get("produced") or {}
+
+    id_plan: dict[str, str] = {}
+    for artifact_type, payloads in produced.items():
+        for i in range(len(payloads or [])):
+            id_plan[f"{artifact_type}#{i}"] = f"{case.id}-{run_suffix}-{artifact_type}-{i}"
+
+    for artifact_type, payloads in produced.items():
+        schema = _lq_fixture_schema(artifact_type)
+        if schema is None:
+            raise BenchmarkError(f"unsupported evaluator-sanity fixture type {artifact_type!r}")
+        for i, payload in enumerate(payloads or []):
+            payload = dict(payload or {})
+            payload.pop("created_at", None)
+            resolved = _resolve_placeholders(payload, id_plan)
+            env = ArtifactEnvelope.create(
+                payload=schema.model_validate(resolved),
+                artifact_type=artifact_type,
+                producer=producer,
+                artifact_id=id_plan[f"{artifact_type}#{i}"],
+            )
+            await artifact_store.put(env)
 
     after = await artifact_store.list()
     return [e for e in after if e.artifact_id not in before]

@@ -390,6 +390,16 @@ class DocumentsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class PreflightConfig(BaseModel):
+    """Provider/model capability preflight settings (Phase 7D.3B)."""
+
+    timeout_seconds: float = Field(default=120.0, ge=1.0, le=600.0, description="Per-probe timeout")
+    retries: int = Field(default=2, ge=0, le=5, description="Retries per probe")
+    probe_max_tokens: int = Field(default=200, ge=16, le=4096)
+
+    model_config = {"extra": "forbid"}
+
+
 class LiveQualityConfig(BaseModel):
     """Live-quality validation + qualification campaign settings (Phase 7D)."""
 
@@ -398,7 +408,14 @@ class LiveQualityConfig(BaseModel):
         description="Role -> candidate model slugs for qualification campaigns "
         "(no slugs hard-coded in service logic)",
     )
+    candidates_per_task: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Canonical task -> candidate model slugs for targeted "
+        "per-task qualification (Phase 7D.3B); falls back to the role list. "
+        "No slugs hard-coded in service logic.",
+    )
     repetitions: int = Field(default=3, ge=1, le=10, description="Runs per model/task")
+    preflight: PreflightConfig = Field(default_factory=PreflightConfig)
 
     model_config = {"extra": "forbid"}
 

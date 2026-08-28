@@ -4,6 +4,10 @@ fast role (Phase 7D.0).
 Lightweight production-like tasks (screening decisions): decision accuracy,
 uncertain-case handling, false-exclusion rate, structured-output success.
 Latency/cost are aggregated by the live-quality service from model-call records.
+
+Phase 7D.3B adds per-class screening diagnostics (include/exclude/uncertain
+accuracy, false inclusion rate) persisted separately; the pass criteria are
+unchanged and false exclusion remains a critical failure.
 """
 
 from __future__ import annotations
@@ -58,14 +62,18 @@ class LiveQualityFastEvaluator:
         failures: list[str] = []
         matched = 0
         false_exclusions = 0
+        false_inclusions = 0
         uncertain_expected = 0
         uncertain_handled = 0
         total = len(expected)
+        per_class = {cls: {"total": 0, "matched": 0} for cls in ("include", "exclude", "uncertain")}
 
         for title, expected_class in expected.items():
             actual = produced.get(title)
+            per_class[expected_class]["total"] += 1
             if actual == expected_class:
                 matched += 1
+                per_class[expected_class]["matched"] += 1
             elif expected_class == "uncertain":
                 uncertain_expected += 1
                 if actual == "uncertain":
@@ -75,12 +83,20 @@ class LiveQualityFastEvaluator:
                     failures.append(
                         f"false exclusion: expected uncertain, produced exclude for {title!r}"
                     )
+                elif actual == "include":
+                    false_inclusions += 1
+            elif expected_class == "exclude" and actual == "include":
+                false_inclusions += 1
             elif expected_class in ("include", "exclude") and actual == "exclude":
-                # expected include/uncertain but produced exclude -> false exclusion
+                # expected include but produced exclude -> false exclusion
                 false_exclusions += 1
                 failures.append(
                     f"false exclusion: expected {expected_class}, produced exclude for {title!r}"
                 )
+
+        def _class_accuracy(cls: str) -> float | None:
+            info = per_class[cls]
+            return info["matched"] / info["total"] if info["total"] else None
 
         accuracy = matched / total if total else 1.0
         if accuracy < required_accuracy:
@@ -138,6 +154,23 @@ class LiveQualityFastEvaluator:
             ),
         }
 
+        # Phase 7D.3B: per-class screening diagnostics (persisted separately;
+        # the pass criteria are unchanged and false exclusion stays critical).
+        task_diagnostics: dict[str, int] = {
+            "include_mismatch": per_class["include"]["total"] - per_class["include"]["matched"],
+            "exclude_mismatch": per_class["exclude"]["total"] - per_class["exclude"]["matched"],
+            "uncertain_mismatch": uncertain_expected - uncertain_handled,
+            "false_exclusion": false_exclusions,
+            "false_inclusion": false_inclusions,
+            "structured_output_failure": 0 if structured_ok else 1,
+            "provider_error": 0,
+        }
+        class_acc = {
+            "include": _class_accuracy("include"),
+            "exclude": _class_accuracy("exclude"),
+            "uncertain": _class_accuracy("uncertain"),
+        }
+
         status = EvaluatorStatus.failed if failures else EvaluatorStatus.passed
         return EvaluatorResult(
             case_id=ctx.case.id,
@@ -148,11 +181,18 @@ class LiveQualityFastEvaluator:
             value={
                 "produced_decisions": produced,
                 "false_exclusions": false_exclusions,
+                "false_inclusions": false_inclusions,
+                "class_accuracy": dict(class_acc),
+                "task_diagnostics": task_diagnostics,
                 "metrics": metrics,
                 "dimension_scores": {
                     "decision_accuracy": accuracy,
                     "uncertain_case_handling": uncertain_rate,
                     "false_exclusion_rate": false_exclusions / total if total else 0.0,
+                    "false_inclusion_rate": false_inclusions / total if total else 0.0,
+                    "include_accuracy": class_acc["include"] or 0.0,
+                    "exclude_accuracy": class_acc["exclude"] or 0.0,
+                    "uncertain_accuracy": class_acc["uncertain"] or 0.0,
                     "structured_output_success": float(structured_ok),
                 },
             },

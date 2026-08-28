@@ -466,6 +466,7 @@ def aggregate_task_performance(
             tp.excluded_failure_attribution for tp in entries
         ),
         evidence_diagnostics=_merge_counts(tp.evidence_diagnostics for tp in entries),
+        task_diagnostics=_merge_counts(tp.task_diagnostics for tp in entries),
     )
 
 
@@ -560,6 +561,7 @@ def task_candidate_result(
         qualified=qualified,
         rejection_reasons=reasons,
         evidence_diagnostics=dict(tp.evidence_diagnostics or {}),
+        task_diagnostics=dict(tp.task_diagnostics or {}),
         live_quality_run_id=live_quality_run_id,
     )
 
@@ -675,3 +677,105 @@ def build_model_capability_profiles(
             )
         )
     return profiles
+
+
+# ---------------------------------------------------------------------------
+# Phase 7D.3B: remaining-task coverage
+# ---------------------------------------------------------------------------
+
+
+def build_remaining_task_coverage(
+    matrices: list[TaskQualificationMatrix],
+    *,
+    preflights: list[Any],
+    campaigns: list[Any],
+) -> Any:
+    """Build the RemainingTaskCoverage for the tasks that were unqualified at
+    the start of Phase 7D.3B.
+
+    For each remaining task:
+    - qualified_primary/qualified_fallback: the top two qualified models ranked
+      by the task matrix (ranked_models_by_task).
+    - qualified_model_count: number of qualified models.
+    - tested_model_count: candidates exercised on the role's benchmark.
+    - provider_unavailable_count: candidates whose preflight classified them
+      temporarily_unavailable/provider_error (never interpreted as incapable).
+    - dominant_failure_reason: the most common structured rejection kind among
+      the task's unqualified rows, or 'provider_unavailable' when the task was
+      not meaningfully exercised.
+    """
+    from research_harness.research.routing.tasks import remaining_tasks_for_role
+    from research_harness.research.schemas.qualification import (
+        RemainingTaskCoverage,
+        RemainingTaskCoverageRow,
+    )
+
+    by_role = {m.role: m for m in matrices}
+    preflight_by_model: dict[str, str] = {}
+    latest_preflight: dict[str, Any] = {}
+    for p in preflights:
+        if (
+            p.candidate_id not in latest_preflight
+            or p.created_at > latest_preflight[p.candidate_id].created_at
+        ):
+            latest_preflight[p.candidate_id] = p
+    for key, p in latest_preflight.items():
+        preflight_by_model[key] = p.status.value
+
+    tested_by_role: dict[str, set[str]] = {}
+    for c in campaigns:
+        tested_by_role.setdefault(c.role, set()).update(cc.candidate_id for cc in c.candidates)
+
+    rows: list[RemainingTaskCoverageRow] = []
+    for role in ("reasoning", "critic", "fast"):
+        matrix = by_role.get(role)
+        tasks = remaining_tasks_for_role(role)
+        for task in tasks:
+            tested = sorted(tested_by_role.get(role, set()))
+            ranked = (matrix.ranked_models_by_task.get(task) or []) if matrix else []
+            qualified_models = (
+                list(matrix.qualified_models_by_task.get(task) or []) if matrix else []
+            )
+            unqualified = [m for m in tested if m not in qualified_models]
+            provider_unavailable = sum(
+                1
+                for m in tested
+                if preflight_by_model.get(m)
+                in {
+                    "temporarily_unavailable",
+                    "provider_error",
+                }
+            )
+            dominant = ""
+            if qualified_models:
+                dominant = ""
+            elif unqualified:
+                reason_counts: dict[str, int] = {}
+                if matrix:
+                    for row in matrix.rows:
+                        if row.task != task or row.candidate_id not in unqualified:
+                            continue
+                        for kind in classify_rejection_kinds(list(row.rejection_reasons)):
+                            reason_counts[kind] = reason_counts.get(kind, 0) + 1
+                if provider_unavailable and not reason_counts:
+                    dominant = "provider_unavailable"
+                elif reason_counts:
+                    dominant = max(reason_counts, key=lambda k: reason_counts[k])
+                else:
+                    dominant = (
+                        "provider_unavailable"
+                        if provider_unavailable
+                        else "below_quality_threshold"
+                    )
+            rows.append(
+                RemainingTaskCoverageRow(
+                    task=task,
+                    qualified_primary=ranked[0] if ranked else None,
+                    qualified_fallback=ranked[1] if len(ranked) >= 2 else None,
+                    qualified_model_count=len(qualified_models),
+                    tested_model_count=len(tested),
+                    provider_unavailable_count=provider_unavailable,
+                    dominant_failure_reason=dominant,
+                )
+            )
+    return RemainingTaskCoverage(rows=rows)

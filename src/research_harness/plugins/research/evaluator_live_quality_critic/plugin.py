@@ -201,13 +201,27 @@ class LiveQualityCriticEvaluator:
                 "injected_defects": injected_categories,
                 "detected_defects": sorted(matched_set),
                 "false_positives": false_positives,
+                # Phase 7D.3B: whole-critic-role diagnostics (defect recall,
+                # false positives, severity accuracy, category coverage,
+                # actionable revision, structured-output reliability). These are
+                # failure counts persisted per task; pass criteria unchanged.
+                "task_diagnostics": {
+                    "defect_recall_missed": len(injected_categories) - len(matched_set),
+                    "false_positive_issues": len(false_positives),
+                    "severity_mismatch": severity_total - severity_hits,
+                    "required_category_missed": len(required_categories) - covered,
+                    "missing_actionable_revision": (
+                        1 if (matched_set and not recommendations) else 0
+                    ),
+                    "structured_output_failure": 0 if structured_ok else 1,
+                },
                 "metrics": metrics,
                 "dimension_scores": {
                     "defect_recall": recall,
                     "false_positive_rate": fpr,
                     "severity_accuracy": severity_accuracy
                     if severity_accuracy is not None
-                    else None,
+                    else 0.0,
                     "required_category_coverage": coverage,
                     "actionable_revision_rate": actionable_rate,
                     "structured_output_success": float(structured_ok),

@@ -1372,15 +1372,79 @@ no_qualified_model.**
 | synthesis | **nemotron** |
 | gap_analysis / mechanism_generation / model_specification / proposition_generation | none |
 
+## Remaining-task qualification + provider preflight (Phase 7D.3B)
+
+Only candidates that PASSED the lightweight capability preflight entered the
+qualification campaigns; provider-unavailable models were never interpreted as
+incapable and never qualified.
+
+### Provider/model preflight (routing preflight)
+
+| candidate | reasoning | critic | fast |
+|---|---|---|---|
+| nvidia/nemotron-3-ultra-550b-a55b:free | available | available | transient upstream 502 |
+| deepseek/deepseek-v4-flash-0731 | available | available | available |
+| google/gemini-2.5-pro | available | available | — |
+| openai/gpt-4o | available | — | available |
+| meta-llama/llama-3.3-70b-instruct:free | provider_error (404 free tier) | — | — |
+| mistralai/mistral-small-3.1-24b-instruct:free | provider_error (404 free tier) | — | — |
+| google/gemini-2.5-flash:free | provider_error (404 free tier) | — | — |
+| anthropic/claude-3.7-sonnet | provider_error (no endpoints) | — | — |
+
+`model_preflight` artifacts record the exact requested/resolved model id and
+each probe (reachability / structured JSON / context size / timeout-retry).
+
+### Evaluator sanity audit (live-quality-evaluator-sanity-v1, 13/13)
+
+Known-good responses pass, known-bad responses fail, scalar reference ids vs
+list ids handled correctly, provider errors (no artifacts) never count as
+successes. Genuine defects found and repaired:
+1. Proposition verification: production writes `status: verified` (enum
+   vocabulary); the evaluator required the literal `passed` — every correct
+   model was falsely grounded. Now accepts verified/passed.
+2. Critic evaluator emitted `severity_accuracy: None` (and the fast evaluator
+   per-class accuracies `None` for empty classes), which made the whole
+   critic/fast benchmarks ERROR instead of evaluating. Now emits 0.0.
+3. Three live-quality reasoning fixtures silently errored at the workflow
+   level: empty `supporting_evidence_ids` (SynthesisStatement min_length=1),
+   payoff `expression` as a dict, equilibrium `variable` vs `label`, and
+   `method: symbolic` outside the enum. gap/mechanism/model-spec/proposition
+   had therefore evaluated ZERO models. Repaired in the workflow drivers.
+
+### Corrected task matrix (3-5 reps, preflight-passing only)
+
+| task | qualified models | primary / fallback |
+|---|---|---|
+| evidence_extraction (frozen) | nemotron, deepseek, gemini-2.5-pro | — |
+| synthesis (frozen) | nemotron | — |
+| mechanism_critique | **nemotron, gemini-2.5-pro** (det 1.0) | gemini / nemotron |
+| model_specification_critique | **nemotron, gemini-2.5-pro** (det 1.0) | gemini / nemotron |
+| proposition_critique | **nemotron, gemini-2.5-pro** (det 1.0) | gemini / nemotron |
+| results_critique | none (gemini det 0.8) | — |
+| manuscript_critique | none (gemini det 0.4) | — |
+| gap_analysis / mechanism_generation / model_specification / proposition_generation | none | — |
+| screening | none (gpt-4o det 0.667) | — |
+
+Critic role remains no_qualified_model because results_critique and
+manuscript_critique are uncovered. No role has a qualified primary+fallback.
+
 ## Recommended next increment
 
-Post-Phase-7D.3A: the evaluation program covers 30 benchmark families with
-deterministic gating. The evidence-extraction blocker was a genuine evaluator
-bug (scalar reference char-splitting), now repaired — evidence_extraction and
-synthesis now have qualified models. Remaining task gaps: gap_analysis,
-mechanism_generation, model_specification, proposition_generation (reasoning);
-all five critic tasks and screening still lack qualified models. Phase 7D.4
-should build task-aware SHADOW routing (advisory, no production switching) over
-the qualified-task set (evidence_extraction/synthesis), or continue model
-search for the critical tasks. No role currently has a qualified
-primary+fallback; production activation NOT recommended.
+Post-Phase-7D.3B: the evaluation program covers 32 benchmark families (added
+live-quality-evaluator-sanity-v1) with deterministic gating. The remaining-task
+qualification ran only preflight-passing candidates; genuine defects found and
+repaired: (1) proposition verification status vocabulary (verified vs passed),
+(2) critic/fast evaluator `None` numeric dimension scores that errored entire
+benchmarks, (3) three live-quality reasoning fixtures that silently errored at
+the workflow level so gap/mechanism/model-spec/proposition had never evaluated
+a model. With the repairs, mechanism_critique, model_specification_critique and
+proposition_critique each qualify nemotron + gemini-2.5-pro (primary + fallback
+per task); evidence_extraction (nemotron/deepseek/gemini-pro) and synthesis
+(nemotron) remain qualified. Still uncovered: results_critique,
+manuscript_critique, gap_analysis, mechanism_generation, model_specification,
+proposition_generation, screening — dominant failure reason
+below_quality_threshold (model capability), not provider availability.
+Phase 7D.4 should build task-aware SHADOW routing (advisory, no production
+switching) over the qualified-task set, or continue model search for the
+critical uncovered tasks. No role has a qualified primary+fallback; production
+activation NOT recommended.
