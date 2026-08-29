@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict, deque
+from collections.abc import Callable
 from typing import Any
 
 from research_harness.kernel.errors import PluginDependencyError, PluginError
@@ -33,6 +34,7 @@ class PluginManager:
         self._started = False
         # Map service name -> provider plugin id
         self._service_providers: dict[str, str] = {}
+        self._subscription_cleanups: dict[str, list[Callable[[], None]]] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -136,31 +138,55 @@ class PluginManager:
         if self._started:
             raise PluginError("plugins already started")
         order = self.resolve_order()
+        initialized: list[str] = []
+        try:
+            for pid in order:
+                plugin = self._plugins[pid]
+                ctx = PluginContext(
+                    plugin_id=pid,
+                    config=self.plugin_configs.get(pid, {}),
+                    services=self.services,
+                    events=self.events,
+                    runtime_meta=dict(self.runtime_meta),
+                    subscription_cleanups=[],
+                )
+                logger.debug("setting up plugin %s", pid)
+                await plugin.setup(ctx)
+                self._subscription_cleanups[pid] = ctx.subscription_cleanups
+                initialized.append(pid)
+                await self.events.publish(_make_event("plugin.loaded", pid, {"plugin_id": pid}))
+        except Exception:
+            for pid in reversed(initialized):
+                try:
+                    await self._plugins[pid].teardown()
+                except Exception:
+                    logger.exception("error tearing down plugin %s during setup rollback", pid)
+                self.services.clear_owner(pid)
+                for unsubscribe in self._subscription_cleanups.pop(pid, []):
+                    unsubscribe()
+            self._ordered_ids = []
+            raise
         self._ordered_ids = order
-        for pid in order:
-            plugin = self._plugins[pid]
-            ctx = PluginContext(
-                plugin_id=pid,
-                config=self.plugin_configs.get(pid, {}),
-                services=self.services,
-                events=self.events,
-                runtime_meta=dict(self.runtime_meta),
-            )
-            logger.debug("setting up plugin %s", pid)
-            await plugin.setup(ctx)
-            await self.events.publish(
-                # Use internal event creation to avoid import cycle
-                _make_event("plugin.loaded", pid, {"plugin_id": pid})
-            )
 
     async def start_all(self) -> None:
         if not self._ordered_ids:
             await self.setup_all()
-        for pid in self._ordered_ids:
-            plugin = self._plugins[pid]
-            logger.debug("starting plugin %s", pid)
-            await plugin.start()
-            await self.events.publish(_make_event("plugin.started", pid, {"plugin_id": pid}))
+        started: list[str] = []
+        try:
+            for pid in self._ordered_ids:
+                plugin = self._plugins[pid]
+                logger.debug("starting plugin %s", pid)
+                await plugin.start()
+                started.append(pid)
+                await self.events.publish(_make_event("plugin.started", pid, {"plugin_id": pid}))
+        except Exception:
+            for pid in reversed(started):
+                try:
+                    await self._plugins[pid].stop()
+                except Exception:
+                    logger.exception("error stopping plugin %s during startup rollback", pid)
+            await self.stop_all()
+            raise
         self._started = True
 
     async def stop_all(self) -> None:
@@ -180,6 +206,11 @@ class PluginManager:
                 logger.exception("error tearing down plugin %s", pid)
             # lifecycle-aware cleanup of services
             self.services.clear_owner(pid)
+            for unsubscribe in self._subscription_cleanups.pop(pid, []):
+                try:
+                    unsubscribe()
+                except Exception:
+                    logger.exception("error unsubscribing plugin %s", pid)
         self._started = False
         self._ordered_ids = []
 

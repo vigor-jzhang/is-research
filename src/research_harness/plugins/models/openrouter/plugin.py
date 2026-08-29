@@ -59,7 +59,10 @@ class OpenRouterProvider:
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is not None:
             return self._client
-        return httpx.AsyncClient(timeout=self.timeout)
+        # Keep one owned client for the provider lifetime. Creating a client
+        # per request leaks connection pools because ``close`` cannot reach it.
+        self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         if not self.api_key:

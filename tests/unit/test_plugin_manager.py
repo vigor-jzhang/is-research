@@ -187,3 +187,34 @@ def test_plugin_metadata_validation():
         PluginMetadata(id="Bad ID", version="0.1.0", plugin_type="t", provides=[])  # type: ignore
     with pytest.raises(Exception):
         PluginMetadata(id="good", version="bad", plugin_type="t", provides=[])
+
+
+@pytest.mark.asyncio
+async def test_setup_failure_rolls_back_services_and_subscriptions():
+    events = EventBus()
+    manager = PluginManager(events=events)
+    received: list[str] = []
+
+    class First(Plugin):
+        @property
+        def metadata(self) -> PluginMetadata:
+            return PluginMetadata(id="a_first", version="0.1.0", plugin_type="test", provides=["svc.first"])
+
+        async def setup(self, ctx):
+            ctx.register("svc.first", object())
+            ctx.subscribe("probe", lambda _: received.append("called"))
+
+    class Failing(Plugin):
+        @property
+        def metadata(self) -> PluginMetadata:
+            return PluginMetadata(id="z_failing", version="0.1.0", plugin_type="test")
+
+        async def setup(self, ctx):
+            raise RuntimeError("setup failed")
+
+    manager.register(First())
+    manager.register(Failing())
+    with pytest.raises(RuntimeError, match="setup failed"):
+        await manager.start_all()
+    assert not manager.services.has("svc.first")
+    assert manager.events.handler_count("probe") == 0

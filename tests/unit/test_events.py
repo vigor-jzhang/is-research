@@ -108,3 +108,16 @@ def test_event_fields():
     assert e.payload["a"] == 1
     assert e.schema_version == "1.0"
     assert e.event_id
+
+
+@pytest.mark.asyncio
+async def test_history_is_bounded():
+    bus = EventBus(history_limit=2)
+    for i in range(3):
+        await bus.publish(Event.create(event_type="bounded", source="unit", payload={"n": i}))
+    assert [event.payload["n"] for event in bus.history()] == [1, 2]
+
+
+def test_negative_history_limit_is_rejected():
+    with pytest.raises(ValueError, match="history_limit"):
+        EventBus(history_limit=-1)

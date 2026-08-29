@@ -58,10 +58,13 @@ EventHandler = Callable[[Event], Awaitable[None]]
 class EventBus:
     """In-process asynchronous publish/subscribe bus."""
 
-    def __init__(self) -> None:
+    def __init__(self, history_limit: int = 1_000) -> None:
+        if history_limit < 0:
+            raise ValueError("history_limit must be non-negative")
         self._handlers: dict[str, list[EventHandler]] = defaultdict(list)
         self._wildcard_handlers: list[EventHandler] = []
         self._history: list[Event] = []
+        self._history_limit = history_limit
 
     def subscribe(self, event_type: str, handler: EventHandler) -> Callable[[], None]:
         """Subscribe to an event type. Use '*' for all events."""
@@ -85,7 +88,10 @@ class EventBus:
 
     async def publish(self, event: Event) -> None:
         """Publish an event to all matching subscribers."""
-        self._history.append(event)
+        if self._history_limit:
+            self._history.append(event)
+            if len(self._history) > self._history_limit:
+                del self._history[: len(self._history) - self._history_limit]
         # Collect handlers: exact match + wildcard
         handlers: list[EventHandler] = []
         handlers.extend(self._handlers.get(event.event_type, []))

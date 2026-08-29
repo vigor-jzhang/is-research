@@ -227,3 +227,12 @@ async def test_retry_on_transient_failure():
     resp = await provider.complete(req)
     assert resp.message.content == "recovered"
     assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_reuses_owned_client():
+    provider = OpenRouterProvider(api_key="k")
+    first = provider._get_client()
+    assert provider._get_client() is first
+    await provider.close()
+    assert first.is_closed

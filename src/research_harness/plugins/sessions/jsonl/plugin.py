@@ -47,11 +47,26 @@ class JsonlSessionStore:
     """Append-only JSONL session store."""
 
     def __init__(self, root: str | Path) -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()
+
+    def _session_dir(self, session_id: str) -> Path:
+        """Return a verified session directory for a generated UUID."""
+        try:
+            parsed = uuid.UUID(session_id)
+        except (ValueError, AttributeError, TypeError) as e:
+            raise SessionError(f"invalid session id {session_id!r}") from e
+        if str(parsed) != session_id.lower():
+            raise SessionError(f"invalid session id {session_id!r}")
+        session_dir = (self.root / session_id).resolve()
+        try:
+            session_dir.relative_to(self.root)
+        except ValueError as e:
+            raise SessionError(f"session id escapes storage root: {session_id!r}") from e
+        return session_dir
 
     async def create_session(self, metadata: dict[str, Any] | None = None) -> str:
         session_id = str(uuid.uuid4())
-        session_dir = self.root / session_id
+        session_dir = self._session_dir(session_id)
         session_dir.mkdir(parents=True, exist_ok=True)
         meta = {
             "session_id": session_id,
@@ -66,7 +81,7 @@ class JsonlSessionStore:
 
     async def append(self, session_id: str, event: dict[str, Any]) -> None:
         scrubbed = _scrub_sensitive(event)
-        session_dir = self.root / session_id
+        session_dir = self._session_dir(session_id)
         if not session_dir.exists():
             raise SessionError(f"session {session_id!r} does not exist")
         events_path = session_dir / "events.jsonl"
@@ -81,7 +96,7 @@ class JsonlSessionStore:
             f.write(line + "\n")
 
     async def read(self, session_id: str) -> list[dict[str, Any]]:
-        session_dir = self.root / session_id
+        session_dir = self._session_dir(session_id)
         events_path = session_dir / "events.jsonl"
         if not events_path.exists():
             raise SessionError(f"session {session_id!r} not found")
@@ -98,7 +113,7 @@ class JsonlSessionStore:
         return events
 
     async def get_metadata(self, session_id: str) -> dict[str, Any]:
-        meta_path = self.root / session_id / "metadata.json"
+        meta_path = self._session_dir(session_id) / "metadata.json"
         if not meta_path.exists():
             raise SessionError(f"metadata for session {session_id!r} not found")
         try:
@@ -107,7 +122,10 @@ class JsonlSessionStore:
             raise SessionError(f"corrupt metadata for {session_id!r}: {e}") from e
 
     def session_exists(self, session_id: str) -> bool:
-        return (self.root / session_id).exists()
+        try:
+            return self._session_dir(session_id).is_dir()
+        except SessionError:
+            return False
 
 
 class JsonlSessionPlugin(Plugin):

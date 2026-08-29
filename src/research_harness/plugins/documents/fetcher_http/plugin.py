@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import logging
 import re
+import socket
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -84,6 +85,18 @@ def _validate_url(url: str) -> None:
         raise ValueError(f"URL must have hostname: {url!r}")
     if _is_private_hostname(host):
         raise ValueError(f"URL host is private/local and rejected: {host!r} in {url!r}")
+    # Hostname strings are not sufficient: DNS can map a public-looking name
+    # to loopback, private, or metadata addresses. Validate every resolved IP
+    # immediately before the client is allowed to connect.
+    try:
+        addresses = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except OSError as e:
+        raise ValueError(f"URL hostname could not be resolved: {host!r}") from e
+    if not addresses:
+        raise ValueError(f"URL hostname did not resolve: {host!r}")
+    for _, _, _, _, sockaddr in addresses:
+        if _is_private_hostname(sockaddr[0]):
+            raise ValueError(f"URL hostname resolves to private/local address: {host!r}")
     # Also reject file://, ftp:// etc already via scheme check
     # Reject userinfo
     if parsed.username or parsed.password:

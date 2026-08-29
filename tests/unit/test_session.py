@@ -121,3 +121,13 @@ async def test_events_have_ids_and_timestamps(tmp_path: pathlib.Path):
     events = await store.read(sid)
     assert "event_id" in events[0]
     assert "timestamp" in events[0]
+
+
+@pytest.mark.asyncio
+async def test_session_id_cannot_escape_root(tmp_path: pathlib.Path):
+    store = JsonlSessionStore(root=tmp_path / "sessions")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with pytest.raises(SessionError, match="invalid session id"):
+        await store.append("../outside", {"event_type": "x", "source": "t"})
+    assert not (outside / "events.jsonl").exists()

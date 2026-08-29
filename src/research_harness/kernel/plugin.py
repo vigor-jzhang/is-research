@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -82,6 +83,7 @@ class PluginContext:
     services: ServiceRegistry | None = None
     events: EventBus | None = None
     runtime_meta: dict[str, Any] = field(default_factory=dict)
+    subscription_cleanups: list[Callable[[], None]] = field(default_factory=list)
 
     def require(self, service_name: str) -> Any:
         """Lookup a required service."""
@@ -116,7 +118,9 @@ class PluginContext:
         """Subscribe to an event type."""
         if self.events is None:
             raise RuntimeError("PluginContext.events not initialized")
-        return self.events.subscribe(event_type, handler)
+        unsubscribe = self.events.subscribe(event_type, handler)
+        self.subscription_cleanups.append(unsubscribe)
+        return unsubscribe
 
 
 # ---------------------------------------------------------------------------
