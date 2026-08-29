@@ -37,6 +37,7 @@ from research_harness.research.schemas.evaluation import (
     Benchmark,
     BenchmarkCase,
     EvaluationReport,
+    EvaluationReportStatus,
     EvaluationRun,
     EvaluatorCategory,
     EvaluatorResult,
@@ -658,3 +659,119 @@ async def test_run_reproducibility_metadata(store):
     assert run.evaluation_config["judge_role"] == "critic"
     assert run.cost_usd >= 0.0
     assert run.latency_ms >= 0
+
+
+async def test_skipped_evaluator_is_not_scored_as_passed(store):
+    """An evaluator that declines to judge must not produce a passing case.
+
+    ``EvaluatorStatus.skipped`` had no branch in the status ladder, so it fell
+    through to ``passed``. The only producer emits it when nothing was
+    produced to evaluate, i.e. a production failure was reported as a pass.
+    """
+
+    class SkippedEvaluator:
+        evaluator_id = "evaluator.skipped"
+        evaluator_version = "0.1.0"
+        category = "deterministic"
+
+        async def evaluate(self, ctx):
+            return EvaluatorResult(
+                case_id=ctx.case.id,
+                evaluator_id=self.evaluator_id,
+                evaluator_version=self.evaluator_version,
+                category=EvaluatorCategory.deterministic,
+                status=EvaluatorStatus.skipped,
+                value={"metrics": {}, "dimension_scores": {}},
+                explanation="nothing produced to evaluate",
+            )
+
+    svc = _harness(
+        store,
+        evaluators={
+            "evaluator.deterministic": DeterministicEvaluator(),
+            "evaluator.skipped": SkippedEvaluator(),
+        },
+    )
+    await svc.register_benchmark(
+        BenchmarkDefinition(
+            benchmark_id="unit-bench",
+            version=1,
+            name="Unit Benchmark",
+            description="",
+            category="unit",
+            config={"mode": "novelty_threat", "evaluators": ["evaluator.skipped"]},
+            cases=[_case_def()],
+        )
+    )
+    run_id, report_id = await svc.run_benchmark("unit-bench")
+
+    run = (await store.get(run_id)).parse_payload(EvaluationRun)
+    assert run.cases_total == 1
+    assert run.cases_passed == 0
+    assert run.cases_skipped == 1
+
+    report = (await store.get(report_id)).parse_payload(EvaluationReport)
+    assert report.cases_passed == 0
+    assert report.cases_skipped == 1
+    assert report.status == EvaluationReportStatus.failed
+
+    # The accounting invariant must still hold.
+    assert (
+        report.cases_passed
+        + report.cases_failed
+        + report.cases_error
+        + report.cases_skipped
+        == report.cases_total
+    )
+
+
+async def test_failure_takes_precedence_over_skipped(store):
+    """A genuine deterministic failure must still outrank a skip."""
+
+    class SkippedEvaluator:
+        evaluator_id = "evaluator.skipped"
+        evaluator_version = "0.1.0"
+        category = "deterministic"
+
+        async def evaluate(self, ctx):
+            return EvaluatorResult(
+                case_id=ctx.case.id,
+                evaluator_id=self.evaluator_id,
+                category=EvaluatorCategory.deterministic,
+                status=EvaluatorStatus.skipped,
+                value={},
+                explanation="nothing produced to evaluate",
+            )
+
+    svc = _harness(
+        store,
+        evaluators={
+            "evaluator.deterministic": DeterministicEvaluator(),
+            "evaluator.skipped": SkippedEvaluator(),
+        },
+    )
+    await svc.register_benchmark(
+        BenchmarkDefinition(
+            benchmark_id="unit-bench",
+            version=1,
+            name="Unit Benchmark",
+            description="",
+            category="unit",
+            config={
+                "mode": "novelty_threat",
+                "evaluators": ["evaluator.deterministic", "evaluator.skipped"],
+            },
+            cases=[_case_def()],
+        )
+    )
+    _run_id, report_id = await svc.run_benchmark("unit-bench")
+    report = (await store.get(report_id)).parse_payload(EvaluationReport)
+    # Whatever the deterministic verdict, a skip must never become a pass.
+    assert report.cases_passed == 0
+    assert (
+        report.cases_passed
+        + report.cases_failed
+        + report.cases_error
+        + report.cases_skipped
+        == report.cases_total
+    )

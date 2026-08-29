@@ -35,6 +35,9 @@ class EvaluationCaseStatus(str, Enum):
     passed = "passed"
     failed = "failed"
     error = "error"
+    # An evaluator declined to judge (e.g. nothing was produced to evaluate).
+    # Distinct from ``passed``: "not evaluated" is not evidence of success.
+    skipped = "skipped"
 
 
 class EvaluationReportStatus(str, Enum):
@@ -185,6 +188,9 @@ class EvaluationReport(BaseModel):
     cases_passed: int
     cases_failed: int
     cases_error: int
+    # Invariant: cases_passed + cases_failed + cases_error + cases_skipped
+    # == cases_total.
+    cases_skipped: int = 0
     metrics: list[EvaluationMetric] = Field(default_factory=list)
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
     false_positive_counts: dict[str, int] = Field(default_factory=dict)
@@ -230,6 +236,7 @@ class EvaluationRun(BaseModel):
     cases_passed: int = 0
     cases_failed: int = 0
     cases_error: int = 0
+    cases_skipped: int = 0
     failures: list[str] = Field(default_factory=list)
     status: EvaluationReportStatus
     started_at: datetime = Field(default_factory=_utcnow)

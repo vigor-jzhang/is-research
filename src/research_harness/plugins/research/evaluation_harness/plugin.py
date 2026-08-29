@@ -353,6 +353,7 @@ class EvaluationHarnessService:
             cases_passed=report.cases_passed,
             cases_failed=report.cases_failed,
             cases_error=report.cases_error,
+            cases_skipped=report.cases_skipped,
             failures=failures,
             status=report.status,
         )
@@ -711,6 +712,11 @@ class EvaluationHarnessService:
             status = EvaluationCaseStatus.failed
         elif any(r.status == EvaluatorStatus.error for r in results):
             status = EvaluationCaseStatus.error
+        elif any(r.status == EvaluatorStatus.skipped for r in results):
+            # An evaluator declined to judge this case. Scoring it as passed
+            # would mean a run that produced nothing to evaluate (e.g. no
+            # formatted manuscript at all) reports a clean pass.
+            status = EvaluationCaseStatus.skipped
         else:
             status = EvaluationCaseStatus.passed
 
@@ -774,6 +780,7 @@ class EvaluationHarnessService:
         passed = sum(1 for c in case_results if c.status == EvaluationCaseStatus.passed)
         failed = sum(1 for c in case_results if c.status == EvaluationCaseStatus.failed)
         errored = sum(1 for c in case_results if c.status == EvaluationCaseStatus.error)
+        skipped = sum(1 for c in case_results if c.status == EvaluationCaseStatus.skipped)
 
         # generic aggregation of deterministic evaluator metric contributions
         accum: dict[str, dict[str, Any]] = {}
@@ -872,6 +879,10 @@ class EvaluationHarnessService:
             status = EvaluationReportStatus.error
         elif any(c.status == EvaluationCaseStatus.failed for c in case_results):
             status = EvaluationReportStatus.failed
+        elif any(c.status == EvaluationCaseStatus.skipped for c in case_results):
+            # Nothing was judged, so the run neither passed nor failed on
+            # merit; it is incomplete rather than successful.
+            status = EvaluationReportStatus.failed
         else:
             status = EvaluationReportStatus.passed
 
@@ -885,6 +896,7 @@ class EvaluationHarnessService:
             cases_passed=passed,
             cases_failed=failed,
             cases_error=errored,
+            cases_skipped=skipped,
             metrics=metrics,
             case_results=case_results,
             false_positive_counts={"false_threat": false_threat},

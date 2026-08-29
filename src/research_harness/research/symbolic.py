@@ -265,13 +265,56 @@ def decision_stage_plan(model: Any, decision_pairs: list[tuple[str, str]]) -> di
     }
 
 
+def _solve_stage_equilibrium(
+    payoffs: dict[str, Any], stage_pairs: list[tuple[str, str]]
+) -> dict[Any, Any] | None:
+    """Solve one stage's simultaneous-move equilibrium, or ``None``.
+
+    Actors at the same stage move simultaneously, so the stage is solved as a
+    *system*: every actor's own first-order condition, solved jointly for every
+    decision variable of the stage. Substituting reaction functions one at a
+    time is not equivalent — it leaves the other actors' variables in the
+    payoff, so earlier movers would be optimized against a non-equilibrium
+    continuation.
+
+    Returns the substitution dict when the system has a unique solution that
+    assigns every decision variable, and ``None`` otherwise. ``None`` means
+    "backward induction is unresolved here"; callers must then leave the payoff
+    untouched rather than substitute a wrong value, because a payoff that is
+    merely wrong still looks solvable and can be certified against.
+    """
+    if not stage_pairs:
+        return None
+    symbols = [sympy.Symbol(dv) for _a, dv in stage_pairs]
+    equations: list[Any] = []
+    for actor, dv in stage_pairs:
+        try:
+            equations.append(sympy.diff(payoffs[actor], sympy.Symbol(dv)))
+        except Exception:  # noqa: BLE001
+            return None
+    try:
+        solutions = sympy.solve(equations, symbols, dict=True)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(solutions, list):
+        return None
+    complete = [s for s in solutions if all(sym in s for sym in symbols)]
+    if len(complete) != 1:
+        # Zero solutions (no interior optimum) or several (multiple
+        # equilibria): neither can be substituted silently.
+        return None
+    return complete[0]
+
+
 def game_consistent_payoffs(model: Any) -> dict[str, Any]:
-    """Payoffs with later movers' best responses substituted in (backward induction).
+    """Payoffs with later movers' stage equilibria substituted in (backward induction).
 
     For each actor, the returned expression is what they actually optimize:
     - last movers (and simultaneous movers): raw payoff
     - earlier movers: payoff with all later-stage decision variables replaced by
-      their best-response functions.
+      the later stage's *joint* equilibrium, so a Stackelberg leader optimizes
+      against the followers' simultaneous-move outcome rather than against an
+      arbitrary one of their reaction functions.
     """
     table = {v.symbol: v for v in model.variables}
     table.update({p.symbol: p for p in model.parameters})
@@ -285,22 +328,17 @@ def game_consistent_payoffs(model: Any) -> dict[str, Any]:
     # later actors keep their own payoffs: simultaneous moves).
     for stage in reversed(plan["stages"]):
         actors = plan["stage_groups"][stage]
-        dvs = [dv for a, dv in decision_pairs if a in actors]
-        brs: dict[str, Any] = {}
-        for a in actors:
-            for dv in dvs:
-                try:
-                    sols = sympy.solve(sympy.diff(payoffs[a], sympy.Symbol(dv)), sympy.Symbol(dv))
-                except Exception:  # noqa: BLE001
-                    sols = []
-                if len(sols) == 1:
-                    brs[dv] = sols[0]
+        # Only each actor's OWN decision variables: differentiating one actor's
+        # payoff by another actor's variable is not a first-order condition.
+        stage_pairs = [(a, dv) for a, dv in decision_pairs if a in actors]
+        solution = _solve_stage_equilibrium(payoffs, stage_pairs)
+        if solution is None:
+            continue
         earlier_actors = {
             x for st2 in plan["stages"] if st2 < stage for x in plan["stage_groups"][st2]
         }
-        for dv, br in brs.items():
-            for actor in earlier_actors:
-                payoffs[actor] = payoffs[actor].subs(sympy.Symbol(dv), br)
+        for actor in earlier_actors:
+            payoffs[actor] = payoffs[actor].subs(solution)
     return payoffs
 
 

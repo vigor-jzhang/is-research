@@ -38,7 +38,11 @@ def build_rank_key(
         for field, ascending in fields:
             value = getattr(assessment, field, None)
             if value is None:
-                out.append(float("inf") if ascending else float("-inf"))
+                # Unknown evidence sorts last in BOTH directions. For a
+                # "higher is better" field the value is negated below, so
+                # -inf here would sort unknown evidence ahead of every real
+                # value and let a candidate with no benchmark runs win.
+                out.append(float("inf"))
             else:
                 out.append(float(value) if ascending else -float(value))
         out.append(assessment.candidate_id)  # deterministic tie-break

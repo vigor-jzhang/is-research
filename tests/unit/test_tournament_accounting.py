@@ -188,3 +188,29 @@ def test_effective_pricing_none_without_rates():
 
     candidate = TournamentModelConfig(candidate_id="c", requested_model="m")
     assert effective_pricing(candidate, None) is None
+
+
+def test_resolved_model_is_deterministic_on_ties():
+    """Ties must not be broken by string hash order.
+
+    ``max(set(...), key=list.count)`` depends on PYTHONHASHSEED, so the same
+    calls could resolve to a different model between runs, which breaks the
+    reproducibility the tournament's plan_hash is meant to provide.
+    """
+    calls = [
+        _call(model="model-B"),
+        _call(model="model-A"),
+        _call(model="model-B"),
+        _call(model="model-A"),
+        _call(model="model-B"),
+        _call(model="model-A"),
+    ]
+    # Equal counts -> choose the lexicographically smallest, not a hash-order
+    # artefact. Repeat to make accidental stability obvious if it regresses.
+    for _ in range(5):
+        assert aggregate_calls(calls)["resolved_model"] == "model-A"
+
+
+def test_resolved_model_prefers_the_most_frequent():
+    calls = [_call(model="model-A"), _call(model="model-A"), _call(model="model-B")]
+    assert aggregate_calls(calls)["resolved_model"] == "model-A"

@@ -58,15 +58,19 @@ in the working tree, uncommitted.
 | **M6** zero claims ⇒ `clear` | **Fixed** | `novelty_validator/plugin.py` |
 | **§7.1** pyright misconfiguration | **Fixed** | `pyproject.toml` + 4 real type errors |
 | Regression tests | **Added** (102) | 4 test files |
-| **C4, C5, C7, C8** and the H/M/L backlog | **Not started** | — |
+| **C4** backward-induction FOCs | **Fixed** (round 2) | `research/symbolic.py` |
+| **C8** `skipped` scored as `passed` | **Fixed** (round 2) | `evaluation_harness` + `schemas/evaluation.py` |
+| **H1** `resolved_model` nondeterminism | **Fixed** (round 2) | `tournament/accounting.py` |
+| **H3** policy rank `None` sorts first | **Fixed** (round 2) | `routing/policies.py` |
+| **C5, C7** and the H/M/L backlog | **Not started** | — |
 
-**Post-fix verification:**
+**Post-fix verification (after round 2):**
 
 | Check | Before | After |
 |---|---|---|
 | `ruff check src tests` | Pass | **Pass** |
 | `pyright` | 705 (misleading) | **0 errors** |
-| `pytest tests/unit tests/integration` | 961 passed, **1 failed** | **1064 passed, 0 failed** |
+| `pytest tests/unit tests/integration` | 961 passed, **1 failed** | **1080 passed, 0 failed** |
 
 ### Notes on the round-1 implementation
 
@@ -93,6 +97,27 @@ in the working tree, uncommitted.
   this silently produced `clear` (fail-open); it now maps assessment id → new claim id
   explicitly, recorded where the reuse decision is made.
 
+### Round 2 notes
+
+- **C4.** `game_consistent_payoffs` now solves each stage as a **system** via a new
+  `_solve_stage_equilibrium` helper: every actor's own FOC, solved jointly for every
+  decision variable of the stage. Two independent defects were removed — it no longer
+  differentiates one actor's payoff by another actor's decision variable, and it no
+  longer substitutes reaction functions one at a time. When the system has no unique
+  solution the payoff is left **untouched** rather than substituted with a wrong value:
+  a merely wrong payoff still looks solvable and can be certified against, whereas an
+  unsubstituted one leaves a residual the verifier will catch. Verified on a Stackelberg
+  leader with two simultaneous followers: leader payoff is now `Q*(a−Q)/3` and `Q* = a/2`,
+  matching the true SPNE (previously `Q*(−Q+a+q1)/4` and `Q* = a/2 + q1/2`).
+- **C8.** Added `EvaluationCaseStatus.skipped` and `cases_skipped` to both
+  `EvaluationReport` and `EvaluationRun`, preserving the invariant
+  `passed + failed + error + skipped == total`. A `skipped` case no longer counts as
+  passed, and a report containing one is `failed` rather than `passed`. Precedence is
+  preserved: a deterministic failure still outranks a skip.
+- **H1.** `resolved_model` ties now break by name (`min` on `(-count, name)`) instead of
+  `max` over a `set`, which was hash-order dependent.
+- **H3.** `build_rank_key` maps unknown evidence to `+inf` for both directions.
+
 ### Verification that the new tests are genuine regression tests
 
 Each new test was confirmed to **fail** against the pre-fix code and **pass** after:
@@ -103,6 +128,14 @@ Each new test was confirmed to **fail** against the pre-fix code and **pass** af
 | `test_document_fetcher_http.py` (2 new) | 1 failed + C6 integration failure | 14 pass |
 | `test_novelty.py` (5 new) | 3 failed | 36 pass |
 | `test_symbolic_safe_parsing.py` (90 new) | n/a (new file) | 90 pass |
+| `test_symbolic_game_stages.py` (6 new, C4) | 2 failed | 6 pass |
+| `test_evaluation_harness.py` (2 new, C8) | n/a (new cases) | 18 pass |
+| `test_tournament_accounting.py` (2 new, H1) | 3 failed (seed-dependent: 2 at seed 4) | 13 pass at every seed |
+| `test_routing_policies.py` (6 new, H3) | 1 failed | 6 pass |
+
+> The H1 row is the interesting one: reverting the fix produces **3** failures at
+> `PYTHONHASHSEED` 1/2/3/5 but only **2** at seed 4 — the nondeterminism is visible
+> directly in the failure counts.
 
 > **Caveat:** the repo ships `__pycache__` directories on disk (untracked). Stale `.pyc`
 > files masked a restored source file during verification; clear them

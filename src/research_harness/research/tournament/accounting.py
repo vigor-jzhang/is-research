@@ -128,7 +128,11 @@ def aggregate_calls(calls: list[ModelCallRecord]) -> dict[str, Any]:
 
     resolved = [c.model for c in calls if c.model]
     if resolved:
-        out["resolved_model"] = max(set(resolved), key=resolved.count)
+        # ``max(set(...))`` ties on string hash order, which is randomised per
+        # interpreter process, so the same input could yield a different
+        # resolved model between runs. Break ties by name to stay reproducible.
+        model_counts = Counter(resolved)
+        out["resolved_model"] = min(model_counts, key=lambda m: (-model_counts[m], m))
 
     return out
 
