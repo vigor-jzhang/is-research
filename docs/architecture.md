@@ -322,7 +322,7 @@ Rules enforced by `tests/unit/test_architecture.py`:
 Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 73 unit, 43 integration, and 16 opt-in live test files cover every phase:
 
 ```bash
-uv run pytest                # offline: 939 passed, 21 skipped
+uv run pytest                # offline: 950 passed, 21 skipped
 uv run --env-file .env pytest -m live -v          # OpenRouter live
 uv run --env-file .env pytest -m live_novelty_validation -v  # e.g. Phase 5 live
 ```

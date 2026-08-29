@@ -1608,16 +1608,69 @@ a qualified task row always meets every role threshold (deterministic rate,
 structured output, provider-error, grounding). Provider-unavailable candidates
 are counted separately and never appear as qualified or as a primary/fallback.
 
+## Task-aware shadow routing (Phase 7D.4)
+
+### Architecture
+Broad logical roles (fast / reasoning / critic) are preserved, with task
+specialization underneath them. The task-aware shadow router selects an
+advisory model per (role, task) from the exact-task `TaskQualificationMatrix`
+(never the role leaderboard). Shadow mode only: production always executes the
+configured static role model; the decision is recorded as an immutable
+`task_aware_routing_decision` artifact.
+
+```
+reasoning
+  ├── evidence_extraction → gemini-3.7-flash (qualified)
+  ├── gap_analysis         → gemini-3.7-flash (qualified)
+  ├── mechanism_generation → static model (no qualified model)
+  ├── model_specification  → static model (no qualified model)
+  └── proposition_generation → static model (no qualified model)
+```
+
+### Qualification lookup behavior
+A model is considered ONLY when its `TaskQualificationResult.qualified` is
+true for the exact requested task — qualification is never transferred across
+tasks (evidence_extraction qualified ≠ mechanism_generation qualified). Stale
+evidence (older than `max_qualification_age_seconds`) is rejected as
+`stale_qualification`. A role/task mismatch is rejected. Ranking of qualified
+candidates is correctness/reliability first (mean, worst, structured output),
+then latency, then cost, then deterministic candidate_id tie-break; an
+unqualified model (however cheap) is never selected.
+
+### Covered / uncovered / fallback behavior
+- Covered task (>=1 qualified): primary = top-ranked; fallback = next qualified
+  model when one exists; otherwise fallback = static configured model, marked
+  `fallback_not_live_qualified=true` (never claimed qualified).
+- Uncovered task: `static_fallback`, reason `no_qualified_task_model`; no
+  dynamic switch; never an error.
+
+### Shadow campaign (live matrix)
+| task | static | shadow | would_switch | fallback |
+|---|---|---|---|---|
+| evidence_extraction | nemotron-3-ultra | **gemini-3.7-flash** | True | static (not live qualified) |
+| gap_analysis | nemotron-3-ultra | **gemini-3.7-flash** | True | static (not live qualified) |
+| synthesis | nemotron-3-ultra | (static) | False | static |
+| mechanism_generation | nemotron-3-ultra | (static) | False | static |
+| model_specification | nemotron-3-ultra | (static) | False | static |
+| proposition_generation | nemotron-3-ultra | (static) | False | static |
+| screening | deepseek-v4-flash | (static) | False | static |
+
+### Routing benchmark
+`task-aware-shadow-routing-v1` (11 cases, `evaluator.task_aware_routing`):
+qualified-task selection, cross-task specialization, no qualification
+transfer, uncovered static fallback, unqualified-cheaper never selected,
+qualified primary+fallback, primary-without-qualified-fallback, stale
+rejection, role/task mismatch rejection, deterministic tie break, static-model-
+kept-when-current. Critical invariant: **unsafe_task_route_rate = 0**.
+
 ## Recommended next increment
 
-Post-Phase-7D.3E: the approved pool is set and re-qualified; gap_analysis and
-evidence_extraction are covered (gemini-3.7-flash), as are the three
-mechanism/model-spec/proposition critique tasks. Seven tasks remain uncovered
-(synthesis, the three generation tasks, results/manuscript critique, screening)
-with dominant failure reason `below_quality_threshold` — structural validity,
-defect-recall stability, and decision accuracy, not provider availability.
-Continue qualification only with provider-stable endpoints for the strongest
-candidates (qwen3.8-flash critic det 0.933–1.0 but rate-limit/502 variance;
-gpt-5.6-luna provider-flaky). Full task-aware shadow routing still requires a
-qualified primary for every routed task, so it is not yet justified. Do not
-activate routing.
+Post-Phase-7D.4: task-aware shadow routing is implemented and verified
+(unsafe_task_route_rate = 0); the architecture now supports task specialization
+under the broad roles. Only two tasks have a qualified primary in the live
+matrix (evidence_extraction, gap_analysis — gemini-3.7-flash), both without a
+live-qualified fallback; seven tasks remain static. Phase 7D.4 remains shadow
+only. To justify Phase 7E (controlled task-aware activation) you would need a
+qualified primary for every task intended for routing plus qualified fallbacks
+for critical tasks — continue qualification with provider-stable endpoints for
+the strongest candidates. Production routing remains DISABLED.

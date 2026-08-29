@@ -10106,6 +10106,49 @@ def _task_qualification_case(
     )
 
 
+def _task_aware_routing_case(
+    case_id: str,
+    name: str,
+    description: str,
+    *,
+    role: str,
+    reference: dict[str, Any],
+    live_results: dict[str, dict[str, Any]],
+    task: str | None = None,
+    tasks: list[str] | None = None,
+    static_model: str = "static/model",
+    static_provider: str = "openrouter",
+    criteria: dict[str, Any] | None = None,
+    max_qualification_age_seconds: float | None = None,
+    matrix_age_seconds: float | None = None,
+) -> BenchmarkCaseDefinition:
+    case_input: dict[str, Any] = {
+        "workflow": "task_aware_routing",
+        "role": role,
+        "live_results": live_results,
+        "static_model": static_model,
+        "static_provider": static_provider,
+        "criteria": criteria or {},
+    }
+    if tasks is not None:
+        case_input["tasks"] = list(tasks)
+    if task is not None:
+        case_input["task"] = task
+    if max_qualification_age_seconds is not None:
+        case_input["max_qualification_age_seconds"] = max_qualification_age_seconds
+    if matrix_age_seconds is not None:
+        case_input["matrix_age_seconds"] = matrix_age_seconds
+    return BenchmarkCaseDefinition(
+        id=case_id,
+        name=name,
+        description=description,
+        input=case_input,
+        reference=reference,
+        evaluation_dimensions=["task_aware_routing"],
+        tags=["task_aware_routing", "offline"],
+    )
+
+
 def _readiness_case(
     case_id: str,
     name: str,
@@ -11159,6 +11202,295 @@ TASK_SPECIFIC_MODEL_QUALIFICATION_V1: BenchmarkDefinition = BenchmarkDefinition(
 )
 
 
+TASK_AWARE_SHADOW_ROUTING_V1: BenchmarkDefinition = BenchmarkDefinition(
+    benchmark_id="task-aware-shadow-routing-v1",
+    version=1,
+    name="Task-Aware Shadow Routing (Phase 7D.4)",
+    description=(
+        "Offline benchmark over the real deterministic task-aware shadow "
+        "routing logic. Verifies exact-task selection (qualified models only, "
+        "never transferred across tasks), task specialization, uncovered-task "
+        "static fallback (no_qualified_task_model), unqualified-cheaper-model "
+        "non-selection, qualified primary/fallback behavior, primary-without-"
+        "qualified-fallback, stale-qualification rejection, role/task mismatch "
+        "rejection, deterministic tie-breaks, and that unsafe_task_route_rate "
+        "stays 0. Shadow only — production never switches."
+    ),
+    category="task_aware_routing",
+    config={"evaluators": ["evaluator.task_aware_routing"]},
+    cases=[
+        _task_aware_routing_case(
+            "tar-qualified-task-selects",
+            "qualified task selects qualified model",
+            "A model qualified for evidence_extraction is selected for that task.",
+            role="reasoning",
+            task="evidence_extraction",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                ),
+            },
+            reference={
+                "expected_status": "selected",
+                "expected_primary": "m-a",
+                "expected_shadow_selected": "m-a",
+                "expected_would_switch": True,
+                "expected_reason": "",
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-different-tasks-different-models",
+            "different tasks select different models",
+            "Two tasks specialize on different qualified models.",
+            role="reasoning",
+            tasks=["evidence_extraction", "gap_analysis"],
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.95}},
+                ),
+                "m-b": _lq_tasks_result(
+                    "m-b",
+                    role="reasoning",
+                    tasks={"lq-gap-analysis": {"det": 0.95}},
+                ),
+            },
+            reference={
+                "expected_decisions": {
+                    "evidence_extraction": {
+                        "expected_status": "selected",
+                        "expected_primary": "m-a",
+                        "expected_shadow_selected": "m-a",
+                        "expected_would_switch": True,
+                    },
+                    "gap_analysis": {
+                        "expected_status": "selected",
+                        "expected_primary": "m-b",
+                        "expected_shadow_selected": "m-b",
+                        "expected_would_switch": True,
+                    },
+                }
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-no-qualification-transfer",
+            "qualification is not transferred between tasks",
+            "A model qualified for evidence_extraction is NOT used for mechanism_generation.",
+            role="reasoning",
+            task="mechanism_generation",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.95}},
+                ),
+            },
+            reference={
+                "expected_status": "static_fallback",
+                "expected_reason": "no_qualified_task_model",
+                "expected_primary": None,
+                "expected_shadow_selected": None,
+                "expected_would_switch": False,
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-uncovered-task-stays-static",
+            "uncovered task stays static",
+            "A task with no qualified model keeps the configured static model.",
+            role="reasoning",
+            task="model_specification",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-model-specification": {"det": 0.5}},
+                ),
+            },
+            reference={
+                "expected_status": "static_fallback",
+                "expected_reason": "no_qualified_task_model",
+                "expected_primary": None,
+                "expected_shadow_selected": None,
+                "expected_would_switch": False,
+                "expected_fallback": "static/model",
+                "expected_fallback_not_live_qualified": True,
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-unqualified-cheaper-never-selected",
+            "unqualified cheaper model never selected",
+            "A cheaper but unqualified model is never chosen over a qualified one.",
+            role="reasoning",
+            task="evidence_extraction",
+            live_results={
+                "m-cheap": _lq_tasks_result(
+                    "m-cheap",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.5}},
+                    cost=0.0,
+                ),
+                "m-good": _lq_tasks_result(
+                    "m-good",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                    cost=1.0,
+                ),
+            },
+            reference={
+                "expected_status": "selected",
+                "expected_primary": "m-good",
+                "expected_shadow_selected": "m-good",
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-qualified-primary-plus-fallback",
+            "qualified primary + fallback",
+            "Two qualified models: primary and a live-qualified fallback are recorded.",
+            role="reasoning",
+            task="evidence_extraction",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.95}},
+                ),
+                "m-b": _lq_tasks_result(
+                    "m-b",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                ),
+            },
+            reference={
+                "expected_status": "selected",
+                "expected_primary": "m-a",
+                "expected_fallback": "m-b",
+                "expected_fallback_is_qualified": True,
+                "expected_fallback_not_live_qualified": False,
+                "expected_would_switch": True,
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-primary-without-qualified-fallback",
+            "primary without qualified fallback",
+            "Only a primary is qualified; the static model is the fallback, "
+            "explicitly marked not live qualified.",
+            role="reasoning",
+            task="evidence_extraction",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                ),
+            },
+            reference={
+                "expected_status": "selected",
+                "expected_primary": "m-a",
+                "expected_fallback": "static/model",
+                "expected_fallback_is_qualified": False,
+                "expected_fallback_not_live_qualified": True,
+                "expected_would_switch": True,
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-stale-qualification-rejected",
+            "stale qualification rejected",
+            "Qualification evidence older than the max age is rejected; the task stays static.",
+            role="reasoning",
+            task="evidence_extraction",
+            max_qualification_age_seconds=60,
+            matrix_age_seconds=3600,
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                ),
+            },
+            reference={
+                "expected_status": "static_fallback",
+                "expected_reason": "stale_qualification",
+                "expected_primary": None,
+                "expected_shadow_selected": None,
+                "expected_would_switch": False,
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-role-task-mismatch-rejected",
+            "role/task mismatch rejected",
+            "A task that does not belong to the role is rejected (never routed).",
+            role="reasoning",
+            task="screening",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                ),
+            },
+            reference={
+                "expected_status": "static_fallback",
+                "expected_reason": "role_task_mismatch",
+                "expected_primary": None,
+                "expected_shadow_selected": None,
+                "expected_would_switch": False,
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-deterministic-tie-break",
+            "deterministic tie break",
+            "Identical qualified candidates resolve deterministically by candidate_id.",
+            role="reasoning",
+            task="evidence_extraction",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                ),
+                "m-b": _lq_tasks_result(
+                    "m-b",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                ),
+            },
+            reference={
+                "expected_status": "selected",
+                "expected_primary": "m-a",
+                "expected_shadow_selected": "m-a",
+                "expected_fallback": "m-b",
+                "expected_fallback_is_qualified": True,
+            },
+        ),
+        _task_aware_routing_case(
+            "tar-static-model-kept-when-current",
+            "static model kept when already qualified",
+            "When the static configured model is itself the top qualified model, "
+            "would_switch is False.",
+            role="reasoning",
+            task="evidence_extraction",
+            static_model="m-a",
+            live_results={
+                "m-a": _lq_tasks_result(
+                    "m-a",
+                    role="reasoning",
+                    tasks={"lq-evidence-extraction": {"det": 0.9}},
+                ),
+            },
+            reference={
+                "expected_status": "selected",
+                "expected_primary": "m-a",
+                "expected_shadow_selected": "m-a",
+                "expected_would_switch": False,
+            },
+        ),
+    ],
+)
+
+
 BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     NOVELTY_THREAT_V1.benchmark_id: NOVELTY_THREAT_V1,
     LITERATURE_RETRIEVAL_V1.benchmark_id: LITERATURE_RETRIEVAL_V1,
@@ -11191,4 +11523,5 @@ BUILTIN_BENCHMARKS: dict[str, BenchmarkDefinition] = {
     PRODUCTION_ROUTING_READINESS_V1.benchmark_id: PRODUCTION_ROUTING_READINESS_V1,
     MODEL_QUALIFICATION_POLICY_V1.benchmark_id: MODEL_QUALIFICATION_POLICY_V1,
     TASK_SPECIFIC_MODEL_QUALIFICATION_V1.benchmark_id: TASK_SPECIFIC_MODEL_QUALIFICATION_V1,
+    TASK_AWARE_SHADOW_ROUTING_V1.benchmark_id: TASK_AWARE_SHADOW_ROUTING_V1,
 }

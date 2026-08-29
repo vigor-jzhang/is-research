@@ -63,6 +63,7 @@ def _deterministic_evaluators() -> set[str]:
         "evaluator.routing_readiness",
         "evaluator.model_qualification",
         "evaluator.task_model_qualification",
+        "evaluator.task_aware_routing",
         "evaluator.evaluator_sanity",
     }
 

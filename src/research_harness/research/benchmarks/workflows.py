@@ -5560,6 +5560,120 @@ async def run_task_qualification_workflow(
 
 
 # ---------------------------------------------------------------------------
+# task_aware_routing workflow (Phase 7D.4): the real task-aware shadow router
+# over synthetic task-qualification evidence
+# ---------------------------------------------------------------------------
+
+
+async def run_task_aware_routing_workflow(
+    *,
+    artifact_store: Any,
+    case: BenchmarkCase,
+    producer: str = _DEFAULT_PRODUCER,
+) -> list[ArtifactEnvelope[Any]]:
+    """Builds a TaskQualificationMatrix from synthetic LiveQualityModelResult
+    fixtures and runs the real task-aware shadow selection for one or more
+    (role, task) pairs, persisting the decisions for the evaluator. No network."""
+    from research_harness.research.routing.qualification import build_task_matrix
+    from research_harness.research.routing.task_aware import build_task_aware_decision
+    from research_harness.research.schemas.live_quality import (
+        LiveQualityModelResult,
+        QualificationCriteria,
+    )
+
+    before = {e.artifact_id for e in await artifact_store.list()}
+    run_suffix = uuid.uuid4().hex[:8]
+    role = str(case.input.get("role") or "reasoning")
+    tasks = [str(t) for t in (case.input.get("tasks") or [])] or [str(case.input.get("task") or "")]
+    benchmark_id = str(case.input.get("benchmark_id") or "live-quality-reasoning-v1")
+
+    live_results: dict[str, LiveQualityModelResult] = {}
+    for candidate_id, payload in (case.input.get("live_results") or {}).items():
+        live_results[str(candidate_id)] = LiveQualityModelResult.model_validate(
+            dict(payload, candidate_id=str(candidate_id))
+        )
+
+    criteria_data = dict(case.input.get("criteria") or {})
+    criteria = QualificationCriteria.model_validate(criteria_data) if criteria_data else None
+
+    matrix, _rows = build_task_matrix(
+        live_results,
+        role=role,
+        benchmark_id=benchmark_id,
+        repetitions=int(case.input.get("repetitions") or 3),
+        criteria=criteria,
+    )
+    matrix_env = ArtifactEnvelope.create(
+        payload=matrix,
+        artifact_type="task_qualification_matrix",
+        producer=producer,
+        artifact_id=f"{case.id}-{run_suffix}-task-qualification",
+    )
+    await artifact_store.put(matrix_env)
+
+    decisions: list[ArtifactEnvelope[Any]] = []
+    for task in tasks:
+        try:
+            decision = build_task_aware_decision(
+                role=role,
+                task=task,
+                matrix=matrix,
+                static_model=str(case.input.get("static_model") or ""),
+                static_provider=str(case.input.get("static_provider") or "openrouter"),
+                max_qualification_age_seconds=(
+                    float(case.input["max_qualification_age_seconds"])
+                    if case.input.get("max_qualification_age_seconds") is not None
+                    else None
+                ),
+                matrix_age_seconds=(
+                    float(case.input["matrix_age_seconds"])
+                    if case.input.get("matrix_age_seconds") is not None
+                    else None
+                ),
+            )
+        except ValueError as e:
+            # role/task mismatch is REJECTED: no routing, no shadow switch. The
+            # decision records the rejection explicitly (Phase 7D.4 case 9).
+            from research_harness.research.schemas.routing import (
+                TaskAwareRoutingDecision,
+                TaskAwareRoutingStatus,
+            )
+
+            decision = TaskAwareRoutingDecision(
+                policy_id="task_aware_shadow_v1",
+                policy_version="1",
+                decision_policy={
+                    "gate": "exact_task_qualification",
+                    "rank": "correctness/reliability/structured-output then latency then cost; "
+                    "deterministic candidate_id tie-break",
+                },
+                role=role,
+                task=task,
+                task_label=task,
+                status=TaskAwareRoutingStatus.static_fallback,
+                reason="role_task_mismatch",
+                matrix_id=matrix.id,
+                current_static_model=str(case.input.get("static_model") or ""),
+                static_model_provider=str(case.input.get("static_provider") or "openrouter"),
+                fallback_candidate_id=str(case.input.get("static_model") or ""),
+                fallback_not_live_qualified=True,
+                would_switch=False,
+                shadow={"routing_mode": "shadow", "would_switch": False, "rejected": str(e)},
+            )
+        decision_env = ArtifactEnvelope.create(
+            payload=decision,
+            artifact_type="task_aware_routing_decision",
+            producer=producer,
+            artifact_id=f"{case.id}-{run_suffix}-task-aware-decision-{task}",
+        )
+        await artifact_store.put(decision_env)
+        decisions.append(decision_env)
+
+    after = await artifact_store.list()
+    return [e for e in after if e.artifact_id not in before]
+
+
+# ---------------------------------------------------------------------------
 # qualification_matrix workflow (Phase 7D.2): the production-qualification
 # matrix across roles over synthetic live-quality results
 # ---------------------------------------------------------------------------

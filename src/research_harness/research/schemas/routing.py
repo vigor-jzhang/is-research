@@ -151,3 +151,104 @@ class RoutingExecution(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"extra": "forbid"}
+
+
+class TaskAwareRoutingStatus(str, Enum):
+    """Task-aware shadow routing outcome (Phase 7D.4, shadow only).
+
+    - selected: an exact-task-qualified model was selected (shadow).
+    - static_fallback: no exact-task-qualified model; the task keeps the
+      configured static role model. This is never an error and never a
+      dynamic switch.
+    """
+
+    selected = "selected"
+    static_fallback = "static_fallback"
+
+
+class TaskAwareQualifiedCandidate(BaseModel):
+    """One candidate considered by the task-aware router for a single task."""
+
+    candidate_id: str
+    resolved_model: str | None = None
+    qualified: bool = False
+    deterministic_pass_rate_mean: float | None = None
+    deterministic_pass_rate_worst: float | None = None
+    structured_output_success_rate: float | None = None
+    provider_error_frequency: float | None = None
+    critical_grounding_failures: int = 0
+    latency_ms_p50: float | None = None
+    estimated_cost: float | None = None
+    live_quality_run_id: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class TaskAwareRoutingDecision(BaseModel):
+    """One immutable task-aware shadow routing decision (Phase 7D.4).
+
+    Shadow mode only: `current_static_model` is always what executes in
+    production; `shadow_selected_model` is the advisory task-specialized
+    choice. Qualification is exact-task (never transferred across tasks), and
+    uncovered tasks are recorded as `static_fallback` with `reason`
+    `no_qualified_task_model` (or `stale_qualification`). Historical decisions
+    are immutable."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=_utcnow)
+    policy_id: str = "task_aware_shadow_v1"
+    policy_version: str = "1"
+    decision_policy: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Snapshot of the exact decision rules applied (gate + rank)",
+    )
+    role: str
+    task: str
+    task_label: str = ""
+    status: TaskAwareRoutingStatus
+    reason: str = Field(
+        default="",
+        description="no_qualified_task_model | stale_qualification | '' (covered)",
+    )
+    matrix_id: str | None = None
+    matrix_age_seconds: float | None = None
+    current_static_model: str | None = None
+    static_model_provider: str | None = None
+    qualified_candidates: list[TaskAwareQualifiedCandidate] = Field(default_factory=list)
+    primary_candidate_id: str | None = None
+    fallback_candidate_id: str | None = None
+    fallback_is_qualified: bool = False
+    fallback_not_live_qualified: bool = Field(
+        default=False,
+        description="True when the fallback is the static configured model (not "
+        "exact-task live qualified); never presented as qualified",
+    )
+    would_switch: bool | None = None
+    shadow_selected_model: str | None = None
+    qualification_result_ids: list[str] = Field(
+        default_factory=list,
+        description="Live-quality run ids backing the qualified candidates",
+    )
+    expected_quality_delta: float | None = None
+    expected_latency_delta: float | None = None
+    expected_cost_delta: float | None = None
+    shadow: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Shadow-mode comparison (routing_mode / would_switch / deltas)",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class TaskAwareShadowCampaign(BaseModel):
+    """Immutable record of a task-aware shadow routing campaign batch."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    decision_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=_utcnow)
+    mode: str = Field(
+        default="shadow", description="shadow (Phase 7D.4) — production never switched"
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}

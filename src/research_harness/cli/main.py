@@ -5957,6 +5957,7 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
         "evaluator.routing_readiness",
         "evaluator.model_qualification",
         "evaluator.task_model_qualification",
+        "evaluator.task_aware_routing",
         "evaluator.evaluator_sanity",
         "storage.blobs_filesystem",
     ):
@@ -6487,7 +6488,7 @@ def leaderboard_inspect(
 
 def _routing_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
     cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
-    for pid in ("routing.policy_router",):
+    for pid in ("routing.policy_router", "routing.task_aware_router"):
         if pid not in cfg.plugins:
             cfg.plugins.append(pid)
     return cfg
@@ -7301,6 +7302,112 @@ def routing_capability_profile(
                     f"  latency {profile.latency_ms_p50} ms  tokens {profile.total_tokens}  "
                     f"cost {profile.estimated_cost}  reps {profile.repetitions}"
                 )
+
+    asyncio.run(_run())
+
+
+@routing_app.command("shadow-task")
+def routing_shadow_task(
+    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    task: Annotated[
+        str,
+        typer.Option(
+            help="Canonical task, e.g. evidence_extraction, gap_analysis, mechanism_critique, screening"
+        ),
+    ],
+    max_age: Annotated[
+        float | None,
+        typer.Option(help="Max qualification-evidence age in seconds (default: config)"),
+    ] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Run one task-aware shadow routing decision (Phase 7D.4).
+
+    Shadow only: selects an advisory task-specialized model from the exact-task
+    TaskQualificationMatrix evidence. Uncovered tasks keep the configured static
+    role model (static_fallback). Production routing is never switched.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("task_aware_router.default")
+            decision = await svc.decide(role, task, max_qualification_age_seconds=max_age)
+            color = "green" if decision.status.value == "selected" else "yellow"
+            console.print(
+                f"[{color}]{decision.task}[/{color}] {decision.status.value} "
+                f"(reason={decision.reason or '-'})"
+            )
+            console.print(
+                f"  static={decision.current_static_model}  "
+                f"shadow={decision.shadow_selected_model or '(static fallback)'}  "
+                f"would_switch={decision.would_switch}"
+            )
+            console.print(
+                f"  primary={decision.primary_candidate_id}  fallback={decision.fallback_candidate_id}"
+            )
+            if decision.fallback_not_live_qualified:
+                console.print(
+                    "  [yellow]fallback is the static model (not live qualified)[/yellow]"
+                )
+            console.print(
+                f"  quality_delta={decision.expected_quality_delta}  latency_delta="
+                f"{decision.expected_latency_delta}  cost_delta={decision.expected_cost_delta}"
+            )
+            console.print(f"  decision artifact: {decision.id}")
+
+    asyncio.run(_run())
+
+
+@routing_app.command("shadow-campaign")
+def routing_shadow_campaign(
+    max_age: Annotated[
+        float | None,
+        typer.Option(help="Max qualification-evidence age in seconds (default: config)"),
+    ] = None,
+    config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
+        "configs/example.yaml"
+    ),
+) -> None:
+    """Run the task-aware shadow router over every role/task in the current
+    qualification matrices (Phase 7D.4). Shadow only — no production changes.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        cfg = _live_quality_config(config, list(_EVAL_REQUIRED))
+        from research_harness.app.bootstrap import build_runtime
+
+        runtime = build_runtime(cfg)
+        async with runtime:
+            svc = runtime.services.require("task_aware_router.default")
+            campaign = await svc.shadow_campaign(max_qualification_age_seconds=max_age)
+            decisions = await svc.list_decisions()
+            header = f"{'task':32s} {'static':38s} {'shadow':38s} {'switch':6s} {'status':16s} {'fallback':38s}"
+            console.print(header)
+            console.print("-" * len(header))
+            for d in sorted(decisions, key=lambda x: (x.role, x.task)):
+                mark = (
+                    "[green]selected[/green]"
+                    if d.status.value == "selected"
+                    else "[yellow]static_fallback[/yellow]"
+                )
+                console.print(
+                    f"{d.task:32s} {str(d.current_static_model or ''):38s} "
+                    f"{str(d.shadow_selected_model or '(static)'):38s} {str(d.would_switch):6s} "
+                    f"{mark:16s} {str(d.fallback_candidate_id or ''):38s}"
+                )
+                if d.reason:
+                    console.print(f"  [yellow]reason: {d.reason}[/yellow]")
+            console.print(
+                f"  campaign {campaign.id}  decisions {len(decisions)}  mode {campaign.mode}"
+            )
 
     asyncio.run(_run())
 

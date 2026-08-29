@@ -220,6 +220,7 @@ def _derived_plugin_configs(
     derived: dict[str, dict[str, Any]] = {
         "routing.role_router": {"models": config.models.model_dump()},
         "routing.policy_router": {"models": config.models.model_dump()},
+        "routing.task_aware_router": {"models": config.models.model_dump()},
         "evaluation.live_quality": {
             "models": config.models.model_dump(),
             "live_quality": config.live_quality.model_dump(),

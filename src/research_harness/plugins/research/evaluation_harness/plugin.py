@@ -52,6 +52,7 @@ from research_harness.research.benchmarks.workflows import (
     run_routing_readiness_workflow,
     run_screening_workflow,
     run_synthesis_workflow,
+    run_task_aware_routing_workflow,
     run_task_qualification_workflow,
 )
 from research_harness.research.envelope import ArtifactEnvelope
@@ -550,6 +551,13 @@ class EvaluationHarnessService:
                 producer=self._producer,
             )
             return produced, None
+        if workflow == "task_aware_routing":
+            produced = await run_task_aware_routing_workflow(
+                artifact_store=self._store,
+                case=case,
+                producer=self._producer,
+            )
+            return produced, None
         if workflow == "evaluator_sanity":
             produced = await run_evaluator_sanity_workflow(
                 artifact_store=self._store,
@@ -1003,6 +1011,7 @@ class EvaluationHarnessPlugin(Plugin):
             },
             optional_evaluators={
                 "evaluator.evaluator_sanity": ctx.try_get("evaluator.evaluator_sanity"),
+                "evaluator.task_aware_routing": ctx.try_get("evaluator.task_aware_routing"),
             },
             config=evaluation_cfg,
             judge_role=str(evaluation_cfg.get("judge_role") or "critic"),
