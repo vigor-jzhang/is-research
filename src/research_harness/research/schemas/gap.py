@@ -8,6 +8,44 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+# Comprehensive vocabulary of legitimate analytical IS/economic research
+# domains for model-construction opportunity assessments. Genuine defect
+# repair (Phase 7D.3E): the previous eight-domain set was under-specified and
+# crashed the mechanism pipeline whenever a model named a standard field such
+# as "industrial organization" or "entry deterrence". This is a vocabulary
+# repair for legitimate research domains, never a benchmark relaxation.
+_ANALYTICAL_MODEL_DOMAINS = frozenset(
+    {
+        "strategic interaction",
+        "information asymmetry",
+        "platform behavior",
+        "pricing",
+        "technology adoption",
+        "incentives",
+        "competition",
+        "mechanism design",
+        "industrial organization",
+        "entry deterrence",
+        "market structure",
+        "market design",
+        "network effects",
+        "information economics",
+        "contract theory",
+        "game theory",
+        "auction theory",
+        "price discrimination",
+        "signaling",
+        "screening",
+        "two-sided markets",
+        "oligopoly",
+        "behavioral economics",
+        "digital platforms",
+        "economic regulation",
+        "welfare economics",
+        "competition policy",
+    }
+)
+
 
 class GapType(str, Enum):
     """Structured research gap categories (extensible)."""
@@ -74,25 +112,16 @@ class AnalyticalModelOpportunity(BaseModel):
     suitable: bool = False
     domains: list[str] = Field(
         default_factory=list,
-        description="strategic interaction, information asymmetry, platform behavior, pricing, technology adoption, incentives, competition, mechanism design",
+        description="legitimate analytical IS/economic research domains "
+        "(e.g. strategic interaction, industrial organization, mechanism design)",
     )
     rationale: str | None = Field(default=None)
 
     @field_validator("domains")
     @classmethod
     def validate_domains(cls, v: list[str]) -> list[str]:
-        allowed = {
-            "strategic interaction",
-            "information asymmetry",
-            "platform behavior",
-            "pricing",
-            "technology adoption",
-            "incentives",
-            "competition",
-            "mechanism design",
-        }
         for d in v:
-            if d not in allowed:
+            if d not in _ANALYTICAL_MODEL_DOMAINS:
                 raise ValueError(f"unknown analytical model domain {d!r}")
         return sorted(set(v))
 

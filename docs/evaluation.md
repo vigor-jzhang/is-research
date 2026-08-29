@@ -1528,13 +1528,96 @@ Six critical tasks remain uncovered. Dominant failure reason
 below_quality_threshold (model capability); qwen3.8-flash critic quality is
 high (det 0.933) but blocked by provider-error rate (0.32 > 0.1).
 
+## Candidate refresh + final qualification sweep (Phase 7D.3E)
+
+### Approved candidate pool
+The active qualification config now contains only the operator-approved
+10-model pool (stale candidates removed; slugs stay config-driven). Preflight
+(probes for reachability/structured-output/context/latency, persisted per
+model+role) gates every campaign; only `available` models enter qualification
+and provider failures are never read as incapability.
+
+Preflight (per-role availability): reasoning = deepseek-v4-flash,
+gemini-3.7-flash, minimax-m3, nemotron-3-ultra, gpt-5.6-luna, qwen3.7-flash,
+qwen3.8-flash, glm-5.3-flash (8); critic = same minus nemotron (provider_error)
+and qwen3.7 (capability_mismatch) (6); fast = deepseek, minimax, nemotron,
+gpt-5.6-luna, qwen3.8, glm-5.3 (6). glm-5.2:free and gemma-4-31b-it:free were
+temporarily_unavailable (upstream 429). Classifications are transient; they are
+persisted per run and never cached as a verdict.
+
+### Genuine defect repair: analytical-domain vocabulary crash
+`AnalyticalModelOpportunity.domains` validated against an eight-domain enum
+(strategic interaction, information asymmetry, platform behavior, pricing,
+technology adoption, incentives, competition, mechanism design). A model
+naming a legitimate IS/economic field such as "industrial organization" or
+"entry deterrence" raised a pydantic ValidationError in the mechanism-critic
+revision path, which crashed the whole mechanism case (status=error) — observed
+repeatedly for deepseek and gemini-3.7-flash.
+
+Repair (production behavior changed only for this genuine general-purpose
+defect):
+1. The domain vocabulary was expanded to a comprehensive set of legitimate
+   analytical IS/economic domains (industrial organization, entry deterrence,
+   market structure/design, network effects, information economics, contract
+   theory, game/auction theory, price discrimination, signaling, screening,
+   two-sided markets, oligopoly, behavioral economics, digital platforms,
+   economic regulation, welfare economics, competition policy). Bogus domains
+   are still rejected — validators are not loosened.
+2. `MechanismCriticService._revise` now degrades gracefully: any revision
+   failure (model call, malformed JSON, or schema validation) falls back to
+   the documented "revision model unavailable; original candidate selected
+   unchanged" path instead of crashing the selection.
+
+Verified live: the mechanism case no longer errors on the domain crash (it
+passed a repetition and the remaining errors are provider 502s, not the
+defect).
+
+### Qualification results (approved models, >=3 reps; 5 for borderline)
+
+| task | tested | qualified | primary | status |
+|---|---|---|---|---|
+| evidence_extraction | 8 | 1 | gemini-3.7-flash (det 1.0) | ready_without_fallback |
+| **gap_analysis** | 8 | 1 | **gemini-3.7-flash (det 1.0)** | **ready_without_fallback** |
+| synthesis | 8 | 0 | — (best gemini-3.7-flash 0.667) | not_ready |
+| mechanism_generation | 8 | 0 | — (all det 0.0–0.33) | not_ready |
+| model_specification | 8 | 0 | — (all det 0.0; malformed SymPy) | not_ready |
+| proposition_generation | 8 | 0 | — (all det 0.0; unsupported) | not_ready |
+| mechanism_critique | 6 | 2 | gemini-3.7-flash, qwen3.8-flash (det 1.0) | ready_without_fallback |
+| model-spec/proposition critique | 6 | 1 | gemini-3.7-flash (det 1.0) | ready_without_fallback |
+| results_critique | 6 | 0 | — (best qwen3.8-flash 0.8 at 5-rep) | not_ready |
+| manuscript_critique | 6 | 0 | — (best qwen3.8-flash 0.8, worst 0.0) | not_ready |
+| screening | 6 | 0 | — (best 0.5 < 0.9) | not_ready |
+
+### Model x task specialization matrix
+| model | gen (mech/model/prop) | evidence/gap | critique | results/manuscript | screening |
+|---|---|---|---|---|---|
+| gemini-3.7-flash | failed | qualified | qualified (mechanism/model/prop) | failed (0.0–0.8) | unavailable (fast) |
+| qwen3.8-flash | failed | failed | qualified (mechanism) | borderline (0.8, unstable) | failed |
+| deepseek / nemotron / minimax / qwen3.7 / glm-5.3 | failed | failed (nemotron weak gap alignment) | failed | failed | failed |
+| gpt-5.6-luna | failed (provider-flaky) | failed | failed | failed | failed |
+| glm-5.2:free / gemma-4 | unavailable (429) | unavailable | unavailable | unavailable | unavailable |
+
+Different models genuinely specialize (gemini-3.7-flash for gap/evidence/
+critique; qwen3.8-flash for critique quality but high provider variance); no
+approved model is close on generation/synthesis/screening — a single global
+reasoning model is NOT supported by the evidence.
+
+### No-unsafe-qualification invariant
+`unsafe_task_qualification_rate` remains 0 (task-specific benchmark 17/17):
+a qualified task row always meets every role threshold (deterministic rate,
+structured output, provider-error, grounding). Provider-unavailable candidates
+are counted separately and never appear as qualified or as a primary/fallback.
+
 ## Recommended next increment
 
-Post-Phase-7D.3D: the gap-workflow repair is verified and **gap_analysis now has
-a qualified primary (gemini-3.7-flash)**. Six critical tasks remain uncovered:
-mechanism_generation, model_specification, proposition_generation,
-results_critique, manuscript_critique, screening. Continue targeted
-qualification with the approved model set (gpt-5.6-luna and qwen3.8-flash show
-promise but need provider-stable endpoints). Full task-aware shadow routing is
-not yet justified (it needs a qualified primary for every routed task). Do not
+Post-Phase-7D.3E: the approved pool is set and re-qualified; gap_analysis and
+evidence_extraction are covered (gemini-3.7-flash), as are the three
+mechanism/model-spec/proposition critique tasks. Seven tasks remain uncovered
+(synthesis, the three generation tasks, results/manuscript critique, screening)
+with dominant failure reason `below_quality_threshold` — structural validity,
+defect-recall stability, and decision accuracy, not provider availability.
+Continue qualification only with provider-stable endpoints for the strongest
+candidates (qwen3.8-flash critic det 0.933–1.0 but rate-limit/502 variance;
+gpt-5.6-luna provider-flaky). Full task-aware shadow routing still requires a
+qualified primary for every routed task, so it is not yet justified. Do not
 activate routing.

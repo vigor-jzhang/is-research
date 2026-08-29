@@ -354,14 +354,10 @@ class MechanismCriticService:
             temperature=0.0,
             metadata={"candidate_id": candidate_id},
         )
-        try:
-            response = await self._router.complete(self._revision_role, request)
-            data = json.loads(response.message.content or "")
-            parsed = _RevisionResponse.model_validate(data)
-        except Exception as e:
-            # Fall back to the original candidate unchanged; the critique is
-            # preserved and the selection is documented as unrevisioned
-            logger.warning("revision model call failed (%s); selecting candidate unchanged", e)
+
+        def _unchanged() -> dict[str, Any]:
+            """Fall back to the original candidate unchanged; the critique is
+            preserved and the selection is documented as unrevisioned."""
             return {
                 "name": candidate.name,
                 "description": candidate.description,
@@ -381,51 +377,65 @@ class MechanismCriticService:
                 "evaluation": candidate.evaluation,
             }
 
-        # Rebuild grounding with validated bases
-        grounding: list[GroundingElement] = []
-        for gi in parsed.grounding:
-            basis = (
-                KnowledgeBasis(gi.basis)
-                if gi.basis in KnowledgeBasis.values()
-                else KnowledgeBasis.new_hypothesis
-            )
-            grounding.append(
-                GroundingElement(element=gi.element, basis=basis, source_ids=list(gi.source_ids))
-            )
+        try:
+            response = await self._router.complete(self._revision_role, request)
+            data = json.loads(response.message.content or "")
+            parsed = _RevisionResponse.model_validate(data)
 
-        opportunity = None
-        if parsed.analytical_model_potential is not None:
-            opportunity = AnalyticalModelOpportunity(
-                suitable=parsed.analytical_model_potential.suitable,
-                domains=parsed.analytical_model_potential.domains,
-                rationale=parsed.analytical_model_potential.rationale,
-            )
-        evaluation = None
-        if parsed.evaluation is not None:
-            evaluation = MechanismEvaluation(
-                gap_alignment=parsed.evaluation.gap_alignment,
-                theoretical_coherence=parsed.evaluation.theoretical_coherence,
-                novelty_within_reviewed_corpus=parsed.evaluation.novelty_within_reviewed_corpus,
-                analytical_tractability=parsed.evaluation.analytical_tractability,
-                managerial_economic_relevance=parsed.evaluation.managerial_economic_relevance,
-                is_relevance=parsed.evaluation.is_relevance,
-            )
-        return {
-            "name": parsed.name,
-            "description": parsed.description,
-            "actors": list(parsed.actors),
-            "strategic_interactions": list(parsed.strategic_interactions),
-            "information_structure": parsed.information_structure,
-            "incentives": list(parsed.incentives),
-            "causal_logic": parsed.causal_logic,
-            "key_assumptions": list(parsed.key_assumptions),
-            "expected_outcomes": list(parsed.expected_outcomes),
-            "boundary_conditions": list(parsed.boundary_conditions),
-            "grounding": grounding,
-            "revision_notes": list(parsed.revision_notes),
-            "analytical_model_potential": opportunity,
-            "evaluation": evaluation,
-        }
+            # Rebuild grounding with validated bases
+            grounding: list[GroundingElement] = []
+            for gi in parsed.grounding:
+                basis = (
+                    KnowledgeBasis(gi.basis)
+                    if gi.basis in KnowledgeBasis.values()
+                    else KnowledgeBasis.new_hypothesis
+                )
+                grounding.append(
+                    GroundingElement(
+                        element=gi.element, basis=basis, source_ids=list(gi.source_ids)
+                    )
+                )
+
+            opportunity = None
+            if parsed.analytical_model_potential is not None:
+                opportunity = AnalyticalModelOpportunity(
+                    suitable=parsed.analytical_model_potential.suitable,
+                    domains=parsed.analytical_model_potential.domains,
+                    rationale=parsed.analytical_model_potential.rationale,
+                )
+            evaluation = None
+            if parsed.evaluation is not None:
+                evaluation = MechanismEvaluation(
+                    gap_alignment=parsed.evaluation.gap_alignment,
+                    theoretical_coherence=parsed.evaluation.theoretical_coherence,
+                    novelty_within_reviewed_corpus=parsed.evaluation.novelty_within_reviewed_corpus,
+                    analytical_tractability=parsed.evaluation.analytical_tractability,
+                    managerial_economic_relevance=parsed.evaluation.managerial_economic_relevance,
+                    is_relevance=parsed.evaluation.is_relevance,
+                )
+            return {
+                "name": parsed.name,
+                "description": parsed.description,
+                "actors": list(parsed.actors),
+                "strategic_interactions": list(parsed.strategic_interactions),
+                "information_structure": parsed.information_structure,
+                "incentives": list(parsed.incentives),
+                "causal_logic": parsed.causal_logic,
+                "key_assumptions": list(parsed.key_assumptions),
+                "expected_outcomes": list(parsed.expected_outcomes),
+                "boundary_conditions": list(parsed.boundary_conditions),
+                "grounding": grounding,
+                "revision_notes": list(parsed.revision_notes),
+                "analytical_model_potential": opportunity,
+                "evaluation": evaluation,
+            }
+        except Exception as e:  # noqa: BLE001
+            # Any revision failure (model call, malformed JSON, or schema
+            # validation such as an out-of-vocabulary analytical domain) falls
+            # back to the original candidate unchanged instead of crashing the
+            # whole selection. Genuine robustness repair (Phase 7D.3E).
+            logger.warning("revision failed (%s); selecting candidate unchanged", e)
+            return _unchanged()
 
     # ------------------------------------------------------------------
     # Helpers
