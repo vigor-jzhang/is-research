@@ -32,20 +32,20 @@ Payload types live in `src/research_harness/research/schemas/`:
 - `EvidenceItem` — statement + `source_artifact_id` (must exist), locator (page/pages), extraction_method, confidence, `category` (Phase 2F taxonomy)
 - `ResearchClaim` — statement, claim_type (`fact`/`inference`/`hypothesis`/`assumption`/`recommendation`), evidence_refs, confidence
 - `ScreeningProtocol/PaperScreeningView/ScreeningDecision/ScreeningReview` — Phase 2D screening (title/abstract, `include/exclude/uncertain`)
-- `DocumentLocation/DocumentAcquisition/FullTextDocument` — Phase 2E documents (see `docs/documents.md`), `ScreeningExecution/ScreenedLiteratureSet`, `DocumentAcquisitionExecution/FullTextCorpus`
-- `PaperResearchProfile/EvidenceExtractionExecution/EvidenceCorpus` — Phase 2F evidence extraction (see `docs/evidence.md`)
-- `SynthesisStatement/SynthesisTheme/LiteratureSynthesis/SynthesisExecution` — Phase 2G cross-paper synthesis (see `docs/synthesis.md`)
-- `ResearchGap/GapAnalysis/GapAnalysisExecution` — Phase 2H gap analysis (see `docs/gaps.md`)
-- `GapSelection/MechanismCandidate/MechanismCritique/MechanismAnalysis/SelectedMechanism` — Phase 3A mechanism development (see `docs/mechanisms.md`)
-- `FormalAnalyticalModel/ModelActor/ModelVariable/ModelParameter/ModelTimingStage/InformationStructure/ModelAssumption/PayoffFunction/ModelSpecificationCritique` — Phase 3B formal analytical model (see `docs/models.md`)
-- `OptimizationProblem/FirstOrderCondition/BestResponse/EquilibriumCandidate/EquilibriumVerification/EquilibriumAnalysis/EquilibriumExecution` — Phase 3C equilibrium derivation (see `docs/equilibrium.md`)
-- `ComparativeStatic/Proposition/PropositionVerification/PropositionCritique/EconomicInterpretation` — Phase 3D propositions (see `docs/propositions.md`)
-- `ParameterSweep/NumericalResult/RobustnessCheck/WelfareAnalysis/NumericalExperiment/NumericalExperimentExecution` — Phase 3E numerical experiments (see `docs/numerical.md`)
-- `ResearchFinding/ContributionClaim/ResearchImplication/ResearchResultsPackage/ResultsAssemblyExecution/ResultsCritique` — Phase 4A findings and claims (see `docs/results.md`)
-- `ManuscriptOutline/ManuscriptSection/CitationReference/ManuscriptDraft/ManuscriptDraftExecution/ManuscriptCritique` — Phase 4B manuscript drafting (see `docs/manuscript.md`)
-- `PublicationProfile/Bibliography/FormattedManuscript/SubmissionPackage/CoverLetter/PublicationExecution` — Phase 4C publication formatting (see `docs/publication.md`)
-- `NoveltyClaim/NoveltySearchPlan/NoveltySearchExecution/NoveltyCandidateSet/NoveltyCandidateAssessment/NoveltyCriticAssessment/NoveltyClaimAssessment/NoveltyRevisionRecommendation/NoveltyValidationReport/SubmissionReadinessGate/NoveltyValidationExecution/ManuscriptChangeSet/NoveltyRevalidationPlan/NoveltyRevalidationExecution/EvidenceEnrichmentPlan/EvidenceEnrichmentAttempt/EvidenceEnrichmentExecution/PreAcquisitionExecution` (plus `StalenessStatus` and `NoveltyClaim.equivalent_claim_id`) — Phase 5A–5D external novelty validation, incremental revalidation, evidence enrichment, and bounded pre-acquisition (see `docs/novelty.md`)
-- `Benchmark/BenchmarkCase/EvaluationRun/EvaluatorResult/EvaluationCaseResult/EvaluationMetric/EvaluationReport` (plus `EvaluatorCategory`/`EvaluatorStatus`/`EvaluationCaseStatus`/`EvaluationReportStatus`/`EvaluationMetricKind`) — Phase 6A–6C evaluation harness: immutable benchmarks, per-case evaluator results, aggregate reports (see `docs/evaluation.md`)
+- `DocumentLocation/DocumentAcquisition/FullTextDocument` — Phase 2E documents (see `docs/workflows/literature/documents.md`), `ScreeningExecution/ScreenedLiteratureSet`, `DocumentAcquisitionExecution/FullTextCorpus`
+- `PaperResearchProfile/EvidenceExtractionExecution/EvidenceCorpus` — Phase 2F evidence extraction (see `docs/workflows/literature/evidence.md`)
+- `SynthesisStatement/SynthesisTheme/LiteratureSynthesis/SynthesisExecution` — Phase 2G cross-paper synthesis (see `docs/workflows/literature/synthesis.md`)
+- `ResearchGap/GapAnalysis/GapAnalysisExecution` — Phase 2H gap analysis (see `docs/workflows/literature/gaps.md`)
+- `GapSelection/MechanismCandidate/MechanismCritique/MechanismAnalysis/SelectedMechanism` — Phase 3A mechanism development (see `docs/workflows/theory/mechanisms.md`)
+- `FormalAnalyticalModel/ModelActor/ModelVariable/ModelParameter/ModelTimingStage/InformationStructure/ModelAssumption/PayoffFunction/ModelSpecificationCritique` — Phase 3B formal analytical model (see `docs/workflows/theory/models.md`)
+- `OptimizationProblem/FirstOrderCondition/BestResponse/EquilibriumCandidate/EquilibriumVerification/EquilibriumAnalysis/EquilibriumExecution` — Phase 3C equilibrium derivation (see `docs/workflows/theory/equilibrium.md`)
+- `ComparativeStatic/Proposition/PropositionVerification/PropositionCritique/EconomicInterpretation` — Phase 3D propositions (see `docs/workflows/theory/propositions.md`)
+- `ParameterSweep/NumericalResult/RobustnessCheck/WelfareAnalysis/NumericalExperiment/NumericalExperimentExecution` — Phase 3E numerical experiments (see `docs/workflows/theory/numerical.md`)
+- `ResearchFinding/ContributionClaim/ResearchImplication/ResearchResultsPackage/ResultsAssemblyExecution/ResultsCritique` — Phase 4A findings and claims (see `docs/workflows/outputs/results.md`)
+- `ManuscriptOutline/ManuscriptSection/CitationReference/ManuscriptDraft/ManuscriptDraftExecution/ManuscriptCritique` — Phase 4B manuscript drafting (see `docs/workflows/outputs/manuscript.md`)
+- `PublicationProfile/Bibliography/FormattedManuscript/SubmissionPackage/CoverLetter/PublicationExecution` — Phase 4C publication formatting (see `docs/workflows/outputs/publication.md`)
+- `NoveltyClaim/NoveltySearchPlan/NoveltySearchExecution/NoveltyCandidateSet/NoveltyCandidateAssessment/NoveltyCriticAssessment/NoveltyClaimAssessment/NoveltyRevisionRecommendation/NoveltyValidationReport/SubmissionReadinessGate/NoveltyValidationExecution/ManuscriptChangeSet/NoveltyRevalidationPlan/NoveltyRevalidationExecution/EvidenceEnrichmentPlan/EvidenceEnrichmentAttempt/EvidenceEnrichmentExecution/PreAcquisitionExecution` (plus `StalenessStatus` and `NoveltyClaim.equivalent_claim_id`) — Phase 5A–5D external novelty validation, incremental revalidation, evidence enrichment, and bounded pre-acquisition (see `docs/workflows/outputs/novelty.md`)
+- `Benchmark/BenchmarkCase/EvaluationRun/EvaluatorResult/EvaluationCaseResult/EvaluationMetric/EvaluationReport` (plus `EvaluatorCategory`/`EvaluatorStatus`/`EvaluationCaseStatus`/`EvaluationReportStatus`/`EvaluationMetricKind`) — Phase 6A–6C evaluation harness: immutable benchmarks, per-case evaluator results, aggregate reports (see `docs/operations/evaluation.md`)
 
 All of these phases are implemented and compose on the kernel without kernel changes; each entry links its per-phase doc.
 
@@ -190,7 +190,7 @@ Transactions: `put` + `add_provenance` are atomic per call (`BEGIN/COMMIT/ROLLBA
 
 Events: `artifact.created` and `provenance.created` are emitted via `EventBus` but store remains authoritative.
 
-Large byte payloads (PDFs, extracted text) are **not** in SQLite JSON. `contracts/blob.py:BlobStore` (`blob_store.default`) is filesystem content-addressed by `sha256` (`BlobReference{algorithm,digest,size_bytes,media_type,storage_key}`) under `.research/blobs/sha256/ab/cd/...`, atomic temp-file + rename, deduplicated. Artifacts store `BlobReference` (logical `storage_key`, no absolute paths). See `docs/documents.md` for `DocumentLocation/DocumentAcquisition/FullTextDocument` lifecycle.
+Large byte payloads (PDFs, extracted text) are **not** in SQLite JSON. `contracts/blob.py:BlobStore` (`blob_store.default`) is filesystem content-addressed by `sha256` (`BlobReference{algorithm,digest,size_bytes,media_type,storage_key}`) under `.research/blobs/sha256/ab/cd/...`, atomic temp-file + rename, deduplicated. Artifacts store `BlobReference` (logical `storage_key`, no absolute paths). See `docs/workflows/literature/documents.md` for `DocumentLocation/DocumentAcquisition/FullTextDocument` lifecycle.
 
 ## CLI
 

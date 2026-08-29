@@ -14,7 +14,7 @@ ResearchGap
 → ContributionClaim (corpus-bounded)
 → ResearchImplication (epistemic-status separated)
 → ResearchResultsPackage → evidence-grounded manuscript drafting
-  (Phase 4B, see docs/manuscript.md)
+  (Phase 4B, see docs/workflows/outputs/manuscript.md)
 ```
 
 ## Schemas (`src/research_harness/research/schemas/results.py`)

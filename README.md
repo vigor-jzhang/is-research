@@ -24,15 +24,15 @@ A plugin-first research harness for business information systems analytical-mode
    uv run pytest -m "not live"
    ```
 
-Provider-backed commands require credentials in `.env`; see [Configuration](docs/configuration.md).
+Provider-backed commands require credentials in `.env`; see [Configuration](docs/getting-started/configuration.md).
 
 ## Documentation
 
 Start with the [documentation index](docs/index.md). Common entry points:
 
-- [Architecture](docs/architecture.md) — kernel, plugins, storage, and events.
-- [Configuration](docs/configuration.md) — YAML configuration, secrets, and validation.
-- [CLI reference](docs/cli.md) — complete command reference.
+- [Architecture](docs/concepts/architecture.md) — kernel, plugins, storage, and events.
+- [Configuration](docs/getting-started/configuration.md) — YAML configuration, secrets, and validation.
+- [CLI reference](docs/getting-started/cli.md) — complete command reference.
 - [Research workflow](docs/index.md#research-workflow) — phase-by-phase guides.
 - [Evaluation and model operations](docs/index.md#evaluation-and-model-operations) — benchmarks, routing, and qualification.
 
@@ -62,7 +62,7 @@ uv run ruff check src tests
 uv run pytest -m "not live"
 ```
 
-Live tests are opt-in and may call external providers; see [CLI testing guidance](docs/cli.md#testing-and-live-markers).
+Live tests are opt-in and may call external providers; see [CLI testing guidance](docs/getting-started/cli.md#testing-and-live-markers).
 
 ## Scope and safeguards
 

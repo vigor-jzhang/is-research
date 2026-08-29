@@ -106,7 +106,7 @@ The `literature:` (search, screening, evidence, synthesis, gaps), `research:`
 publication, novelty), `documents:`, and `evaluation:` (evaluator ids,
 `judge_role`, `cost_per_million_tokens`) sections configure each phase; every
 phase doc under `docs/` documents its own configuration block. The
-`evaluation` section is documented in `docs/evaluation.md`.
+`evaluation` section is documented in `docs/operations/evaluation.md`.
 
 ## Secrets in `.env`
 

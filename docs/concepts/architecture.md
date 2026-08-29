@@ -41,7 +41,7 @@ Research Harness is a plugin-first system. The kernel is deliberately small and 
                    Tools     Autonomy    Skills
 ```
 
-Research workflow plugins (literature, modeling, equilibrium, numerical, results, manuscript, publication, novelty) compose on the same kernel — see `docs/research-domain.md` and the per-phase docs (`docs/literature-sources.md`, `docs/screening.md`, `docs/evidence.md`, `docs/synthesis.md`, `docs/gaps.md`, `docs/mechanisms.md`, `docs/models.md`, `docs/equilibrium.md`, `docs/propositions.md`, `docs/numerical.md`, `docs/results.md`, `docs/manuscript.md`, `docs/publication.md`, `docs/novelty.md`).
+Research workflow plugins (literature, modeling, equilibrium, numerical, results, manuscript, publication, novelty) compose on the same kernel — see `docs/concepts/research-domain.md` and the per-phase docs (`docs/workflows/literature/literature-sources.md`, `docs/workflows/literature/screening.md`, `docs/workflows/literature/evidence.md`, `docs/workflows/literature/synthesis.md`, `docs/workflows/literature/gaps.md`, `docs/workflows/theory/mechanisms.md`, `docs/workflows/theory/models.md`, `docs/workflows/theory/equilibrium.md`, `docs/workflows/theory/propositions.md`, `docs/workflows/theory/numerical.md`, `docs/workflows/outputs/results.md`, `docs/workflows/outputs/manuscript.md`, `docs/workflows/outputs/publication.md`, `docs/workflows/outputs/novelty.md`).
 
 The composition root is `src/research_harness/app/bootstrap.py` — it knows about both kernel and plugins; the kernel knows only about abstractions.
 
@@ -274,11 +274,11 @@ ScreenedLiteratureSet → included PaperIdentities → DocumentLocator(metadata 
 
 Contracts `contracts/blob.py:BlobStore` and `contracts/document.py:DocumentLocator/Fetcher/Extractor` are provider-neutral; orchestrator `documents.acquisition_orchestrator` enforces budgets, provenance, and corpus creation. No LLM in Phase 2E.
 
-See `docs/documents.md` for full lifecycle, resolution priority, security, and CLI.
+See `docs/workflows/literature/documents.md` for full lifecycle, resolution priority, security, and CLI.
 
 ## Configuration
 
-`AppConfig` (`config/schema.py:312`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX. See `docs/configuration.md` for the full example composition and secrets; per-phase docs document their own `research.*` / `literature.*` / `documents.*` blocks.
+`AppConfig` (`config/schema.py:312`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX. See `docs/getting-started/configuration.md` for the full example composition and secrets; per-phase docs document their own `research.*` / `literature.*` / `documents.*` blocks.
 
 ## CLI
 
@@ -299,7 +299,7 @@ See `docs/documents.md` for full lifecycle, resolution priority, security, and C
 - `evaluation` — model tournaments + role leaderboards (Phase 7B): `tournament run/inspect`, `leaderboard show/list/inspect` over the frozen benchmarks with correctness-first deterministic ranking; `live-quality run/inspect` (Phase 7D.0) validates real models over realistic inputs with repetitions/variance
 - `routing` — policy-constrained model routing (Phase 7C, shadow mode): `decide`, `shadow`, `inspect`, `policies list` over persisted role leaderboards; `readiness` (Phase 7D.0) reports per-role ready/not_ready from live-quality evidence; `qualify` + `qualification inspect/summary/matrix` (Phase 7D.1/7D.2) run config-driven live-model qualification campaigns and persist the production-qualification matrix; `eval calibration` audits the live-quality benchmarks; production roles never switched
 
-The full command reference (with options and live-test markers) is in `docs/cli.md`.
+The full command reference (with options and live-test markers) is in `docs/getting-started/cli.md`.
 
 ## Dependency Direction
 
@@ -342,4 +342,4 @@ Phases 2A–5D compose research plugins on the same kernel without modifying it:
 - **Phase 4C** — publication formatting, citation resolution, bibliography, exports, submission package
 - **Phase 5A–5D** (`plugins/research/novelty_validator`) — external novelty validation, incremental revalidation, evidence enrichment, bounded evidence pre-acquisition
 
-Their schemas live under `src/research_harness/research/schemas/`; provenance flows through the immutable SQLite `ArtifactStore` (`derived_from`, `extracted_from`, `generated_from`, `supersedes`). See `docs/research-domain.md` and the per-phase docs for details.
+Their schemas live under `src/research_harness/research/schemas/`; provenance flows through the immutable SQLite `ArtifactStore` (`derived_from`, `extracted_from`, `generated_from`, `supersedes`). See `docs/concepts/research-domain.md` and the per-phase docs for details.

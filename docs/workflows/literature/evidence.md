@@ -16,7 +16,7 @@ FullTextCorpus
 
 Phase 2F performs **no** cross-paper synthesis, gap detection, theory
 generation, embeddings, or OCR. Synthesis and gap detection are later
-implemented phases (`docs/synthesis.md`, `docs/gaps.md`); embeddings and OCR
+implemented phases (`docs/workflows/literature/synthesis.md`, `docs/workflows/literature/gaps.md`); embeddings and OCR
 remain out of scope.
 
 ## Concepts

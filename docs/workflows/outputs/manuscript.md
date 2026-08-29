@@ -15,7 +15,7 @@ ResearchResultsPackage
 
 Journal-specific formatting, bibliography formatting, LaTeX/DOCX/PDF export,
 cover letter, and submission packaging are outside Phase 4B — implemented in
-Phase 4C (see `docs/publication.md`).
+Phase 4C (see `docs/workflows/outputs/publication.md`).
 
 ## Schemas (`src/research_harness/research/schemas/manuscript.py`)
 
@@ -172,11 +172,11 @@ artifact ids inside `[CITE:...]`.
   retry loop absorbs this but can take minutes for a full draft.
 - Journal-specific style sheets remain future work; formatting,
   bibliography, LaTeX/DOCX/PDF export, cover letter, and submission packaging
-  are implemented in Phase 4C (see `docs/publication.md`).
+  are implemented in Phase 4C (see `docs/workflows/outputs/publication.md`).
 
 ## Phase 4C readiness
 
-**Ready — Phase 4C is implemented** (see `docs/publication.md`). The
+**Ready — Phase 4C is implemented** (see `docs/workflows/outputs/publication.md`). The
 structured draft (sections with grounded claims + internal citations +
 critiques + versioned drafts) is the direct input for the publication
 formatter: citation resolution, bibliography generation, LaTeX/DOCX/PDF

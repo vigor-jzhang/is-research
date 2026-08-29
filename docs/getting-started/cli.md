@@ -217,7 +217,7 @@ uv run research-agent eval inspect <run-or-report-id>
 uv run research-agent eval list [--limit 20]
 ```
 
-See `docs/evaluation.md` for schemas, the evaluator contract, benchmark
+See `docs/operations/evaluation.md` for schemas, the evaluator contract, benchmark
 architecture, metrics, and the known-expected metrics of each benchmark.
 
 ## Testing and live markers
