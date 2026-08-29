@@ -51,7 +51,8 @@ class CrossrefClient:
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is not None:
             return self._client
-        return httpx.AsyncClient(timeout=self.timeout)
+        self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
 
     def _build_headers(self) -> dict[str, str]:
         headers = {"User-Agent": self.user_agent, "Accept": "application/json"}

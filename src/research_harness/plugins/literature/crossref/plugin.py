@@ -63,8 +63,7 @@ class CrossrefPlugin(Plugin):
             }
 
         if crossref_cfg.get("enabled") is False:
-            # Still register but will be disabled? For Phase 2B, we always register; enabled flag is for future
-            pass
+            return
 
         timeout = crossref_cfg.get("timeout_seconds") or crossref_cfg.get("timeout") or 20.0
         mailto = crossref_cfg.get("mailto") or os.getenv("CROSSREF_MAILTO")

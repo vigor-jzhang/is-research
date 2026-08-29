@@ -254,6 +254,7 @@ async def test_baseline_evaluation(tmp_path: pathlib.Path):
     assert baseline.outcomes["q1"] == pytest.approx(3.0, abs=1e-6)
     assert baseline.outcomes["q2"] == pytest.approx(3.0, abs=1e-6)
     assert baseline.feasible is True
+    assert baseline.experiment_id == exec_id
     assert baseline.x_parameter is None
 
 

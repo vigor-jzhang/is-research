@@ -564,3 +564,13 @@ def test_fetcher_rejects_hostname_resolving_to_private_ip(monkeypatch):
     )
     with pytest.raises(ValueError, match="resolves to private"):
         fetcher_http._validate_url("https://public-looking.example/paper.pdf")
+
+
+def test_fetcher_rejects_non_global_cgnat_address(monkeypatch):
+    monkeypatch.setattr(
+        fetcher_http.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("100.64.0.1", 443))],
+    )
+    with pytest.raises(ValueError, match="non-global"):
+        fetcher_http._validate_url("https://public-looking.example/paper.pdf")

@@ -297,3 +297,25 @@ async def test_ss_malformed_payload():
     with pytest.raises(Exception, match="malformed"):
         await client.search(LiteratureSearchRequest(query="test"))
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_semantic_scholar_owned_client_is_reused_and_closed():
+    client = SemanticScholarClient()
+    first = client._get_client()
+    assert client._get_client() is first
+    await client.close()
+    assert first.is_closed
+
+
+@pytest.mark.asyncio
+async def test_semantic_scholar_plugin_does_not_register_disabled_source():
+    from research_harness.kernel.plugin import PluginContext
+    from research_harness.kernel.services import ServiceRegistry
+    from research_harness.plugins.literature.semantic_scholar.plugin import SemanticScholarPlugin
+
+    registry = ServiceRegistry()
+    await SemanticScholarPlugin().setup(
+        PluginContext(plugin_id="literature.semantic_scholar", config={"semantic_scholar": {"enabled": False}}, services=registry)
+    )
+    assert not registry.has("literature_source.semantic_scholar")

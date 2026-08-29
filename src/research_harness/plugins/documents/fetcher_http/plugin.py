@@ -1,22 +1,18 @@
-"""HTTP document fetcher — generic, SSRF-safe, bounded, PDF-validating.
-
-SSRF note: validates only literal URL hostnames/IPs. Public hostnames that
-DNS-resolve to private ranges are not currently resolved (see docs/documents.md).
-Redirect targets are re-validated equivalently to initial URL.
-"""
+"""HTTP document fetcher — DNS-pinned SSRF-safe, bounded, PDF-validating."""
 
 from __future__ import annotations
 
 import hashlib
 import ipaddress
 import logging
-import re
 import socket
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
+import httpcore
 import httpx
+from httpcore._backends.auto import AutoBackend
 
 from research_harness.kernel.plugin import Plugin, PluginContext, PluginMetadata
 from research_harness.research.envelope import ArtifactEnvelope
@@ -52,31 +48,14 @@ def _is_private_hostname(host: str) -> bool:
     # Try ip literal
     try:
         ip = ipaddress.ip_address(low.strip("[]"))
-        # Check private networks
-        for net in _PRIVATE_NETWORKS:
-            if ip in net:
-                return True
-        if low in _CLOUD_METADATA_IPS:
-            return True
-        # Also check is_private / is_loopback etc fallback
-        return bool(ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved)
+        # ``is_global`` rejects private, loopback, link-local, reserved,
+        # multicast, documentation, and carrier-grade NAT ranges.
+        return not ip.is_global
     except ValueError:
-        # Not an IP, check string patterns for private hostnames
-        if low == "localhost":
-            return True
-        if low.endswith(".localhost"):
-            return True
-        if low.startswith("10."):
-            return True
-        if low.startswith("192.168."):
-            return True
-        # 172.16-31
-        if re.match(r"^172\.(1[6-9]|2[0-9]|3[0-1])\.", low):
-            return True
-        return low == "169.254.169.254"
+        return low == "localhost" or low.endswith(".localhost")
 
 
-def _validate_url(url: str) -> None:
+def _validate_url(url: str) -> tuple[str, int, tuple[str, ...]]:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"URL scheme must be http/https, got {parsed.scheme!r} for {url!r}")
@@ -94,13 +73,13 @@ def _validate_url(url: str) -> None:
         raise ValueError(f"URL hostname could not be resolved: {host!r}") from e
     if not addresses:
         raise ValueError(f"URL hostname did not resolve: {host!r}")
-    for _, _, _, _, sockaddr in addresses:
-        if _is_private_hostname(sockaddr[0]):
-            raise ValueError(f"URL hostname resolves to private/local address: {host!r}")
-    # Also reject file://, ftp:// etc already via scheme check
-    # Reject userinfo
+    resolved = tuple(dict.fromkeys(sockaddr[0] for _, _, _, _, sockaddr in addresses))
+    for address in resolved:
+        if _is_private_hostname(address):
+            raise ValueError(f"URL hostname resolves to private or non-global address: {host!r}")
     if parsed.username or parsed.password:
         raise ValueError(f"URL with userinfo rejected: {url!r}")
+    return host, parsed.port or (443 if parsed.scheme == "https" else 80), resolved
 
 
 def _is_pdf_bytes(data: bytes) -> bool:
@@ -115,6 +94,40 @@ def _looks_like_html(data: bytes) -> bool:
     return (
         head.startswith(b"<!doctype html") or head.startswith(b"<html") or b"<head" in head[:1024]
     )
+
+
+class _PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Connect only to IPs validated for each requested host and port."""
+
+    def __init__(self) -> None:
+        self._backend = AutoBackend()
+        self._addresses: dict[tuple[str, int], tuple[str, ...]] = {}
+
+    def pin(self, host: str, port: int, addresses: tuple[str, ...]) -> None:
+        self._addresses[(host.lower(), port)] = addresses
+
+    async def connect_tcp(
+        self, host: str, port: int, timeout: float | None = None, local_address: str | None = None, socket_options: Any = None
+    ) -> Any:
+        addresses = self._addresses.get((host.lower(), port))
+        if not addresses:
+            raise httpcore.ConnectError(f"no validated address pinned for {host}:{port}")
+        # The HTTP origin retains the hostname for TLS SNI and certificate checks.
+        return await self._backend.connect_tcp(
+            addresses[0], port, timeout=timeout, local_address=local_address, socket_options=socket_options
+        )
+
+    async def connect_unix_socket(self, path: str, timeout: float | None = None, socket_options: Any = None) -> Any:
+        raise httpcore.ConnectError("Unix sockets are not permitted for document fetches")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._backend.sleep(seconds)
+
+
+class _PinnedAsyncTransport(httpx.AsyncHTTPTransport):
+    def __init__(self, backend: _PinnedNetworkBackend) -> None:
+        super().__init__(trust_env=False)
+        self._pool = httpcore.AsyncConnectionPool(network_backend=backend)
 
 
 class HttpFetcherService:
@@ -136,11 +149,17 @@ class HttpFetcherService:
         self._max_bytes = max_bytes
         self._events = events
         self._own_client = False
+        self._pinned_backend = _PinnedNetworkBackend()
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is not None:
             return self._client
-        self._client = httpx.AsyncClient(timeout=self._timeout, follow_redirects=False)
+        self._client = httpx.AsyncClient(
+            timeout=self._timeout,
+            follow_redirects=False,
+            trust_env=False,
+            transport=_PinnedAsyncTransport(self._pinned_backend),
+        )
         self._own_client = True
         return self._client
 
@@ -210,7 +229,9 @@ class HttpFetcherService:
         try:
             while redirect_count <= self._max_redirects:
                 # Validate each redirect url
-                _validate_url(current_url)
+                host, port, addresses = _validate_url(current_url)
+                if self._own_client:
+                    self._pinned_backend.pin(host, port, addresses)
                 try:
                     # Use streaming to enforce size limits
                     req = client.build_request(

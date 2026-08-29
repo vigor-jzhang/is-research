@@ -47,7 +47,8 @@ class SemanticScholarClient:
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is not None:
             return self._client
-        return httpx.AsyncClient(timeout=self.timeout)
+        self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
 
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/json"}

@@ -165,8 +165,11 @@ class PolicyModelRouterService:
                 "eligible_count": len(eligible),
                 "rejected_count": len(rejected),
                 "use_fallback": use_fallback,
-                "required_pass_rate": request.required_deterministic_pass_rate
-                or self._default_rate,
+                "required_pass_rate": (
+                    self._default_rate
+                    if request.required_deterministic_pass_rate is None
+                    else request.required_deterministic_pass_rate
+                ),
             },
         )
 
@@ -222,7 +225,11 @@ class PolicyModelRouterService:
             return None, None, False, False
         leaderboard = max(boards, key=lambda b: b.created_at)
         age = (datetime.now(UTC) - leaderboard.created_at).total_seconds()
-        max_age = request.leaderboard_max_age_seconds or self._max_age
+        max_age = (
+            self._max_age
+            if request.leaderboard_max_age_seconds is None
+            else request.leaderboard_max_age_seconds
+        )
         too_old = max_age is not None and age > max_age
         repetitions = int(leaderboard.metadata.get("repetitions") or 1)
         insufficient_reps = repetitions < request.min_repetitions

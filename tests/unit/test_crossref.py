@@ -307,3 +307,25 @@ def test_crossref_mapper_missing_doi_still_valid():
     paper, _ = map_crossref_work(item)
     assert paper.doi is None
     assert paper.title == "T"
+
+
+@pytest.mark.asyncio
+async def test_crossref_owned_client_is_reused_and_closed():
+    client = CrossrefClient()
+    first = client._get_client()
+    assert client._get_client() is first
+    await client.close()
+    assert first.is_closed
+
+
+@pytest.mark.asyncio
+async def test_crossref_plugin_does_not_register_disabled_source():
+    from research_harness.kernel.plugin import PluginContext
+    from research_harness.kernel.services import ServiceRegistry
+    from research_harness.plugins.literature.crossref.plugin import CrossrefPlugin
+
+    registry = ServiceRegistry()
+    await CrossrefPlugin().setup(
+        PluginContext(plugin_id="literature.crossref", config={"crossref": {"enabled": False}}, services=registry)
+    )
+    assert not registry.has("literature_source.crossref")

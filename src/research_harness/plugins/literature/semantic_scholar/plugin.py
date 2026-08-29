@@ -58,6 +58,9 @@ class SemanticScholarPlugin(Plugin):
                 k: v for k, v in cfg.items() if k in ("timeout_seconds", "timeout", "enabled")
             }
 
+        if ss_cfg.get("enabled") is False:
+            return
+
         timeout = ss_cfg.get("timeout_seconds") or ss_cfg.get("timeout") or 20.0
         api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
 

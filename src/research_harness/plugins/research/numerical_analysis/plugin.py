@@ -136,6 +136,8 @@ class NumericalAnalysisService:
         # ------------------------------------------------------------------
         results: list[str] = []
         point_rows: list[dict[str, Any]] = []
+        all_results: list[NumericalResult] = []
+        evaluated = 0
         infeasible = 0
 
         for sweep in sweeps:
@@ -150,6 +152,9 @@ class NumericalAnalysisService:
                     candidate_conditions,
                     outcome_domains,
                 )
+                res = res.model_copy(update={"experiment_id": exec_id})
+                evaluated += 1
+                all_results.append(res)
                 point_rows.append(
                     {
                         "scenario": res.scenario,
@@ -164,7 +169,7 @@ class NumericalAnalysisService:
                 )
                 if not res.feasible:
                     infeasible += 1
-                if len(results) + infeasible < self._artifact_threshold:
+                if evaluated <= self._artifact_threshold:
                     r_env = ArtifactEnvelope.create(
                         payload=res,
                         artifact_type="numerical_result",
@@ -180,9 +185,9 @@ class NumericalAnalysisService:
                         )
                     )
                     results.append(r_env.artifact_id)
-                if len(results) + infeasible >= self._max_points:
+                if evaluated >= self._max_points:
                     break
-            if len(results) + infeasible >= self._max_points:
+            if evaluated >= self._max_points:
                 break
 
         # Large tables -> BlobStore (JSONL), not uncontrolled SQLite arrays
@@ -193,6 +198,7 @@ class NumericalAnalysisService:
                 await self._blobs.put_bytes(payload, media_type="application/jsonl")
             ).model_dump()
 
+        exec_record.counts["evaluated_points"] = evaluated
         exec_record.results_created = len(results)
         exec_record.results_infeasible = infeasible
 
@@ -200,11 +206,11 @@ class NumericalAnalysisService:
         # Robustness + welfare (reference the execution id)
         # ------------------------------------------------------------------
         robustness_ids = await self._robustness(
-            exec_id, candidate.model_id, candidate_id, results, params, candidate_exprs
+            exec_id, candidate.model_id, candidate_id, all_results, params, candidate_exprs
         )
         exec_record.robustness_created = len(robustness_ids)
         welfare_ids = await self._welfare(
-            exec_id, candidate.model_id, candidate_id, model, results, params, payoff_exprs
+            exec_id, candidate.model_id, candidate_id, model, all_results, params, payoff_exprs
         )
         exec_record.welfare_created = len(welfare_ids)
         exec_record.completed_at = datetime.now(UTC)
@@ -573,7 +579,7 @@ class NumericalAnalysisService:
         exec_id: str,
         model_id: str,
         candidate_id: str,
-        result_ids: list[str],
+        numerical_results: list[NumericalResult | str],
         params: dict[str, ModelParameter],
         candidate_exprs: dict[str, Any],
     ) -> list[str]:
@@ -582,8 +588,8 @@ class NumericalAnalysisService:
         # 1. Equilibrium-validity range per parameter
         for pname in sorted(params):
             feasible_count = 0
-            for rid in result_ids:
-                r = (await self._store.get(rid)).parse_payload(NumericalResult)
+            for item in numerical_results:
+                r = item if isinstance(item, NumericalResult) else (await self._store.get(item)).parse_payload(NumericalResult)
                 if r.parameter_values.get(pname) is not None and r.feasible:
                     feasible_count += 1
             check = RobustnessCheck(
@@ -622,7 +628,7 @@ class NumericalAnalysisService:
                 candidate_id,
                 env.artifact_id,
                 prop,
-                result_ids,
+                numerical_results,
                 params,
                 candidate_exprs,
             )
@@ -642,7 +648,7 @@ class NumericalAnalysisService:
         candidate_id: str,
         prop_id: str,
         prop: Proposition,
-        result_ids: list[str],
+        numerical_results: list[NumericalResult | str],
         params: dict[str, ModelParameter],
         candidate_exprs: dict[str, Any],
     ) -> RobustnessCheck:
@@ -682,8 +688,8 @@ class NumericalAnalysisService:
         prop_conditions = list(prop.conditions)
         admissible = 0
         violations: list[RobustnessViolation] = []
-        for rid in result_ids:
-            r = (await self._store.get(rid)).parse_payload(NumericalResult)
+        for item in numerical_results:
+            r = item if isinstance(item, NumericalResult) else (await self._store.get(item)).parse_payload(NumericalResult)
             if not r.feasible:
                 continue
             if prop.parameter not in r.parameter_values:
@@ -745,7 +751,7 @@ class NumericalAnalysisService:
         model_id: str,
         candidate_id: str,
         model: FormalAnalyticalModel,
-        result_ids: list[str],
+        numerical_results: list[NumericalResult | str],
         params: dict[str, ModelParameter],
         payoff_exprs: dict[str, Any],
     ) -> list[str]:
@@ -754,8 +760,8 @@ class NumericalAnalysisService:
         if not payoff_exprs:
             return []
         baseline = None
-        for rid in result_ids:
-            r = (await self._store.get(rid)).parse_payload(NumericalResult)
+        for item in numerical_results:
+            r = item if isinstance(item, NumericalResult) else (await self._store.get(item)).parse_payload(NumericalResult)
             if r.feasible and r.scenario == "baseline":
                 baseline = r
                 break

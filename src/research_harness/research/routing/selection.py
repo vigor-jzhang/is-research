@@ -74,9 +74,21 @@ def filter_eligible(
     request: RoutingRequest,
 ) -> tuple[list[RoutingCandidateAssessment], list[RoutingCandidateAssessment]]:
     """Apply the mandatory gate. Returns (eligible, rejected)."""
-    required_rate = request.required_deterministic_pass_rate or DEFAULT_REQUIRED_PASS_RATE
-    min_structured = request.min_structured_output_success_rate or DEFAULT_MIN_STRUCTURED_RATE
-    max_error = request.max_model_error_rate or DEFAULT_MAX_MODEL_ERROR_RATE
+    required_rate = (
+        DEFAULT_REQUIRED_PASS_RATE
+        if request.required_deterministic_pass_rate is None
+        else request.required_deterministic_pass_rate
+    )
+    min_structured = (
+        DEFAULT_MIN_STRUCTURED_RATE
+        if request.min_structured_output_success_rate is None
+        else request.min_structured_output_success_rate
+    )
+    max_error = (
+        DEFAULT_MAX_MODEL_ERROR_RATE
+        if request.max_model_error_rate is None
+        else request.max_model_error_rate
+    )
 
     eligible: list[RoutingCandidateAssessment] = []
     rejected: list[RoutingCandidateAssessment] = []

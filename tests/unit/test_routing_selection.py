@@ -305,3 +305,13 @@ def test_policies_documented_and_deterministic():
 def test_unknown_policy_raises():
     with pytest.raises(Exception):
         get_policy("does-not-exist")
+
+
+def test_explicit_zero_reliability_threshold_is_enforced():
+    board = _board([_entry("has-errors", model_error_rate=0.01)])
+    eligible, rejected = filter_eligible(
+        build_assessments(board), _request(max_model_error_rate=0.0)
+    )
+    assert eligible == []
+    assert rejected[0].candidate_id == "has-errors"
+    assert "model_error_rate" in (rejected[0].rejection_reason or "")
