@@ -1,6 +1,6 @@
-# Evidence Extraction — Phase 2F
+# Evidence Extraction
 
-Phase 2F transforms the frozen Phase 2E `FullTextCorpus` into structured, page-grounded evidence:
+evidence extraction transforms the frozen document acquisition `FullTextCorpus` into structured, page-grounded evidence:
 
 ```text
 FullTextCorpus
@@ -9,12 +9,12 @@ FullTextCorpus
 → structured evidence extraction (model-assisted, strict schema)
 → EvidenceItems (page-grounded)
 → PaperResearchProfile (references EvidenceItems)
-→ EvidenceCorpus (input to Phase 2G)
+→ EvidenceCorpus (input to literature synthesis)
 ```
 
 > Every extracted research fact or finding is traceable to exact source page(s) in the `FullTextDocument`.
 
-Phase 2F performs **no** cross-paper synthesis, gap detection, theory
+evidence extraction performs **no** cross-paper synthesis, gap detection, theory
 generation, embeddings, or OCR. Synthesis and gap detection are later
 implemented phases (`docs/workflows/literature/synthesis.md`, `docs/workflows/literature/gaps.md`); embeddings and OCR
 remain out of scope.
@@ -27,7 +27,7 @@ EvidenceCandidate       = strict structured model output (validated before persi
 EvidenceItem            = durable page-grounded evidence artifact
 PaperResearchProfile    = paper-level profile referencing EvidenceItems
 EvidenceExtractionExecution = operational record of a corpus run
-EvidenceCorpus          = durable output artifact (input to Phase 2G)
+EvidenceCorpus          = durable output artifact (input to literature synthesis)
 ```
 
 ## Chunking strategy
@@ -123,7 +123,7 @@ All Pydantic v2, `extra="forbid"`, `schema_version`, immutable after persistence
 ## Provenance
 
 ```text
-EvidenceCorpus → EvidenceExtractionExecution → FullTextCorpus → (Phase 2E chain)
+EvidenceCorpus → EvidenceExtractionExecution → FullTextCorpus → (document acquisition chain)
 PaperResearchProfile → EvidenceItem → FullTextDocument → DocumentAcquisition → PaperIdentity → ResearchQuestion
 ```
 

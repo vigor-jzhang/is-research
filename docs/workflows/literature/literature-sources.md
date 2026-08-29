@@ -103,7 +103,7 @@ LiteratureSource.search() → hits → Ingestor
 
 `LiteratureSearchRecord` captures reproducibility: provider, query, filters, executed_at, requested_limit, returned_count, total_estimate, `paper_artifact_ids`, `provider_snapshot_artifact_ids`, pagination metadata. No credentials.
 
-Provenance uses Phase 2A `ProvenanceRelation.generated_from` with `source=snapshot, target=paper`.
+Provenance uses literature sourcing `ProvenanceRelation.generated_from` with `source=snapshot, target=paper`.
 
 Result for 3 hits:
 
@@ -120,7 +120,7 @@ Later `PaperRecord → EvidenceItem → ResearchClaim` lineage can be walked bac
 Claim → Evidence → Paper → Snapshot
 ```
 
-No automatic deduplication — two `PaperRecord`s with same DOI from different providers coexist; `content_hash` and `external_identifiers` are signals for Phase 2C.
+No automatic deduplication — two `PaperRecord`s with same DOI from different providers coexist; `content_hash` and `external_identifiers` are signals for search and identity resolution.
 
 ## Rate Limiting and Retries
 
@@ -168,4 +168,4 @@ uv run --env-file .env pytest -m "live or live_literature" -v
 
 Tests in `tests/live/test_literature_live.py` perform one small lookup/search per provider (known DOI `10.1038/nature12373`, query `information systems`, limit 2) and assert structural success (hit exists, title, DOI) without relying on ordering or citation counts. Crossref respects `CROSSREF_MAILTO`; Semantic Scholar reports authenticated vs unauthenticated clearly and skips if key unavailable.
 
-No OpenRouter/LLM calls are made in Phase 2B; all normalization is deterministic.
+No OpenRouter/LLM calls are made in literature ingestion; all normalization is deterministic.

@@ -1,6 +1,6 @@
-# Numerical Experiments, Robustness & Welfare — Phase 3E
+# Numerical Experiments, Robustness & Welfare
 
-Phase 3E transforms the Phase 3C/3D verified results into deterministic
+numerical analysis transforms the equilibrium derivation/3D verified results into deterministic
 numerical evidence:
 
 ```text
@@ -12,7 +12,7 @@ FormalAnalyticalModel + Verified Equilibrium + Verified Propositions
 
 No paper drafting, LaTeX generation, publication claims, new gap search, or
 new theory generation here — those belong to later phases (results assembly
-Phase 4A, manuscript drafting Phase 4B, and Phase 4C).
+results assembly, manuscript drafting manuscript drafting, and publication packaging).
 
 ## Schemas (`src/research_harness/research/schemas/numerical.py`)
 

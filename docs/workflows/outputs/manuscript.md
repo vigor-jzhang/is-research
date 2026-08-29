@@ -1,6 +1,6 @@
-# Manuscript Architecture & Drafting — Phase 4B
+# Manuscript Architecture & Drafting
 
-Phase 4B transforms a completed `ResearchResultsPackage` into a structured,
+manuscript drafting transforms a completed `ResearchResultsPackage` into a structured,
 evidence-grounded manuscript draft:
 
 ```text
@@ -14,8 +14,8 @@ ResearchResultsPackage
 ```
 
 Journal-specific formatting, bibliography formatting, LaTeX/DOCX/PDF export,
-cover letter, and submission packaging are outside Phase 4B — implemented in
-Phase 4C (see `docs/workflows/outputs/publication.md`).
+cover letter, and submission packaging are outside manuscript drafting — implemented in
+publication packaging (see `docs/workflows/outputs/publication.md`).
 
 ## Schemas (`src/research_harness/research/schemas/manuscript.py`)
 
@@ -172,11 +172,11 @@ artifact ids inside `[CITE:...]`.
   retry loop absorbs this but can take minutes for a full draft.
 - Journal-specific style sheets remain future work; formatting,
   bibliography, LaTeX/DOCX/PDF export, cover letter, and submission packaging
-  are implemented in Phase 4C (see `docs/workflows/outputs/publication.md`).
+  are implemented in publication packaging (see `docs/workflows/outputs/publication.md`).
 
-## Phase 4C readiness
+## publication packaging readiness
 
-**Ready — Phase 4C is implemented** (see `docs/workflows/outputs/publication.md`). The
+**Ready — publication packaging is implemented** (see `docs/workflows/outputs/publication.md`). The
 structured draft (sections with grounded claims + internal citations +
 critiques + versioned drafts) is the direct input for the publication
 formatter: citation resolution, bibliography generation, LaTeX/DOCX/PDF

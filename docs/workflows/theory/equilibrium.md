@@ -1,6 +1,6 @@
-# Equilibrium Derivation & Symbolic Verification — Phase 3C
+# Equilibrium Derivation & Symbolic Verification
 
-Phase 3C transforms the Phase 3B `FormalAnalyticalModel` into an equilibrium:
+equilibrium derivation transforms the model specification `FormalAnalyticalModel` into an equilibrium:
 
 ```text
 FormalAnalyticalModel
@@ -13,7 +13,7 @@ FormalAnalyticalModel
 ```
 
 No propositions, comparative statics, welfare analysis, or numerical
-experiments yet (Phase 3D+).
+experiments yet (proposition development+).
 
 ## Solvability gate
 

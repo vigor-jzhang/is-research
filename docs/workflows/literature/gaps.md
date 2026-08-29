@@ -1,6 +1,6 @@
-# Research Gap Analysis — Phase 2H
+# Research Gap Analysis
 
-Phase 2H transforms the frozen Phase 2G `LiteratureSynthesis` into evidence-grounded
+gap analysis transforms the frozen literature synthesis `LiteratureSynthesis` into evidence-grounded
 research gap candidates:
 
 ```text
@@ -13,8 +13,8 @@ evidence-grounded gap analysis
 ResearchGap candidates (GapAnalysis)
 ```
 
-Phase 2H identifies candidate research opportunities. It does **not** generate
-theories, mechanisms, or analytical models — those are Phases 3A–3B
+gap analysis identifies candidate research opportunities. It does **not** generate
+theories, mechanisms, or analytical models — those are mechanism and model development
 (`docs/workflows/theory/mechanisms.md`, `docs/workflows/theory/models.md`), which consume the selected gap.
 
 ## Gap taxonomy (`src/research_harness/research/schemas/gap.py:GapType`)

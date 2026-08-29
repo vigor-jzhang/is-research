@@ -1,6 +1,6 @@
-# Cross-Paper Evidence Synthesis — Phase 2G
+# Cross-Paper Evidence Synthesis
 
-Phase 2G transforms the frozen Phase 2F `EvidenceCorpus` into a grounded, structured
+literature synthesis transforms the frozen evidence extraction `EvidenceCorpus` into a grounded, structured
 representation of what the literature says:
 
 ```text
@@ -12,8 +12,8 @@ EvidenceCorpus
 → LiteratureSynthesis
 ```
 
-Phase 2G summarizes; it does **not** identify research gaps, generate new theory,
-or build analytical models (Phase 2H+).
+literature synthesis summarizes; it does **not** identify research gaps, generate new theory,
+or build analytical models (gap analysis+).
 
 > Every substantive synthesis statement must reference supporting `EvidenceItem` IDs.
 > No unsupported literature claim may be persisted.

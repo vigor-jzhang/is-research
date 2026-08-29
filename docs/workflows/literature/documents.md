@@ -1,10 +1,10 @@
-# Documents — Phase 2E Full-Text Acquisition and Extraction
+# Documents
 
-Phase 2E answers: for every **included** scholarly work (`ScreenedLiteratureSet.included_identity_ids`), can we deterministically find, acquire, preserve, and extract page-level text while retaining complete provenance — without interpreting contents?
+document acquisition answers: for every **included** scholarly work (`ScreenedLiteratureSet.included_identity_ids`), can we deterministically find, acquire, preserve, and extract page-level text while retaining complete provenance — without interpreting contents?
 
 > **Academic relevance and document accessibility are independent.** Failure to obtain full text never turns an included paper into an excluded paper. A paper can be `academically included` + `full text unavailable` and remains so.
 
-> **Phase 2E performs no research interpretation.** No `EvidenceItem`, `ResearchClaim`, section inference, reference parsing, or LLM calls. Output is **documents**, not evidence.
+> **document acquisition performs no research interpretation.** No `EvidenceItem`, `ResearchClaim`, section inference, reference parsing, or LLM calls. Output is **documents**, not evidence.
 
 ## Concepts
 
@@ -15,7 +15,7 @@ DocumentAcquisition    = an attempt/result of obtaining bytes (downloaded/import
 Blob                  = immutable stored binary/text content (content-addressed by sha256)
 FullTextDocument       = extracted structured text representation (page-level)
 DocumentAcquisitionExecution = operational record for processing a screened set
-FullTextCorpus         = durable output artifact for Phase 2F (available/unavailable)
+FullTextCorpus         = durable output artifact for evidence extraction (available/unavailable)
 ```
 
 Do not collapse into a giant document object.
@@ -94,7 +94,7 @@ Plugin `documents.locator.metadata` (`src/research_harness/plugins/documents/loc
 Deterministically examines `PaperIdentity → member PaperRecords`:
 
 - `PaperRecord.open_access_url`
-- `PaperRecord.metadata.open_access_pdf_url` (Semantic Scholar Academic Graph `openAccessPdf` mapped in Phase 2B)
+- `PaperRecord.metadata.open_access_pdf_url` (Semantic Scholar Academic Graph `openAccessPdf` mapped in literature ingestion)
 - `PaperRecord.url` if it ends with `.pdf` (conservative)
 
 No network call, no new API. Duplicate URLs suppressed, deterministic ordering by `url` string, idempotent (reuses existing `DocumentLocation` if same `paper_identity_id+url+resolver`).
@@ -185,7 +185,7 @@ Consumes stored bytes via `BlobStore`, no HTTP.
 Plugin `documents.extractor.pypdf` (`src/research_harness/plugins/documents/extractor_pypdf/plugin.py:10`) using `pypdf`:
 
 - Page-level extraction via `PdfReader`, 1-based page numbers (human-facing, documented), preserves boundaries (`page 1 text`, `page 2 text`, ...)
-- No OCR: `Tesseract/OCRmyPDF/vision` not in Phase 2E; scanned/image-only PDFs yield little/no text → `text_status: insufficient_text` not `failed`
+- No OCR: `Tesseract/OCRmyPDF/vision` not in document acquisition; scanned/image-only PDFs yield little/no text → `text_status: insufficient_text` not `failed`
 - Encrypted PDFs → `text_status: encrypted` (no password cracking)
 - Quality metrics deterministic: `page_count`, `pages_with_text`, `pages_without_text`, `character_count`, `average_characters_per_page`, `empty_page_ratio`
 - Threshold `character_count <200 or empty_page_ratio >0.5` → `insufficient_text` (documented, no LLM)
@@ -211,7 +211,7 @@ started_at, completed_at, counts{total_included,locations_found,downloaded,impor
 failures:[{paper_identity_id, error}], budget_stop_reason
 ```
 
-`FullTextCorpus` `src/research_harness/research/schemas/full_text.py:FullTextCorpus` durable output for Phase 2F:
+`FullTextCorpus` `src/research_harness/research/schemas/full_text.py:FullTextCorpus` durable output for evidence extraction:
 
 ```
 document_acquisition_execution_id, screened_literature_set_id,
@@ -233,7 +233,7 @@ ScreenedLiteratureSet → PaperIdentity (via included_identity_ids typed referen
 FullTextDocument → DocumentAcquisition → DocumentLocation → PaperIdentity → ScreenedLiteratureSet → ScreeningExecution → ScreeningProtocol → PaperScreeningView → PaperIdentity → PaperRecord → ProviderRecordSnapshot → LiteratureSearchRecord → LiteratureQuery → ResearchQuestion
 ```
 
-Original literature provenance `PaperIdentity → PaperRecord → ProviderRecordSnapshot(crossref/semantic_scholar) → LiteratureSearchRecord → LiteratureQuery → ResearchQuestion` remains; Phase 2F can trace quotation via `FullTextDocument.text_blob` pages and `DocumentAcquisition.source_blob` original bytes.
+Original literature provenance `PaperIdentity → PaperRecord → ProviderRecordSnapshot(crossref/semantic_scholar) → LiteratureSearchRecord → LiteratureQuery → ResearchQuestion` remains; evidence extraction can trace quotation via `FullTextDocument.text_blob` pages and `DocumentAcquisition.source_blob` original bytes.
 
 ## Events (concise, no blobs)
 
@@ -287,11 +287,11 @@ UNPAYWALL_EMAIL=
 # openrouter not required for 2E
 ```
 
-No OpenRouter config required for Phase 2E.
+No OpenRouter config required for document acquisition.
 
 ## No LLM/Interpretation
 
-Phase 2E makes **no** `model_router.default` calls, no `EvidenceItem`/`ResearchClaim`, no section inference, no reference parsing, no OCR. Page-level text is sufficient.
+document acquisition makes **no** `model_router.default` calls, no `EvidenceItem`/`ResearchClaim`, no section inference, no reference parsing, no OCR. Page-level text is sufficient.
 
 ## For Developers
 

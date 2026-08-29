@@ -206,7 +206,7 @@ Verify discovery:
 uv run research-agent plugins list   # shows source builtin/external
 ```
 
-Keep built-ins inside the repo for Phase 1; split to separate distributions only when needed.
+Keep built-ins inside the repo for core platform; split to separate distributions only when needed.
 
 ## Testing Your Plugin
 

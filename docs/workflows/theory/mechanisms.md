@@ -1,6 +1,6 @@
-# Mechanism Development — Phase 3A
+# Mechanism Development
 
-Phase 3A transforms the frozen Phase 2H `GapAnalysis` into a selected,
+mechanism development transforms the frozen gap analysis `GapAnalysis` into a selected,
 critiqued, and revised theoretical mechanism:
 
 ```text
@@ -11,9 +11,9 @@ GapAnalysis
 → SelectedMechanism (revision, role `reasoning`)
 ```
 
-Phase 3A produces a mechanism **representation only**. No utility functions,
+mechanism development produces a mechanism **representation only**. No utility functions,
 equations, optimization problems, equilibrium, propositions, proofs, or
-numerical experiments — those begin in Phase 3B.
+numerical experiments — those begin in model specification.
 
 ## Schemas (`src/research_harness/research/schemas/mechanism.py`)
 

@@ -1,6 +1,6 @@
-# Publication Formatting, Export & Submission Package — Phase 4C
+# Publication Formatting, Export & Submission Package
 
-Phase 4C transforms an immutable `ManuscriptDraft` into a publication-ready
+publication packaging transforms an immutable `ManuscriptDraft` into a publication-ready
 manuscript and submission package:
 
 ```text
@@ -167,9 +167,9 @@ exports in the BlobStore, package `ready`.
 - Export bytes for PDF/DOCX depend on library versions; reproducibility is
   pinned to the recorded renderer versions.
 
-## Recommendation for post-Phase-4 work
+## Next steps
 
-- **Novelty validation is implemented** (Phases 5A–5D, `docs/workflows/outputs/novelty.md`):
+- **Novelty validation is implemented** (workflow capabilities, `docs/workflows/outputs/novelty.md`):
   external literature-based validation of global-novelty claims, incremental
   revalidation, evidence enrichment, and bounded pre-acquisition.
 - Journal-specific style sheets and template-based DOCX/LaTeX rendering.

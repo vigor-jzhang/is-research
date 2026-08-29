@@ -1,4 +1,4 @@
-# Screening (Phase 2D)
+# Screening
 
 Literature screening operates at the **PaperIdentity** level (not raw `PaperRecord`s). It is deterministic where possible, model-assisted where judgment is required, and approval-gated at the protocol boundary.
 
@@ -113,7 +113,7 @@ Flow (`TitleAbstractScreenerService.screen(view_id, protocol_id)`):
 5. Parse JSON, validate criterion ids against protocol (`hallucinated → ValueError`, not stored).
 6. Validate enums / `rationale_summary` non-empty ≤2000 / confidence bounds.
 7. Persist `ScreeningDecision` (`artifact_type="screening_decision"`), provenance `derived_from PaperIdentity + PaperScreeningView + ScreeningProtocol`, emit `screening.candidate.completed`.
-8. **Deterministic semantics**: if `matched_exclusion_criteria` non-empty but `decision != exclude`, log warning (spec says explicit exclusion → exclude); no silent override in this phase (trust model, surface conflict).
+8. **Deterministic semantics**: if `matched_exclusion_criteria` non-empty but `decision != exclude`, log warning (spec says explicit exclusion → exclude); no silent override in this capability (trust model, surface conflict).
 
 Hallucination boundary: **before** calling `ArtifactStore.put`, all criterion ids are checked against `protocol.all_criterion_ids()` split by kind, and JSON schema is closed. Raw model output never becomes an artifact on failure.
 
@@ -268,7 +268,7 @@ second run reuses decisions (idempotency), DB reopen persistence.
 
 No network, no OpenRouter.
 
-## Quality gates for Phase 2D
+## Quality gates for screening
 
 ```bash
 uv run pytest

@@ -1,9 +1,9 @@
-# External Novelty Validation & Submission-Readiness Gate — Phase 5A/5B/5C/5D
+# External Novelty Validation & Submission-Readiness Gate
 
-Phase 5A adds an external literature-based novelty-validation layer on top of
-the completed Phase 4 publication pipeline; Phase 5B adds incremental
-revalidation when a manuscript is superseded; Phase 5C enriches sparse
-candidates with acquired evidence before assessment; Phase 5D moves that
+Novelty validation adds an external literature-based novelty-validation layer on top of
+the completed publication workflow; incremental revalidation adds incremental
+revalidation when a manuscript is superseded; evidence enrichment enriches sparse
+candidates with acquired evidence before assessment; bounded pre-acquisition moves that
 acquisition earlier — before assessment — in a bounded, deterministic way:
 
 ```text
@@ -21,7 +21,7 @@ External Literature Search       (existing providers: Semantic Scholar, Crossref
         ▼
 Candidate normalization/deduplication (PaperIdentity)
         ▼
-Bounded Evidence Pre-Acquisition (Phase 5D: sparse high-risk candidates)
+Bounded Evidence Pre-Acquisition (bounded pre-acquisition: sparse high-risk candidates)
         ▼
 Candidate Prior-Art Assessment   (evidence-backed, independent critic pass)
         ▼
@@ -31,20 +31,20 @@ NoveltyValidationReport
         ▼
 SubmissionReadinessGate
 
---- Phase 5B (incremental, on manuscript supersession) ---
+--- incremental revalidation (incremental, on manuscript supersession) ---
 old manuscript ─► ManuscriptChangeSet ─► NoveltyRevalidationPlan
   ─► reuse unaffected claim assessments + revalidate affected claims
   ─► NEW NoveltyValidationReport ─► NEW SubmissionReadinessGate
 
---- Phase 5C (evidence enrichment fallback) ---
+--- evidence enrichment (evidence enrichment fallback) ---
 sparse candidate (title_only / indexed_metadata)
   ─► EvidenceEnrichmentPlan ─► existing provider/document acquisition
   ─► EvidenceItem(s) ─► superseding candidate assessment
   ─► recomputed claim assessment ─► recomputed report/gate
 
---- Phase 5D (bounded pre-acquisition) ---
+--- bounded pre-acquisition (bounded pre-acquisition) ---
 candidate set ─► deterministic selection (risk, budget, discovery breadth)
-  ─► PreAcquisitionExecution ─► Phase 5C acquisition path
+  ─► PreAcquisitionExecution ─► evidence enrichment acquisition path
   ─► evidence ready before assessment ─► 5C fallback only if still sparse
 ```
 
@@ -55,7 +55,7 @@ The central principle:
 
 This is not a system for proving global novelty. `0 search results` never
 means "novel". Search scope is always declared; exhaustive coverage is never
-claimed. `SubmissionPackage.status == ready` keeps its Phase 4C meaning
+claimed. `SubmissionPackage.status == ready` keeps its publication packaging meaning
 (formatting/validation/exports); the new gate adds "external pre-submission
 validation has also been performed".
 
@@ -75,7 +75,7 @@ validation has also been performed".
   (deterministic/model_assisted/hybrid).
 - `NoveltySearchExecution` — durable per-search record: search-record ids,
   explicit `as_of_date`, planned/executed/succeeded counts, provider
-  failures. `literature_search_record` artifacts (existing Phase 1 contract)
+  failures. `literature_search_record` artifacts (existing core platform contract)
   record provider/query/limit/timestamp/returned ids/errors.
 - `NoveltyCandidateSet` — union of candidate papers per claim: references
   existing `PaperIdentity` artifacts (never duplicated metadata), which
@@ -104,7 +104,7 @@ validation has also been performed".
 - `SubmissionReadinessGate` — references the unchanged `SubmissionPackage`
   and the report; status ready/needs_revision/blocked/unverified.
 - `NoveltyValidationExecution` — operational record.
-- Phase 5B: `ManuscriptChangeSet` (old/new manuscript ids + content hashes,
+- incremental revalidation: `ManuscriptChangeSet` (old/new manuscript ids + content hashes,
   per-section change types, added/removed/modified/unchanged claim lists,
   `claim_identity_map` for stable identity), `NoveltyRevalidationPlan`
   (affected claims, reusable assessments, explicit reuse + revalidation
@@ -113,16 +113,16 @@ validation has also been performed".
 - `StalenessStatus` (current/stale) — derived, never stored: a report/gate is
   stale when its manuscript content hash no longer matches the current
   manuscript in the draft lineage.
-- Phase 5C: `EvidenceEnrichmentPlan` (paper identity, requested evidence
+- evidence enrichment: `EvidenceEnrichmentPlan` (paper identity, requested evidence
   types, ordered acquisition strategies, reason, service policy — persisted
   before any acquisition), `EvidenceEnrichmentAttempt` (strategy/provider/
   status success|not_found|restricted|rate_limited|failed|skipped, retrieved
   artifact ids, failure reason), `EvidenceEnrichmentExecution`
   (before/after evidence basis, outcome enriched|partially_enriched|
   no_improvement|failed).
-- Phase 5D: `PreAcquisitionExecution` (considered/selected/skipped candidate
+- bounded pre-acquisition: `PreAcquisitionExecution` (considered/selected/skipped candidate
   ids, per-candidate selection reasons, budgets, deterministic metrics, the
-  Phase 5C enrichment executions used).
+  evidence enrichment enrichment executions used).
 
 ## Claim extraction
 
@@ -220,17 +220,17 @@ NoveltyCandidateAssessment → NoveltyCriticAssessment
 NoveltySearchExecution → search plan → literature queries → search records
 NoveltyCandidateAssessment → PaperIdentity → PaperRecord
 
-Phase 5B:
+incremental revalidation:
 New Gate → New Report → NoveltyRevalidationExecution → NoveltyRevalidationPlan
   → ManuscriptChangeSet → old + new manuscripts
 New Report → reused old assessments + newly generated assessments
 
-Phase 5C:
+evidence enrichment:
 NoveltyCandidateAssessment → EvidenceEnrichmentExecution → Plan → Attempt
   → acquired EvidenceItem / PaperRecord / FullTextDocument → PaperIdentity
 New CandidateAssessment → supersedes old CandidateAssessment
 
-Phase 5D:
+bounded pre-acquisition:
 NoveltySearchExecution → CandidateSet → PreAcquisitionExecution
   → EvidenceEnrichmentPlan/Attempt/Execution → EvidenceItem / FullTextDocument
   → CandidateAssessment
@@ -248,7 +248,7 @@ a package whose manuscript differs from the report's, and refuses to build a
 gate from a STALE report. An old report can never silently validate a changed
 manuscript.
 
-## Incremental revalidation (Phase 5B)
+## Incremental revalidation
 
 `novelty revalidate <previous-report-id> <new-package-id> [--offline]
 [--as-of] [--force-all]`:
@@ -271,7 +271,7 @@ manuscript.
    decision persists its reason in the plan.
 3. **Revalidation** — affected claims (new, modified, risk-increased,
    scope-broadened, previously unverified, policy-invalidated, or
-   `--force-all`) run through the Phase 5A pipeline.
+   `--force-all`) run through the novelty validation pipeline.
 4. **New report + gate** — a fresh `NoveltyValidationReport` binding the new
    draft/manuscript/content-hash/package, referencing reused + new
    assessments, superseding the old report; a new `SubmissionReadinessGate`
@@ -285,7 +285,7 @@ hash with the report's. Mismatch ⇒ `stale`. A stale report cannot create a
 gate; a stale `ready` gate is never presented as current — `novelty inspect`
 prints the staleness status prominently for both reports and gates.
 
-## Evidence enrichment (Phase 5C)
+## Evidence enrichment
 
 Trigger (deterministic): `title_only` candidates always; `indexed_metadata`
 candidates for critical/high-risk claims — i.e., exactly when the assessment
@@ -307,7 +307,7 @@ BlobStore with content hashes) → indexed metadata.
   (model-assisted) with a deterministic claim-token fallback, keeping page
   locators; large bodies stay in the BlobStore, never in SQLite JSON.
 - Every attempt is recorded with its status; rate limits/paywalls/outages are
-  explicit failures. If evidence remains insufficient, Phase 5A rules apply
+  explicit failures. If evidence remains insufficient, novelty validation rules apply
   unchanged: candidate → `insufficient_evidence`, claim → `unverified`.
 - Inline: `novelty validate` enriches automatically when configured
   (`research.novelty.evidence_enrichment`). Explicit: `novelty enrich
@@ -319,7 +319,7 @@ BlobStore with content hashes) → indexed metadata.
   set of the original assessment (coverage is recomputed deterministically
   from the new evidence).
 
-## Bounded evidence pre-acquisition (Phase 5D)
+## Bounded evidence pre-acquisition
 
 Moves acquisition earlier: after candidate normalization/deduplication and
 before assessment. Trigger (deterministic): claims whose risk ∈
@@ -335,7 +335,7 @@ work: `max_candidates_per_claim` (per claim) and `max_total_candidates`
 (global across the run, counted at selection time). Every considered,
 selected, and skipped candidate carries a persisted selection reason.
 
-Acquisition reuses the Phase 5C path (`_enrich` → plan/attempts/execution,
+Acquisition reuses the evidence enrichment path (`_enrich` → plan/attempts/execution,
 abstract first via `prefer_abstract`, optional full text) — no duplicated
 provider/fallback logic. Deduplication is at the `PaperIdentity` level: one
 paper found by many queries is acquired once; the same paper across multiple
@@ -344,10 +344,10 @@ claim.
 
 Failures (rate limits, restricted, not found, provider/parse failures) are
 recorded in the metrics (`failures`, per-attempt statuses) and never abort
-validation; the Phase 5A/5C conservative rules stay authoritative — failed
+validation; the novelty validation and enrichment conservative rules stay authoritative — failed
 pre-acquisition never implies novelty.
 
-Phase 5C remains the fallback: candidates still sparse after pre-acquisition
+evidence enrichment remains the fallback: candidates still sparse after pre-acquisition
 are enriched inline during assessment — except that strategies which already
 failed for the same identity+claim in this run's pre-acquisition are not
 repeated (recorded, non-fatal). Metrics make the win measurable:
@@ -367,7 +367,7 @@ research:
       acquire_full_text: false
 ```
 
-Disabled (`enabled: false`) leaves the Phase 5C behavior exactly as before.
+Disabled (`enabled: false`) leaves the evidence enrichment behavior exactly as before.
 
 ## CLI
 
@@ -434,7 +434,7 @@ absolute claims under weak coverage, reassessment supersession +
 immutability, gate manuscript-mismatch rejection, and the full provenance
 chain after reopen.
 
-Unit (`tests/unit/test_revalidation.py`, 11, Phase 5B): no manuscript change
+Unit (`tests/unit/test_revalidation.py`, 11, incremental revalidation): no manuscript change
 → all eligible assessments reused with zero new searches; non-novelty section
 change → assessments reused; one novelty claim wording change → only that
 claim revalidated; new claim → new validation; removed claim → absent from
@@ -446,22 +446,22 @@ never treated as current (gate creation refused, old gate untouched); and
 `--force-all` → zero reuse. Reuse reasons and revalidation reasons are
 persisted and asserted.
 
-Integration (`tests/integration/test_phase5a_novelty.py`, 1): a real Phase 4C
+Integration (`tests/integration/test_phase5a_novelty.py`, 1): a real publication packaging
 `SubmissionPackage` → extraction → plans → fake providers (one threatening
 paper + duplicate, one partial overlap, one unrelated) → `PaperIdentity`
 dedup → assessments with critic pass → blocked report → gate; provenance
 graph verified after close/reopen, including search record → query and
 recommendation → supporting candidates edges.
 
-Integration (`tests/integration/test_phase5b_revalidation.py`, 1, Phase 5B):
-real Phase 4C package → 5A report (clear) → draft V2 supersession with one
+Integration (`tests/integration/test_phase5b_revalidation.py`, 1, incremental revalidation):
+real publication packaging package → 5A report (clear) → draft V2 supersession with one
 novelty claim modified → staleness flips to stale → incremental revalidation
 (one claim reused, one revalidated, threat found → blocked) → new report +
 gate → close/reopen → full incremental provenance: gate → report → execution
 → plan → change set → old + new manuscripts; reused assessment linkage;
 supersedes edge; old artifacts untouched and stale.
 
-Unit (`tests/unit/test_enrichment.py`, 10, Phase 5C): title-only candidate →
+Unit (`tests/unit/test_enrichment.py`, 10, evidence enrichment): title-only candidate →
 abstract acquired via provider `get` → reassessed with abstract evidence;
 metadata-only candidate → full text acquired through fake locator/fetcher/
 extractor → stronger (non-downgraded) reassessment with deterministic
@@ -475,14 +475,14 @@ assessment (threatened) → recomputed blocked report + gate with old artifacts
 untouched; enrichment reveals a distinct candidate → conservative update to
 `clear`; `enrich_candidate` no-op when evidence already sufficient.
 
-Integration (`tests/integration/test_phase5c_enrichment.py`, 1, Phase 5C):
+Integration (`tests/integration/test_phase5c_enrichment.py`, 1, evidence enrichment):
 full chain — a title-only candidate (DOI via external identifier) is enriched
 inline during `novelty validate`: abstract acquired → EvidenceItem persisted
 → candidate assessed as direct prior art on abstract evidence → blocked
 report + gate → reopen → enrichment provenance verified: assessment →
 execution → plan → attempt → evidence item → paper identity.
 
-Unit (`tests/unit/test_preacquisition.py`, 12, Phase 5D): critical sparse
+Unit (`tests/unit/test_preacquisition.py`, 12, bounded pre-acquisition): critical sparse
 candidate → pre-acquired before assessment (abstract basis, upgraded metrics);
 low-risk claim → no pre-acquisition at all; existing abstract → cache hit
 with zero provider calls; same paper found by multiple queries → one
@@ -491,14 +491,14 @@ second claim is a cache hit; candidate count above `max_candidates_per_claim`
 → deterministic bounded selection with persisted reasons; global
 `max_total_candidates` cap across claims; rate limit → recorded in metrics,
 assessment continues and stays conservative (never a clear); successful
-pre-acquisition → Phase 5C fallback not invoked (exactly one enrichment
+pre-acquisition → evidence enrichment fallback not invoked (exactly one enrichment
 execution); insufficient/budget-limited pre-acquisition → the uncovered
-candidate is still enriched by the Phase 5C fallback; failed pre-acquisition
+candidate is still enriched by the evidence enrichment fallback; failed pre-acquisition
 → the same strategies are NOT repeated inline during assessment; disabled
-config → Phase 5C behavior unchanged.
+config → evidence enrichment behavior unchanged.
 
 Integration (`tests/integration/test_phase5d_preacquisition.py`, 1,
-Phase 5D): three sparse candidates (one also duplicated via same DOI) →
+bounded pre-acquisition): three sparse candidates (one also duplicated via same DOI) →
 identity normalization → bounded pre-acquisition (3 abstracts acquired) →
 all candidates assessed on abstract evidence → blocked report + gate → zero
 inline fallback enrichments (3 total enrichment executions = 3
@@ -532,25 +532,25 @@ rate limits.
   beyond it.
 - Conservative wording suggestions are recommendations only — human
   approval controls manuscript revision.
-- Phase 5B change detection: near-identical wording relies on a bounded model
+- incremental revalidation change detection: near-identical wording relies on a bounded model
   comparison (conservative default = changed); re-extraction may produce
   claim-text variance across model runs, which invalidates exact identity and
   forces revalidation (never silently reuses).
 - Staleness is content-hash-based: two manuscripts with identical content
   but different artifacts are considered current for one another.
-- Phase 5C enrichment depends on provider `get` support and open-access
+- evidence enrichment enrichment depends on provider `get` support and open-access
   availability; paywalls/rate limits are recorded as explicit failures, never
   as evidence. Abstract reuse across claims requires a DOI match; candidates
   without any usable identifier cannot be enriched. Deterministic
   claim-token evidence extraction is used when the model extractor is
   unavailable/offline.
-- Phase 5D pre-acquisition is bounded per claim and globally; budget-skipped
-  candidates fall back to Phase 5C inline enrichment. Title-only candidates
+- bounded pre-acquisition pre-acquisition is bounded per claim and globally; budget-skipped
+  candidates fall back to evidence enrichment inline enrichment. Title-only candidates
   without usable identifiers are never pre-acquired (correctly skipped with a
   recorded reason). Global budget accounting is per validation run (reset on
   each `create_report`/`revalidate`).
 
-## Recommendation for post-Phase-5 work
+## Next steps
 
 The single next increment: **open-access full-text prioritization** — rank
 pre-acquisition selection by open-access likelihood (Unpaywall data already

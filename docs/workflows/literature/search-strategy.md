@@ -53,7 +53,7 @@ SearchRecord Snapshot  PaperRecord │
 
 ## Conservative Resolution
 
-Phase 2C merges only on strong deterministic evidence, in priority:
+search and identity resolution merges only on strong deterministic evidence, in priority:
 
 1. **Normalized DOI** exact match — strongest
 2. **Shared strong external identifier** — allowlist `doi, arxiv, pmid, openalex, pmcid`; e.g., shared `arxiv:2101.00001`

@@ -1,6 +1,6 @@
-# Formal Analytical Model Specification — Phase 3B
+# Formal Analytical Model Specification
 
-Phase 3B transforms the Phase 3A `SelectedMechanism` into a structured,
+model specification transforms the mechanism development `SelectedMechanism` into a structured,
 machine-checkable formal analytical model:
 
 ```text
@@ -11,7 +11,7 @@ SelectedMechanism
 → critique → revised FormalAnalyticalModel V2 (supersedes)
 ```
 
-No equilibrium, propositions, or numerical experiments yet (Phase 3C+).
+No equilibrium, propositions, or numerical experiments yet (equilibrium derivation+).
 
 ## Schemas (`src/research_harness/research/schemas/model.py`)
 
@@ -28,7 +28,7 @@ No equilibrium, propositions, or numerical experiments yet (Phase 3C+).
   `variable_symbols`, `available_at_stage`, public/private visibility) +
   `UncertaintyItem` (random variable, distribution, belief note).
 - `ModelAssumption` — statement, `mathematical_form` (Expression),
-  `knowledge_basis` (reuses Phase 3A enum), `source_ids` (required for
+  `knowledge_basis` (reuses mechanism development enum), `source_ids` (required for
   literature_supported), purpose, restrictiveness (low/medium/high).
 - `Expression` — `expression` (SymPy-compatible), `latex`, `symbols_used`
   (declared symbol set).

@@ -2,7 +2,7 @@
 
 `research-agent` (Typer) is the operator interface; every command composes
 the runtime via `app.bootstrap` and delegates business logic to plugins.
-Phase-specific docs list each phase's commands; this page is the full
+Capability guides list each capability's commands; this page is the full
 reference.
 
 ## Kernel commands
@@ -37,7 +37,7 @@ config → kernel → plugin manager → JSONL session → simple_tool_loop
      → model_router (role) → OpenRouter provider → echo tool → trajectory events
 ```
 
-## Literature (Phases 2A–2H)
+## Literature research
 
 ```bash
 uv run research-agent literature sources
@@ -45,14 +45,14 @@ uv run --env-file .env research-agent literature search --source crossref --quer
 uv run --env-file .env research-agent literature search --source semantic_scholar --query "information systems" --limit 5
 uv run --env-file .env research-agent literature get "10.1234/abc" --source crossref
 
-# Search strategy & orchestration (Phase 2C, requires OpenRouter for planning)
+# Search strategy & orchestration
 uv run --env-file .env research-agent literature plan --question <rq_artifact_id> [--research-plan <rp_id>]
 uv run --env-file .env research-agent literature execute --strategy <strategy_artifact_id>
 uv run --env-file .env research-agent literature discover --question <rq_artifact_id>  # plan+execute
 uv run research-agent literature identities list
 uv run research-agent literature identities inspect <identity_id>
 
-# Screening (Phase 2D, PaperIdentity level, approval-gated)
+# Screening
 uv run --env-file .env research-agent literature screening protocol create --question <rq_id> [--research-plan <rp_id>]
 uv run research-agent literature screening protocol inspect <protocol_id>
 uv run research-agent literature screening protocol approve <draft_protocol_id>
@@ -61,7 +61,7 @@ uv run research-agent literature screening decisions list [--execution <screenin
 uv run research-agent literature screening decisions inspect <decision_id>
 uv run research-agent literature screening review --decision <decision_id> --final include --notes "human override"
 
-# Documents (Phase 2E, acquisition from ScreenedLiteratureSet, no LLM)
+# Documents
 uv run research-agent literature documents locate --set <screened_set_id>
 uv run research-agent literature documents acquire --set <screened_set_id>
 uv run research-agent literature documents run --set <screened_set_id>  # locate+acquire+extract
@@ -70,55 +70,55 @@ uv run research-agent literature documents inspect <full_text_doc_id>
 uv run research-agent literature documents import --identity <paper_identity_id> --file paper.pdf
 uv run research-agent literature documents text <full_text_doc_id> --page 5
 
-# Evidence extraction (Phase 2F, page-grounded, structured, model-assisted)
+# Evidence extraction
 uv run --env-file .env research-agent literature evidence run --corpus <full-text-corpus-id>
 uv run research-agent literature evidence profiles list
 uv run research-agent literature evidence profiles inspect <profile_id>
 uv run research-agent literature evidence items list --profile <profile_id>
 uv run research-agent literature evidence items inspect <evidence_id>
 
-# Cross-paper synthesis (Phase 2G, evidence-grounded, model-assisted)
+# Cross-paper synthesis
 uv run --env-file .env research-agent literature synthesis run --corpus <evidence-corpus-id>
 uv run research-agent literature synthesis inspect <synthesis_id>
 uv run research-agent literature synthesis themes list --synthesis <synthesis_id>
 uv run research-agent literature synthesis themes inspect <theme_id>
 
-# Research gap analysis (Phase 2H, evidence-grounded)
+# Research gap analysis
 uv run --env-file .env research-agent literature gaps run --synthesis <synthesis-id> --corpus <evidence-corpus-id> [--question <rq-id>]
 uv run research-agent literature gaps list --analysis <gap-analysis-id>
 uv run research-agent literature gaps inspect <gap-id>
 uv run research-agent literature gaps analysis inspect <analysis-id>
 ```
 
-## Theory (Phases 3A–3E)
+## Analytical modeling
 
 ```bash
-# Mechanism development (Phase 3A, gap selection -> candidate -> critique -> selection)
+# Mechanism development
 uv run --env-file .env research-agent research gap-select --analysis <gap-analysis-id> [--gap <gap-id>]
 uv run --env-file .env research-agent research mechanisms generate --selection <gap-selection-id>
 uv run research-agent research mechanisms inspect <candidate-id>
 uv run --env-file .env research-agent research mechanisms critique <candidate-id>
 uv run --env-file .env research-agent research mechanisms select <candidate-id>
 
-# Formal analytical model (Phase 3B, structured specification)
+# Formal analytical model
 uv run --env-file .env research-agent research model build --mechanism <selected-mechanism-id>
 uv run research-agent research model inspect <model-id>
 uv run --env-file .env research-agent research model critique <model-id>
 uv run --env-file .env research-agent research model revise <model-id>
 
-# Equilibrium derivation (Phase 3C, symbolic)
+# Equilibrium derivation
 uv run --env-file .env research-agent research equilibrium derive --model <model-id>
 uv run research-agent research equilibrium inspect <analysis-id>
 uv run research-agent research equilibrium verify <candidate-id>
 
-# Propositions (Phase 3D, comparative statics + economic interpretation)
+# Propositions
 uv run research-agent research comparative-statics run --equilibrium <equilibrium-analysis-id>
 uv run research-agent research comparative-statics inspect <comparative-statics-analysis-id>
 uv run --env-file .env research-agent research propositions generate --analysis <comparative-statics-analysis-id>
 uv run research-agent research propositions inspect <proposition-id>
 uv run research-agent research propositions verify <proposition-id>
 
-# Numerical experiments (Phase 3E, deterministic + welfare)
+# Numerical experiments
 uv run research-agent research numerical run --equilibrium <equilibrium-analysis-id>
 uv run research-agent research numerical inspect <experiment-id>
 uv run research-agent research numerical results <experiment-id>
@@ -126,17 +126,17 @@ uv run research-agent research numerical robustness <experiment-id>
 uv run research-agent research numerical welfare <experiment-id>
 ```
 
-## Results & manuscript (Phases 4A–4B)
+## Results and manuscript
 
 ```bash
-# Results assembly (Phase 4A, findings + contributions + package)
+# Results assembly
 uv run research-agent research results assemble --numerical <experiment-id>
 uv run research-agent research results inspect <package-id>
 uv run research-agent research findings list --package <package-id>
 uv run research-agent research contributions list --package <package-id>
 uv run research-agent research results critique <package-id>
 
-# Manuscript drafting (Phase 4B, structured + evidence-grounded)
+# Manuscript drafting
 uv run research-agent manuscript outline --results <package-id>
 uv run research-agent manuscript draft --outline <outline-id>
 uv run research-agent manuscript inspect <draft-id>
@@ -144,7 +144,7 @@ uv run research-agent manuscript critique <draft-id>
 uv run research-agent manuscript revise <draft-id>
 ```
 
-## Publication (Phase 4C)
+## Publication package
 
 ```bash
 uv run research-agent publication profile-create --name "MIS Quarterly (generic)"
@@ -155,7 +155,7 @@ uv run research-agent publication package --manuscript <manuscript-id> [--cover-
 uv run research-agent publication inspect <package-id>
 ```
 
-## Novelty validation (Phases 5A–5D)
+## Novelty validation
 
 ```bash
 # Full external validation (with automatic evidence pre-acquisition/enrichment)
@@ -165,7 +165,7 @@ uv run research-agent novelty validate <submission-package-id> [--as-of 2026-08-
 # Incremental revalidation after a manuscript supersession
 uv run research-agent novelty revalidate <previous-report-id> <new-package-id> [--force-all]
 
-# Evidence enrichment for a sparse candidate (Phase 5C)
+# Evidence enrichment for a sparse candidate
 uv run research-agent novelty enrich <candidate-assessment-id> [--offline]
 
 # Reassess (supersedes the previous report) / gate from latest report
@@ -176,7 +176,7 @@ uv run research-agent novelty gate <package-id> [--report <report-id>]
 uv run research-agent novelty inspect <report-or-gate-id>
 ```
 
-## Evaluation harness (Phase 6A–7A.1)
+## Evaluation harness
 
 ```bash
 # Run a benchmark end-to-end (registers the immutable benchmark, runs each
@@ -257,7 +257,7 @@ uv run --env-file .env research-agent run --prompt "echo hello"
 uv run --env-file .env research-agent literature search --source crossref --query "test" --limit 2
 ```
 
-## Model tournaments + role leaderboards (Phase 7B)
+## Model tournaments and role leaderboards
 
 ```bash
 # Run a tournament from a plan (candidates/config live in the plan YAML;
@@ -274,7 +274,7 @@ model / temperature / max tokens / structured-output mode / optional pricing),
 repetitions, timeout/retry policy, deterministic pass threshold and optional
 advisory evaluators — no code changes required.
 
-## Policy-constrained model routing (Phase 7C, shadow mode)
+## Policy-constrained model routing (shadow mode)
 
 ```bash
 uv run research-agent routing decide --role reasoning --policy quality_first   # decision from leaderboard evidence
@@ -283,13 +283,13 @@ uv run research-agent routing inspect <decision-id>                            #
 uv run research-agent routing policies list                                    # documented policies (gate + rank)
 ```
 
-The router consumes persisted RoleLeaderboard evidence (produced by Phase 7B
+The router consumes persisted RoleLeaderboard evidence (produced by model tournaments
 tournaments), applies capability/quality/reliability/constraint gates, and
 selects under an explicit policy. Decision support + shadow only — the
 configured production role model is never changed. The `routing` commands
 require `routing.policy_router` (included in `configs/example.yaml`).
 
-## Live-quality validation + routing readiness (Phase 7D.0)
+## Live-quality validation and routing readiness
 
 ```bash
 uv run research-agent evaluation live-quality run --role reasoning --repetitions 3   # real model, real pipelines, N reps
@@ -305,7 +305,7 @@ deterministically. Live evidence (`live_quality_evidence` leaderboards) is
 required for production-qualification; per-role standards live in
 `research/routing/readiness.py`.
 
-## Live-model qualification campaigns (Phase 7D.1)
+## Live-model qualification campaigns
 
 ```bash
 uv run research-agent routing qualify --role reasoning --repetitions 3   # config-driven candidates, real live runs
@@ -318,7 +318,7 @@ Candidate sets come from `live_quality.candidates` in the config (no slugs
 hard-coded in service logic); repetitions default to the config value (>=3
 recommended). Production switching stays disabled.
 
-## Qualification expansion + calibration (Phase 7D.2)
+## Qualification expansion and calibration
 
 ```bash
 uv run research-agent eval calibration                                  # model-independent benchmark calibration audit
@@ -334,7 +334,7 @@ provider_error, timeout, rate_limit, benchmark_reference_defect,
 evaluator_defect, infrastructure_failure). Confirmed benchmark/evaluator
 defects are excluded from qualification.
 
-## Strong-model expansion + task qualification (Phase 7D.3)
+## Strong-model expansion and task qualification
 
 ```bash
 uv run research-agent routing qualify --role reasoning --repetitions 3       # expanded pools incl. paid models

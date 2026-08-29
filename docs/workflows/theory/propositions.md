@@ -1,6 +1,6 @@
-# Propositions, Comparative Statics & Economic Interpretation — Phase 3D
+# Propositions, Comparative Statics & Economic Interpretation
 
-Phase 3D transforms a Phase 3C verified equilibrium into comparative statics,
+proposition development transforms a equilibrium derivation verified equilibrium into comparative statics,
 propositions, symbolic verification, and structured economic/IS
 interpretation:
 
@@ -13,7 +13,7 @@ Verified Equilibrium
 ```
 
 No numerical experiments, parameter sweeps, plots, welfare experiments,
-robustness experiments, or paper writing (Phase 3E+).
+robustness experiments, or paper writing (numerical analysis+).
 
 ## Schemas (`src/research_harness/research/schemas/proposition.py`)
 
@@ -131,7 +131,7 @@ full generate→verify→critique→interpret flow, interpretation provenance,
 idempotency, model-role change.
 
 Integration: `tests/integration/test_phase3d_propositions.py` — full offline
-chain (Phase 3C services → statics → 2 propositions → verification → critique
+chain (equilibrium derivation services → statics → 2 propositions → verification → critique
 → interpretation) with provenance after reopen.
 
 Live (opt-in `live_propositions`): `tests/live/test_propositions_live.py` —

@@ -41,7 +41,7 @@ Research Harness is a plugin-first system. The kernel is deliberately small and 
                    Tools     Autonomy    Skills
 ```
 
-Research workflow plugins (literature, modeling, equilibrium, numerical, results, manuscript, publication, novelty) compose on the same kernel — see `docs/concepts/research-domain.md` and the per-phase docs (`docs/workflows/literature/literature-sources.md`, `docs/workflows/literature/screening.md`, `docs/workflows/literature/evidence.md`, `docs/workflows/literature/synthesis.md`, `docs/workflows/literature/gaps.md`, `docs/workflows/theory/mechanisms.md`, `docs/workflows/theory/models.md`, `docs/workflows/theory/equilibrium.md`, `docs/workflows/theory/propositions.md`, `docs/workflows/theory/numerical.md`, `docs/workflows/outputs/results.md`, `docs/workflows/outputs/manuscript.md`, `docs/workflows/outputs/publication.md`, `docs/workflows/outputs/novelty.md`).
+Research workflow plugins (literature, modeling, equilibrium, numerical, results, manuscript, publication, novelty) compose on the same kernel — see `docs/concepts/research-domain.md` and the per-capability docs (`docs/workflows/literature/literature-sources.md`, `docs/workflows/literature/screening.md`, `docs/workflows/literature/evidence.md`, `docs/workflows/literature/synthesis.md`, `docs/workflows/literature/gaps.md`, `docs/workflows/theory/mechanisms.md`, `docs/workflows/theory/models.md`, `docs/workflows/theory/equilibrium.md`, `docs/workflows/theory/propositions.md`, `docs/workflows/theory/numerical.md`, `docs/workflows/outputs/results.md`, `docs/workflows/outputs/manuscript.md`, `docs/workflows/outputs/publication.md`, `docs/workflows/outputs/novelty.md`).
 
 The composition root is `src/research_harness/app/bootstrap.py` — it knows about both kernel and plugins; the kernel knows only about abstractions.
 
@@ -237,7 +237,7 @@ This separates harness-level role selection from OpenRouter's provider failover.
 
 ## Tool Contract
 
-`Tool` (`contracts/tool.py:8`) exposes `name`, `description`, `input_schema` (JSON Schema), `async def execute(arguments) -> Any`. Calls emit trace events. Phase 1 provides `tool.echo` — deterministic, validates `text` argument, returns `{"echoed": text}`.
+`Tool` (`contracts/tool.py:8`) exposes `name`, `description`, `input_schema` (JSON Schema), `async def execute(arguments) -> Any`. Calls emit trace events. core platform provides `tool.echo` — deterministic, validates `text` argument, returns `{"echoed": text}`.
 
 Custom `.env` loader (`config/dotenv.py`) is a lightweight fallback; canonical is `uv run --env-file .env`.
 
@@ -257,7 +257,7 @@ Custom `.env` loader (`config/dotenv.py`) is a lightweight fallback; canonical i
 
 `ConfigurableAutonomyPolicy` (`plugins/autonomy/configurable/plugin.py:11`) provides `autonomy_policy.default` with modes `high` (never requires approval) and `interactive` (requires approval for checkpoints like `research_question`, `proposed_mechanism`, `final_contribution_claim`). Research plugins call `requires_approval` / `request_approval`; they never branch on raw config strings.
 
-## Storage and Documents (Phase 2E)
+## Storage and Documents
 
 Two stores with distinct duties:
 
@@ -272,13 +272,13 @@ Document plugins (`plugins/documents/*`) compose:
 ScreenedLiteratureSet → included PaperIdentities → DocumentLocator(metadata + unpaywall) → DocumentLocation --derived_from--> ProviderRecordSnapshot(unpaywall) → HTTP Fetcher (SSRF/size/PDF validation) → DocumentAcquisition (status) → BlobStore PDF → pypdf Extractor → FullTextDocument (page-level, 1-based) → FullTextCorpus
 ```
 
-Contracts `contracts/blob.py:BlobStore` and `contracts/document.py:DocumentLocator/Fetcher/Extractor` are provider-neutral; orchestrator `documents.acquisition_orchestrator` enforces budgets, provenance, and corpus creation. No LLM in Phase 2E.
+Contracts `contracts/blob.py:BlobStore` and `contracts/document.py:DocumentLocator/Fetcher/Extractor` are provider-neutral; orchestrator `documents.acquisition_orchestrator` enforces budgets, provenance, and corpus creation. No LLM in document acquisition.
 
 See `docs/workflows/literature/documents.md` for full lifecycle, resolution priority, security, and CLI.
 
 ## Configuration
 
-`AppConfig` (`config/schema.py:312`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX. See `docs/getting-started/configuration.md` for the full example composition and secrets; per-phase docs document their own `research.*` / `literature.*` / `documents.*` blocks.
+`AppConfig` (`config/schema.py:312`) validates YAML via Pydantic v2. `load_config` (`config/loader.py:11`) fails early with readable messages. Secrets are not in YAML; they come from environment. `uv run --env-file .env` is canonical; `config/dotenv.py` provides a fallback auto-load for local DX. See `docs/getting-started/configuration.md` for the full example composition and secrets; per-capability docs document their own `research.*` / `literature.*` / `documents.*` blocks.
 
 ## CLI
 
@@ -290,14 +290,14 @@ See `docs/workflows/literature/documents.md` for full lifecycle, resolution prio
 - `run [--config --prompt --role --max-steps]`
 - `session inspect <id>`
 - `artifacts list/inspect/lineage`
-- `literature` — sources, search, get, plan, execute, discover, identities, screening, documents, evidence, synthesis, gaps (Phases 2A–2H)
-- `research` — gap-select, mechanisms, model, equilibrium, comparative-statics, propositions, numerical, results, findings, contributions (Phases 3A–4A)
-- `manuscript` — outline, draft, inspect, critique, revise (Phase 4B)
-- `publication` — profile-create, format, validate, export, package, inspect (Phase 4C)
-- `novelty` — validate, report, gate, revalidate, enrich, inspect (Phases 5A–5D)
-- `eval` — run, inspect, list, coverage, readiness (Phase 6A-7A.1/7C harness: 30 offline benchmarks from novelty-threat to task-specific qualification, coverage matrix, deterministic readiness report)
-- `evaluation` — model tournaments + role leaderboards (Phase 7B): `tournament run/inspect`, `leaderboard show/list/inspect` over the frozen benchmarks with correctness-first deterministic ranking; `live-quality run/inspect` (Phase 7D.0) validates real models over realistic inputs with repetitions/variance
-- `routing` — policy-constrained model routing (Phase 7C, shadow mode): `decide`, `shadow`, `inspect`, `policies list` over persisted role leaderboards; `readiness` (Phase 7D.0) reports per-role ready/not_ready from live-quality evidence; `qualify` + `qualification inspect/summary/matrix` (Phase 7D.1/7D.2) run config-driven live-model qualification campaigns and persist the production-qualification matrix; `eval calibration` audits the live-quality benchmarks; production roles never switched
+- `literature` — sources, search, get, plan, execute, discover, identities, screening, documents, evidence, synthesis, gaps (workflow capabilities)
+- `research` — gap-select, mechanisms, model, equilibrium, comparative-statics, propositions, numerical, results, findings, contributions (workflow capabilities)
+- `manuscript` — outline, draft, inspect, critique, revise (manuscript drafting)
+- `publication` — profile-create, format, validate, export, package, inspect (publication packaging)
+- `novelty` — validate, report, gate, revalidate, enrich, inspect (workflow capabilities)
+- `eval` — run, inspect, list, coverage, readiness (evaluation framework-7A.1/7C harness: 30 offline benchmarks from novelty-threat to task-specific qualification, coverage matrix, deterministic readiness report)
+- `evaluation` — model tournaments + role leaderboards (model tournaments): `tournament run/inspect`, `leaderboard show/list/inspect` over the frozen benchmarks with correctness-first deterministic ranking; `live-quality run/inspect` (live-quality validation) validates real models over realistic inputs with repetitions/variance
+- `routing` — policy-constrained model routing (shadow routing, shadow mode): `decide`, `shadow`, `inspect`, `policies list` over persisted role leaderboards; `readiness` (live-quality validation) reports per-role ready/not_ready from live-quality evidence; `qualify` + `qualification inspect/summary/matrix` (live-model qualification/7D.2) run config-driven live-model qualification campaigns and persist the production-qualification matrix; `eval calibration` audits the live-quality benchmarks; production roles never switched
 
 The full command reference (with options and live-test markers) is in `docs/getting-started/cli.md`.
 
@@ -319,27 +319,27 @@ Rules enforced by `tests/unit/test_architecture.py`:
 
 ## Testing
 
-Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 73 unit, 43 integration, and 16 opt-in live test files cover every phase:
+Tests use fake providers/tools and `respx` for OpenRouter; no live API calls in CI. `tests/conftest.py` ensures `pytest` without `-m live` skips live tests. 73 unit, 43 integration, and 16 opt-in live test files cover every capability:
 
 ```bash
 uv run pytest                # offline: 950 passed, 21 skipped
 uv run --env-file .env pytest -m live -v          # OpenRouter live
-uv run --env-file .env pytest -m live_novelty_validation -v  # e.g. Phase 5 live
+uv run --env-file .env pytest -m live_novelty_validation -v  # e.g. live novelty-validation
 ```
 
 Live tests assert structural success with minimal tokens and never log keys.
 
-Coverage: kernel lifecycle, services, events, config, OpenRouter, sessions (including nested secret scrubbing), loops, routing, external discovery, architecture rules, literature phases (2A–2H), research phases (3A–3E), results assembly (4A), manuscript drafting (4B), publication formatting (4C), novelty validation/revalidation/enrichment/pre-acquisition (5A–5D), and evaluation benchmarks (6A–7A.1), plus end-to-end offline integration chains per phase.
+Coverage: kernel lifecycle, services, events, config, OpenRouter, sessions (including nested secret scrubbing), loops, routing, external discovery, architecture rules, literature phases (2A–2H), research phases (3A–3E), results assembly (4A), manuscript drafting (4B), publication formatting (4C), novelty validation/revalidation/enrichment/pre-acquisition (5A–5D), and evaluation benchmarks (6A–7A.1), plus end-to-end offline integration chains per capability.
 
 ## Research Workflows on the Kernel
 
-Phases 2A–5D compose research plugins on the same kernel without modifying it:
+workflow capabilities compose research plugins on the same kernel without modifying it:
 
-- **Phase 2A–2H** (`plugins/literature/*`, `plugins/documents/*`) — search strategy, screening, acquisition, evidence, synthesis, gaps
-- **Phase 3A–3E** (`plugins/research/*`) — mechanisms, model, equilibrium, propositions, numerical experiments
-- **Phase 4A** — results assembly (findings, contributions, implications, package)
-- **Phase 4B** — evidence-grounded manuscript drafting, critique, revision
-- **Phase 4C** — publication formatting, citation resolution, bibliography, exports, submission package
-- **Phase 5A–5D** (`plugins/research/novelty_validator`) — external novelty validation, incremental revalidation, evidence enrichment, bounded evidence pre-acquisition
+- **literature sourcing–2H** (`plugins/literature/*`, `plugins/documents/*`) — search strategy, screening, acquisition, evidence, synthesis, gaps
+- **mechanism development–3E** (`plugins/research/*`) — mechanisms, model, equilibrium, propositions, numerical experiments
+- **results assembly** — results assembly (findings, contributions, implications, package)
+- **manuscript drafting** — evidence-grounded manuscript drafting, critique, revision
+- **publication packaging** — publication formatting, citation resolution, bibliography, exports, submission package
+- **novelty validation capabilities** (`plugins/research/novelty_validator`) — external novelty validation, incremental revalidation, evidence enrichment, bounded evidence pre-acquisition
 
-Their schemas live under `src/research_harness/research/schemas/`; provenance flows through the immutable SQLite `ArtifactStore` (`derived_from`, `extracted_from`, `generated_from`, `supersedes`). See `docs/concepts/research-domain.md` and the per-phase docs for details.
+Their schemas live under `src/research_harness/research/schemas/`; provenance flows through the immutable SQLite `ArtifactStore` (`derived_from`, `extracted_from`, `generated_from`, `supersedes`). See `docs/concepts/research-domain.md` and the per-capability docs for details.

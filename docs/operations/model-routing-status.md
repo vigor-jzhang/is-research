@@ -57,11 +57,11 @@ Current known model/provider issues include:
 
 Qualification thresholds must NOT be lowered simply to obtain coverage.
 
-## Deferred Phase
+## Deferred production activation
 
 Controlled production routing / activation is explicitly deferred.
 
-Phase 7E should eventually implement:
+Controlled routing activation should eventually implement:
 
 - opt-in task-aware production switching
 - hard quality gates
@@ -72,7 +72,7 @@ Phase 7E should eventually implement:
 - observability
 - immediate rollback to static configuration
 
-Phase 7E must not be started until explicitly resumed.
+Controlled routing activation must not be started until explicitly resumed.
 
 ## Safety Invariants
 
@@ -99,14 +99,14 @@ When model-routing work resumes:
 - inspect ProductionQualificationMatrix
 - confirm primary/fallback coverage
 - run shadow-routing validation
-- decide whether Phase 7E activation criteria are satisfied
+- decide whether controlled routing activation criteria are satisfied
 
 ## Project Status
 
-Phase 7 routing infrastructure: substantially complete.
+Model-routing infrastructure: substantially complete.
 
-Phase 7 model qualification: incomplete.
+Model qualification: incomplete.
 
-Phase 7 production activation: not started / intentionally deferred.
+Production activation: not started / intentionally deferred.
 
 The broader research-agent pipeline remains usable through the static config-driven model roles.

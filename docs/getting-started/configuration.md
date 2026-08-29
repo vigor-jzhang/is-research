@@ -1,6 +1,6 @@
 # Configuration
 
-The full composition lives in `configs/example.yaml` (81 plugins, including the Phase 6A-7A.1 evaluation harness, thirty-one evaluator plugins, the Phase 7B `evaluation.model_tournament` plugin, and the Phase 7C `routing.policy_router` plugin, the Phase 7D.0 `evaluation.live_quality` plugin, and config-driven `live_quality.candidates` for qualification campaigns (expanded in Phase 7D.2: fast 4, reasoning 5, critic 4). `AppConfig`
+The full composition lives in `configs/example.yaml` (81 plugins, including the evaluation framework-7A.1 evaluation harness, thirty-one evaluator plugins, the model tournaments `evaluation.model_tournament` plugin, and the shadow routing `routing.policy_router` plugin, the live-quality validation `evaluation.live_quality` plugin, and config-driven `live_quality.candidates` for qualification campaigns (expanded in qualification expansion and calibration: fast 4, reasoning 5, critic 4). `AppConfig`
 (`config/schema.py`) validates it via Pydantic v2; `load_config`
 (`config/loader.py`) fails early with readable messages. Secrets are never in
 YAML — they come from the environment.
@@ -104,8 +104,8 @@ loop:
 The `literature:` (search, screening, evidence, synthesis, gaps), `research:`
 (mechanism, model, equilibrium, proposition, numerical, results, manuscript,
 publication, novelty), `documents:`, and `evaluation:` (evaluator ids,
-`judge_role`, `cost_per_million_tokens`) sections configure each phase; every
-phase doc under `docs/` documents its own configuration block. The
+`judge_role`, `cost_per_million_tokens`) sections configure each capability; every
+capability doc under `docs/` documents its own configuration block. The
 `evaluation` section is documented in `docs/operations/evaluation.md`.
 
 ## Secrets in `.env`

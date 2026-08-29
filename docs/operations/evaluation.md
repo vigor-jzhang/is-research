@@ -1,4 +1,4 @@
-# Evaluation Harness (Phase 6A–7A.1)
+# Evaluation Harness
 
 Plugin-based evaluation framework that measures research-agent quality
 independently from the production pipeline:
@@ -15,7 +15,7 @@ given benchmark input
 Evaluation reuses the existing plugin, artifact, provenance, model-role, and
 execution infrastructure. Production research code does not depend on any
 evaluator implementation. Benchmarks run the REAL production services
-(NoveltyValidationService, LiteratureSearchOrchestratorService, Phase 4C
+(NoveltyValidationService, LiteratureSearchOrchestratorService, publication packaging
 PublicationFormatterService) composed with deterministic fixtures — no
 network, no paid models.
 
@@ -58,26 +58,26 @@ Evaluators are plugin services registered in the service registry:
 | Evaluator | Category | Role |
 |---|---|---|
 | `evaluator.deterministic` | deterministic | Novelty-threat comparison (relationships, claim statuses, report status, false clear) or generic `reference_equality` mode |
-| `evaluator.retrieval` | deterministic | Literature retrieval (Phase 6B): precision@k, recall@k, F1@k, MRR, duplicate_rate, missed/irrelevant papers |
-| `evaluator.screening` | deterministic | Screening (Phase 6C): accuracy, include precision/recall/F1, false exclusion/inclusion, review triggers, technical failures |
-| `evaluator.evidence` | deterministic | Evidence extraction (Phase 6C): precision/recall, category + locator accuracy, unsupported/duplicate rates, required-evidence recall |
-| `evaluator.gap_analysis` | deterministic | Gap analysis (Phase 6D): type/precision/recall, grounding, corpus-bounded claims, support counts, ranking, hallucination |
-| `evaluator.mechanism` | deterministic | Mechanism development (Phase 6D): validity, knowledge-basis discipline, grounding, critic recall, revision success |
-| `evaluator.equilibrium` | deterministic | Equilibrium correctness (Phase 6E): symbolic expression/FOC/best-response equivalence, verification, order, conditions |
-| `evaluator.numerical` | deterministic | Numerical analysis (Phase 6E): value/feasibility/condition/sweep/robustness/welfare/reproducibility |
-| `evaluator.comparative_statics` | deterministic | Comparative statics (Phase 6F): derivative/sign/condition/coverage/ambiguous-sign accuracy, overclaim detection |
-| `evaluator.proposition` | deterministic | Proposition correctness (Phase 6F): verification, monotonicity/equality recomputation, condition/support integrity, rejection justification |
-| `evaluator.results_grounding` | deterministic | Results assembly (Phase 6G): finding/condition/proposition/numerical support, gap alignment, novelty, contradiction detection |
-| `evaluator.manuscript_grounding` | deterministic | Manuscript grounding (Phase 6G): claim/citation grounding, conditions, critique recall, revision success |
-| `evaluator.pipeline_integrity` | deterministic | End-to-end pipeline integrity (Phase 6H): stage completion, provenance, grounding, conditions, citations, bibliography fidelity |
-| `evaluator.synthesis` | deterministic | Literature synthesis (Phase 7A): statement grounding, consensus/contradiction/mixed accuracy, multi-paper support, support counts, unsupported-statement rate, hallucinated references |
-| `evaluator.model_specification` | deterministic | Analytical model specification (Phase 7A): symbol table, payoff completeness, decision ownership, timing, information structure, assumption grounding, structural validity, critic issue recall |
-| `evaluator.document_acquisition` | deterministic | Document acquisition (Phase 7A): acquisition/extraction success, failure classification, fallback usage, duplicate-blob reuse, corpus availability |
-| `evaluator.revalidation` | deterministic | Incremental revalidation (Phase 7A): stale-reuse rate, required recomputation, unchanged reuse, provenance-version accuracy |
-| `evaluator.identity_resolution` | deterministic | Ingestion + identity resolution (Phase 7A.1): canonical mapping, duplicate collapse, false-merge/false-split detection, DOI normalization, supersession, partial ingestion |
-| `evaluator.gap_selection` | deterministic | Gap selection (Phase 7A.1): selection validity, rationale grounding, alternatives, deterministic fallback, autonomy decision, operator override, rerun reuse |
-| `evaluator.novelty_revalidation` | deterministic | Novelty revalidation (Phase 7A.1): revalidation trigger, stale-reuse rate, threat detection, irrelevant-update, supersession, provenance version |
-| `evaluator.publication_packaging` | deterministic | Publication packaging (Phase 7A.1): package validation, exports, bibliography integrity, placeholder removal, anonymization, blob persistence, deterministic render |
+| `evaluator.retrieval` | deterministic | Literature retrieval (retrieval and citation evaluation): precision@k, recall@k, F1@k, MRR, duplicate_rate, missed/irrelevant papers |
+| `evaluator.screening` | deterministic | Screening (screening and evidence evaluation): accuracy, include precision/recall/F1, false exclusion/inclusion, review triggers, technical failures |
+| `evaluator.evidence` | deterministic | Evidence extraction (screening and evidence evaluation): precision/recall, category + locator accuracy, unsupported/duplicate rates, required-evidence recall |
+| `evaluator.gap_analysis` | deterministic | Gap analysis (gap and mechanism evaluation): type/precision/recall, grounding, corpus-bounded claims, support counts, ranking, hallucination |
+| `evaluator.mechanism` | deterministic | Mechanism development (gap and mechanism evaluation): validity, knowledge-basis discipline, grounding, critic recall, revision success |
+| `evaluator.equilibrium` | deterministic | Equilibrium correctness (equilibrium and numerical evaluation): symbolic expression/FOC/best-response equivalence, verification, order, conditions |
+| `evaluator.numerical` | deterministic | Numerical analysis (equilibrium and numerical evaluation): value/feasibility/condition/sweep/robustness/welfare/reproducibility |
+| `evaluator.comparative_statics` | deterministic | Comparative statics (analytical-results evaluation): derivative/sign/condition/coverage/ambiguous-sign accuracy, overclaim detection |
+| `evaluator.proposition` | deterministic | Proposition correctness (analytical-results evaluation): verification, monotonicity/equality recomputation, condition/support integrity, rejection justification |
+| `evaluator.results_grounding` | deterministic | Results assembly (results and manuscript evaluation): finding/condition/proposition/numerical support, gap alignment, novelty, contradiction detection |
+| `evaluator.manuscript_grounding` | deterministic | Manuscript grounding (results and manuscript evaluation): claim/citation grounding, conditions, critique recall, revision success |
+| `evaluator.pipeline_integrity` | deterministic | End-to-end pipeline integrity (end-to-end evaluation): stage completion, provenance, grounding, conditions, citations, bibliography fidelity |
+| `evaluator.synthesis` | deterministic | Literature synthesis (evaluation coverage expansion): statement grounding, consensus/contradiction/mixed accuracy, multi-paper support, support counts, unsupported-statement rate, hallucinated references |
+| `evaluator.model_specification` | deterministic | Analytical model specification (evaluation coverage expansion): symbol table, payoff completeness, decision ownership, timing, information structure, assumption grounding, structural validity, critic issue recall |
+| `evaluator.document_acquisition` | deterministic | Document acquisition (evaluation coverage expansion): acquisition/extraction success, failure classification, fallback usage, duplicate-blob reuse, corpus availability |
+| `evaluator.revalidation` | deterministic | Incremental revalidation (evaluation coverage expansion): stale-reuse rate, required recomputation, unchanged reuse, provenance-version accuracy |
+| `evaluator.identity_resolution` | deterministic | Ingestion + identity resolution (evaluation coverage expansion): canonical mapping, duplicate collapse, false-merge/false-split detection, DOI normalization, supersession, partial ingestion |
+| `evaluator.gap_selection` | deterministic | Gap selection (evaluation coverage expansion): selection validity, rationale grounding, alternatives, deterministic fallback, autonomy decision, operator override, rerun reuse |
+| `evaluator.novelty_revalidation` | deterministic | Novelty revalidation (evaluation coverage expansion): revalidation trigger, stale-reuse rate, threat detection, irrelevant-update, supersession, provenance version |
+| `evaluator.publication_packaging` | deterministic | Publication packaging (evaluation coverage expansion): package validation, exports, bibliography integrity, placeholder removal, anonymization, blob persistence, deterministic render |
 | `evaluator.claim_grounding` | model-assisted | Whether candidate assessments are grounded in cited evidence (deterministic guard: no evidence → ungrounded without a model call) |
 | `evaluator.citation_correctness` | deterministic | Placeholder check (6A) or full `manuscript_citation` mode (6B): resolution, map accuracy, dedup, leftovers, invented fields |
 | `evaluator.llm_judge` | model-assisted | Generic rubric-driven judge with structured output |
@@ -187,7 +187,7 @@ benchmark produces a new run with identical outcomes; explicit-id fixture
 artifacts re-persist idempotently and a content change raises instead of
 silently altering history.
 
-## Literature retrieval benchmark (`literature-retrieval-v1`, Phase 6B)
+## Literature retrieval benchmark (`literature-retrieval-v1`)
 
 Drives the REAL `literature.search_orchestrator` pipeline:
 
@@ -225,9 +225,9 @@ Known expected aggregate metrics (clean run): precision@5 = 1.4/6,
 precision@10 = 0.7/6, recall@5 = recall@10 = 5/6, mrr = 5/6,
 duplicate_rate = 0.5/6, missed = 0, irrelevant = 3, pass rate 1.0.
 
-## Citation correctness benchmark (`citation-correctness-v1`, Phase 6B)
+## Citation correctness benchmark (`citation-correctness-v1`)
 
-Drives the REAL Phase 4C formatter:
+Drives the REAL publication packaging formatter:
 
 ```
 ManuscriptSection → CitationReference → format() → rendered inline citations
@@ -266,9 +266,9 @@ Known expected aggregate metrics (clean run): resolution = 11/12, map =
 invented = 0, unsupported = 0, pass rate 7/10 (missing-citation-id,
 leftover-placeholder, and wrong-mapping cases fail by design).
 
-## Screening benchmark (`literature-screening-v1`, Phase 6C)
+## Screening benchmark (`literature-screening-v1`)
 
-Drives the REAL Phase 2D pipeline:
+Drives the REAL screening pipeline:
 
 ```
 ScreeningProtocol (real builder + real approval gate)
@@ -305,9 +305,9 @@ Known expected aggregate metrics: accuracy 8/8, include precision/recall/f1
 4/4, exclude 2/2, uncertain 2/2, false rates 0, review accuracy 8/8,
 failures 1, pass rate 9/9.
 
-## Evidence extraction benchmark (`evidence-extraction-v1`, Phase 6C)
+## Evidence extraction benchmark (`evidence-extraction-v1`)
 
-Drives the REAL Phase 2F pipeline:
+Drives the REAL evidence extraction pipeline:
 
 ```
 FullTextCorpus (blob-backed fixture pages)
@@ -348,9 +348,9 @@ Known expected aggregate metrics: precision 7/8, recall 7/8, f1 5/7,
 category 7/7, locator 7/7, unsupported rate 1/8, duplicates 0/8, missed 1,
 chunk failures 2, pass rate 7/9.
 
-## Gap-analysis benchmark (`research-gap-analysis-v1`, Phase 6D)
+## Gap-analysis benchmark (`research-gap-analysis-v1`)
 
-Drives the REAL Phase 2H analyzer:
+Drives the REAL gap analysis analyzer:
 
 ```
 LiteratureSynthesis + EvidenceCorpus
@@ -387,9 +387,9 @@ Known expected: precision 8/9, recall 8/8, f1 9/10, type 8/8, grounding 8/9,
 corpus-bounded 9/9, support 8/8, ranking 2/2, unsupported 1/9, hallucinated 1,
 pass rate 9/10.
 
-## Mechanism-development benchmark (`mechanism-development-v1`, Phase 6D)
+## Mechanism-development benchmark (`mechanism-development-v1`)
 
-Drives the REAL Phase 3A pipeline:
+Drives the REAL mechanism development pipeline:
 
 ```
 GapAnalysis → GapSelectionService (model + real approval gate)
@@ -432,9 +432,9 @@ deterministically. `evaluator.llm_judge` remains available only for advisory
 dimensions (theoretical coherence, mechanism clarity, IS relevance, novelty
 within the reviewed corpus) and can never override deterministic failures.
 
-## Equilibrium benchmark (`equilibrium-correctness-v1`, Phase 6E)
+## Equilibrium benchmark (`equilibrium-correctness-v1`)
 
-Drives the REAL Phase 3C pipeline:
+Drives the REAL equilibrium derivation pipeline:
 
 ```
 FormalAnalyticalModel → EquilibriumDeriverService (SymPy FOCs/BRs,
@@ -468,9 +468,9 @@ Known expected: expression 8/8, FOC 12/12, best response 8/8, verification
 10/10, order 11/11, conditions 3/3, unsolvable 10/10, rejection 5/12, pass
 rate 10/10.
 
-## Numerical benchmark (`numerical-analysis-v1`, Phase 6E)
+## Numerical benchmark (`numerical-analysis-v1`)
 
-Drives the REAL Phase 3E pipeline:
+Drives the REAL numerical analysis pipeline:
 
 ```
 verified equilibrium → NumericalAnalysisService (deterministic sweeps,
@@ -498,9 +498,9 @@ use deterministic floating-point tolerances (1e-6), never rendered strings.
 Known expected: values 4/4, feasibility 2/2, condition 9/9, sweep 9/9,
 robustness 2/2, welfare 9/9, reproducibility 9/9, pass rate 9/9.
 
-## Comparative statics benchmark (`comparative-statics-v1`, Phase 6F)
+## Comparative statics benchmark (`comparative-statics-v1`)
 
-Drives the REAL Phase 3D service:
+Drives the REAL proposition development service:
 
 ```
 verified equilibrium → ComparativeStaticsService (SymPy derivatives,
@@ -535,9 +535,9 @@ expected outcome/parameter pair missing.
 Known expected: derivatives 11/12 (1 by-design wrong reference), signs
 12/12, conditions 12/12, coverage 12/12, ambiguous 2/2, pass rate 7/8.
 
-## Proposition benchmark (`proposition-correctness-v1`, Phase 6F)
+## Proposition benchmark (`proposition-correctness-v1`)
 
-Drives the REAL Phase 3D proposition pipeline:
+Drives the REAL proposition development proposition pipeline:
 
 ```
 verified equilibrium → ComparativeStaticsService → PropositionGeneratorService
@@ -571,12 +571,12 @@ invalid equality accepted; valid equality rejected.
 Known expected: verification 10/10, monotonicity 7/7, equality 2/2,
 conditions 1/1, support 10/10, rejection 5/10 (pooled), pass rate 10/10.
 
-## Results benchmark (`results-assembly-v1`, Phase 6G)
+## Results benchmark (`results-assembly-v1`)
 
-Drives the REAL Phase 4A pipeline:
+Drives the REAL results assembly pipeline:
 
 ```
-verified Phase 3 outputs → ResultsAssemblerService (deterministic validation:
+verified analytical-model outputs → ResultsAssemblerService (deterministic validation:
 failed-proposition rejection, unsupported-id rejection, condition
 preservation, global-novelty normalization) → ResearchResultsPackage →
 ResultsCriticService (deterministic contradiction + novelty + gap checks)
@@ -613,9 +613,9 @@ Known expected: grounding 10/10, conditions 10/10, proposition support 9/9,
 numerical support 1/1, alignment 10/10, implications 9/10, novelty 10/10,
 contradiction 1/10 (pooled), unsupported 1/20, pass rate 9/10.
 
-## Manuscript benchmark (`manuscript-grounding-v1`, Phase 6G)
+## Manuscript benchmark (`manuscript-grounding-v1`)
 
-Drives the REAL Phase 4B pipeline:
+Drives the REAL manuscript drafting pipeline:
 
 ```
 ResearchResultsPackage + literature artifacts → ManuscriptDrafterService
@@ -633,9 +633,9 @@ normalized; gap/contribution inconsistency flagged by the critic; omitted
 limitations flagged by the critic; revision re-drafts the flagged section
 (unused citation repaired) while reusing unaffected sections by id.
 
-The citation boundary stays clear of Phase 6B: 6G verifies
+The citation boundary stays clear of retrieval and citation evaluation: 6G verifies
 `ManuscriptClaim → CitationReference → EvidenceItem/research artifact`
-referential integrity only; Phase 6B remains the author-year formatting
+referential integrity only; retrieval and citation evaluation remains the author-year formatting
 benchmark.
 
 ### Manuscript metrics
@@ -655,7 +655,7 @@ Known expected: grounding 15/15, citations 6/6, mathematical 5/5,
 conditions 5/5, unsupported 0/15, citation references 6/6, novelty 15/15,
 consistency 15/15, critique recall 3/3, revision 1/1, pass rate 11/11.
 
-## End-to-end benchmark (`research-pipeline-e2e-v1`, Phase 6H)
+## End-to-end benchmark (`research-pipeline-e2e-v1`)
 
 Drives the real production chain across every representative stage:
 
@@ -680,9 +680,9 @@ numerical disagreement with known expectations.
 - `citation_integrity_rate` 1/1, `bibliography_fidelity_rate` 1/1
 - `deterministic_failure_count` 0, `end_to_end_pass` 1.0
 
-## Literature synthesis benchmark (`literature-synthesis-v1`, Phase 7A)
+## Literature synthesis benchmark (`literature-synthesis-v1`)
 
-Drives the real Phase 2G synthesizer over a fixture `EvidenceCorpus` (papers +
+Drives the real literature synthesis synthesizer over a fixture `EvidenceCorpus` (papers +
 `EvidenceItem` + `PaperResearchProfile`):
 
 ```
@@ -706,9 +706,9 @@ computes support metrics (`support_type`, `papers_supporting`) itself.
 - `unsupported_statement_rate` — statements referencing missing evidence ids
 - `hallucinated_reference_count` — distinct missing ids referenced
 
-## Analytical model specification benchmark (`analytical-model-specification-v1`, Phase 7A)
+## Analytical model specification benchmark (`analytical-model-specification-v1`)
 
-Drives the real Phase 3B pipeline:
+Drives the real model specification pipeline:
 
 ```
 SelectedMechanism → ModelBuilderService → FormalAnalyticalModel →
@@ -728,9 +728,9 @@ critic-detected mechanism/model mismatch.
 - `structural_validity_accuracy` — produced created/rejected matches the reference
 - `critic_issue_recall` — expected critique issue categories detected
 
-## Document acquisition benchmark (`document-acquisition-v1`, Phase 7A)
+## Document acquisition benchmark (`document-acquisition-v1`)
 
-Drives the real Phase 2E pipeline with a mocked `httpx` transport (no
+Drives the real document acquisition pipeline with a mocked `httpx` transport (no
 network): metadata locator → HTTP fetcher → blob store → pypdf extractor →
 acquisition orchestrator → `FullTextCorpus`. 8 cases: valid OA PDF; fallback
 location; no location; HTML masquerading as PDF; oversized document;
@@ -745,7 +745,7 @@ text.
 - `duplicate_blob_reuse_accuracy` — same location+bytes reuse one acquisition
 - `corpus_availability_accuracy` — available/unavailable/restricted/failed
 
-## Incremental revalidation benchmark (`incremental-revalidation-v1`, Phase 7A)
+## Incremental revalidation benchmark (`incremental-revalidation-v1`)
 
 Drives REAL production services twice per stage (baseline + changed upstream)
 and records whether the downstream execution was recomputed or deterministically
@@ -763,9 +763,9 @@ a deterministic failure.
 - `unchanged_reuse_accuracy` — identical stages that reused deterministically
 - `provenance_version_accuracy` — new downstream derived (transitively) from the changed upstream
 
-## Ingestion + identity benchmark (`literature-ingestion-identity-v1`, Phase 7A.1)
+## Ingestion + identity benchmark (`literature-ingestion-identity-v1`)
 
-Drives the real Phase 2B/2C pipeline over fixture provider sources:
+Drives the real literature ingestion/2C pipeline over fixture provider sources:
 
 ```
 ProviderRecordSnapshot → PaperRecord → LiteratureSearchRecord → PaperIdentityResolver
@@ -783,9 +783,9 @@ appears. False semantic merges deterministically fail.
 - `false_merge_rate`, `false_split_rate` — false semantic merges are failures
 - `identifier_normalization_accuracy`, `supersession_accuracy`, `partial_ingestion_accuracy`
 
-## Gap-selection benchmark (`gap-selection-v1`, Phase 7A.1)
+## Gap-selection benchmark (`gap-selection-v1`)
 
-Drives the real Phase 3A `GapSelectionService` over a fixture `GapAnalysis` + ranked
+Drives the real mechanism development `GapSelectionService` over a fixture `GapAnalysis` + ranked
 `ResearchGap`s (model selection or operator override + autonomy checkpoint). 8 cases:
 select rank #1 when clearly strongest; valid non-rank-1 selection; operator override;
 invalid model-selected gap → deterministic fallback; autonomy approval; autonomy
@@ -798,9 +798,9 @@ rejection; unsupported gap id rejected; deterministic rerun reuse. No subjective
 - `alternative_consideration_accuracy`, `fallback_accuracy`
 - `autonomy_decision_accuracy`, `operator_override_accuracy`, `reuse_accuracy`
 
-## Novelty revalidation benchmark (`novelty-revalidation-v1`, Phase 7A.1)
+## Novelty revalidation benchmark (`novelty-revalidation-v1`)
 
-Runs the real Phase 5A/5B `NoveltyValidationService.create_report` twice — once
+Runs the real novelty validation and revalidation `NoveltyValidationService.create_report` twice — once
 against baseline fixture sources, once against changed sources — and compares the
 two reports. 7 cases: unchanged literature → prior novelty reusable; new directly
 relevant paper → revalidation required; new contradictory evidence; new paper
@@ -814,15 +814,15 @@ preserves history. Any incompatible stale novelty reuse is a deterministic failu
 - `novelty_threat_detection_accuracy`, `irrelevant_update_accuracy`
 - `supersession_accuracy`, `provenance_version_accuracy`
 
-## Publication / packaging benchmark (`publication-packaging-v1`, Phase 7A.1)
+## Publication / packaging benchmark (`publication-packaging-v1`)
 
-Drives the real Phase 4C pipeline: `ManuscriptDraft → formatter → bibliography →
+Drives the real publication packaging pipeline: `ManuscriptDraft → formatter → bibliography →
 validate → exporters (Markdown/LaTeX/DOCX/PDF → BlobStore) → SubmissionPackage`.
 8 cases: correct citation resolution; unresolved citation blocks readiness;
 bibliography dedup; missing metadata not invented; anonymous-review mode; leftover
 internal placeholder; Markdown/LaTeX/DOCX/PDF artifact generation; export BlobStore
 persistence; deterministic rerender; invalid package not marked publication-ready.
-Reuses Phase 6B citation expectations conceptually without duplicating that
+Reuses retrieval and citation evaluation citation expectations conceptually without duplicating that
 evaluator.
 
 ### Packaging metrics (`evaluator.publication_packaging`)
@@ -854,7 +854,7 @@ deterministic gaps from 7A are closed; residual gaps are non-blocking:
 live provider/publisher behavior, evidence-enrichment standalone, and
 advisory LLM-quality judging, so `ready` is not forced).
 
-## Known limitations (Phase 6A–7A.1)
+## Known limitations
 
 - Benchmarks: novelty threat, retrieval, citation, screening, evidence
   extraction, gap analysis, mechanism development, equilibrium correctness,
@@ -885,9 +885,9 @@ advisory LLM-quality judging, so `ready` is not forced).
 - No live scholarly corpus, model comparison, embedding-based relevance,
   human annotation UI, or CI quality thresholds.
 
-## Model tournaments + role leaderboards (Phase 7B)
+## Model tournaments + role leaderboards
 
-Phase 7B adds a reproducible model-comparison layer on top of the frozen
+model tournaments adds a reproducible model-comparison layer on top of the frozen
 harness. It answers "which model is best for each logical role" without
 changing a single benchmark definition or evaluator and without automatic
 routing.
@@ -989,9 +989,9 @@ uv run research-agent evaluation leaderboard inspect <leaderboard-id>
 Candidates and pricing are defined in the plan YAML — no code changes. See
 `configs/tournament/example-reasoning.yaml`.
 
-## Evidence enrichment benchmark (`evidence-enrichment-v1`, Phase 7C)
+## Evidence enrichment benchmark (`evidence-enrichment-v1`)
 
-Closes the Phase 5C-5D coverage gap. Drives the real `NoveltyValidationService`
+Closes the evidence enrichment and pre-acquisition coverage gap. Drives the real `NoveltyValidationService`
 with `enrichment_enabled=True` and `preacquisition_enabled=True` over fixture
 sources whose `get()` serves acquired abstracts. 7 cases:
 
@@ -1009,7 +1009,7 @@ sources whose `get()` serves acquired abstracts. 7 cases:
 - `source_preservation_accuracy`, `unsupported_rejection_accuracy`
 - `stale_reuse_rate`, `preacquisition_accuracy`, `provenance_version_accuracy`
 
-## Policy-constrained model routing (Phase 7C, shadow mode)
+## Policy-constrained model routing
 
 The router answers "given a logical role, quality requirement, budget, latency
 target, and leaderboard evidence, which model should be selected?" It is
@@ -1077,9 +1077,9 @@ fallback selection, role isolation. Metrics (`evaluator.model_routing`):
 `deterministic_tiebreak_accuracy`, `unsafe_selection_rate` (any selection of a
 deterministically ineligible model is a critical failure).
 
-## Live-quality validation + production-routing readiness (Phase 7D.0)
+## Live-quality validation + production-routing readiness
 
-Scripted-fixture benchmarks are not valid live-quality proxies. Phase 7D.0 adds
+Scripted-fixture benchmarks are not valid live-quality proxies. live-quality validation adds
 trustworthy live-quality evidence for routing readiness before any production
 activation (which remains off).
 
@@ -1149,9 +1149,9 @@ uv run research-agent eval run production-routing-readiness-v1
 ```
 
 Production routing is never enabled automatically: each role reports
-ready/not_ready; Phase 7D (controlled activation) is a separate future phase.
+ready/not_ready; controlled routing activation (controlled activation) is a separate future capability.
 
-## Live-model qualification campaigns (Phase 7D.1)
+## Live-model qualification campaigns
 
 Identifies production-qualified primary/fallback per role from live-quality
 evidence. Production switching stays disabled.
@@ -1162,7 +1162,7 @@ evidence. Production switching stays disabled.
 config candidate set (live_quality.candidates[role])   # no slugs in service logic
   -> for each candidate: live-quality benchmark (>=3 reps) -> LiveQualityModelResult
   -> RoleLeaderboard (live_quality_evidence)
-  -> qualify_candidate (reuses Phase 7D.0 QualificationCriteria exactly, never loosened)
+  -> qualify_candidate (reuses live-quality validation QualificationCriteria exactly, never loosened)
   -> primary/fallback among qualified models (quality/reliability first, then
      latency/cost per policy; an unqualified cheap model can never win)
   -> RoleQualificationSummary + QualificationCampaign (persisted)
@@ -1204,7 +1204,7 @@ uv run research-agent routing qualification summary
 uv run research-agent eval run model-qualification-policy-v1
 ```
 
-## Qualification expansion + benchmark calibration (Phase 7D.2)
+## Qualification expansion + benchmark calibration
 
 Expands candidate pools per role and verifies that failures reflect genuine
 model/provider capability rather than benchmark defects. Production switching
@@ -1252,14 +1252,14 @@ repetition below the threshold, critical grounding, or provider-error above the
 cap -> unstable). Unstable candidates are never primary/fallback eligible.
 `routing qualification matrix` persists the `ProductionQualificationMatrix`
 (role, candidate, qualified, stability, primary_eligible, fallback_eligible,
-repetitions, rejection reasons, live-quality run ids) — the Phase 7D activation
+repetitions, rejection reasons, live-quality run ids) — the controlled routing activation activation
 input. Qualified candidates are compared only among themselves (quality/
 reliability first, then latency/cost); unqualified candidates are never ranked
 above qualified ones; raw dimensions are preserved.
 
 ### Qualification benchmark (`model-qualification-policy-v1`, 16 cases)
 
-Adds to the Phase 7D.1 cases: benchmark defect excluded from model failure,
+Adds to the live-model qualification cases: benchmark defect excluded from model failure,
 evaluator defect excluded from model failure, borderline candidate requiring
 extra repetitions, unstable candidate rejected (not eligible), qualified
 primary + qualified fallback, and role-specific partial qualification via the
@@ -1277,7 +1277,7 @@ uv run research-agent routing qualification inspect <campaign-id>
 uv run research-agent eval run model-qualification-policy-v1
 ```
 
-## Strong-model expansion + task-specific qualification (Phase 7D.3)
+## Strong-model expansion + task-specific qualification
 
 Expands the candidate pools (reasoning 8, critic 6, fast 6 — including paid
 models where configured) and adds task-specific qualification that reuses the
@@ -1327,7 +1327,7 @@ uv run research-agent routing capability-profile <model-id>
 uv run research-agent eval run task-specific-model-qualification-v1
 ```
 
-## Focused model qualification (Phase 7D.3A)
+## Focused model qualification
 
 Resolves the remaining capability blockers before task-aware routing.
 
@@ -1372,7 +1372,7 @@ no_qualified_model.**
 | synthesis | **nemotron** |
 | gap_analysis / mechanism_generation / model_specification / proposition_generation | none |
 
-## Remaining-task qualification + provider preflight (Phase 7D.3B)
+## Remaining-task qualification + provider preflight
 
 Only candidates that PASSED the lightweight capability preflight entered the
 qualification campaigns; provider-unavailable models were never interpreted as
@@ -1428,7 +1428,7 @@ successes. Genuine defects found and repaired:
 Critic role remains no_qualified_model because results_critique and
 manuscript_critique are uncovered. No role has a qualified primary+fallback.
 
-## Targeted qualification of remaining tasks (Phase 7D.3C)
+## Targeted qualification of remaining tasks
 
 Expanded the config-driven per-task candidate pools with stronger/paid models
 (qwen3-32b, meta-llama/llama-3.3-70b-instruct, gpt-4o-mini, gemini-2.5-flash)
@@ -1477,7 +1477,7 @@ for EVERY task it routes, so it is not yet sufficient; partial shadow routing
 over the six covered tasks is technically feasible but not recommended until
 the critical uncovered tasks have coverage.
 
-## Gap-workflow repair + final critical-task qualification (Phase 7D.3D)
+## Gap-workflow repair + final critical-task qualification
 
 ### Gap workflow defect root cause
 The live gap workflow reused stable case-scoped fixture ids with idempotent
@@ -1528,7 +1528,7 @@ Six critical tasks remain uncovered. Dominant failure reason
 below_quality_threshold (model capability); qwen3.8-flash critic quality is
 high (det 0.933) but blocked by provider-error rate (0.32 > 0.1).
 
-## Candidate refresh + final qualification sweep (Phase 7D.3E)
+## Candidate refresh + final qualification sweep
 
 ### Approved candidate pool
 The active qualification config now contains only the operator-approved
@@ -1608,7 +1608,7 @@ a qualified task row always meets every role threshold (deterministic rate,
 structured output, provider-error, grounding). Provider-unavailable candidates
 are counted separately and never appear as qualified or as a primary/fallback.
 
-## Task-aware shadow routing (Phase 7D.4)
+## Task-aware shadow routing
 
 ### Architecture
 Broad logical roles (fast / reasoning / critic) are preserved, with task
@@ -1665,12 +1665,12 @@ kept-when-current. Critical invariant: **unsafe_task_route_rate = 0**.
 
 ## Recommended next increment
 
-Post-Phase-7D.4: task-aware shadow routing is implemented and verified
+Current task-aware shadow-routing state: task-aware shadow routing is implemented and verified
 (unsafe_task_route_rate = 0); the architecture now supports task specialization
 under the broad roles. Only two tasks have a qualified primary in the live
 matrix (evidence_extraction, gap_analysis — gemini-3.7-flash), both without a
-live-qualified fallback; seven tasks remain static. Phase 7D.4 remains shadow
-only. To justify Phase 7E (controlled task-aware activation) you would need a
+live-qualified fallback; seven tasks remain static. controlled routing activation.4 remains shadow
+only. To justify controlled routing activation (controlled task-aware activation) you would need a
 qualified primary for every task intended for routing plus qualified fallbacks
 for critical tasks — continue qualification with provider-stable endpoints for
 the strongest candidates. Production routing remains DISABLED.

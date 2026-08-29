@@ -33,7 +33,7 @@ Start with the [documentation index](docs/index.md). Common entry points:
 - [Architecture](docs/concepts/architecture.md) — kernel, plugins, storage, and events.
 - [Configuration](docs/getting-started/configuration.md) — YAML configuration, secrets, and validation.
 - [CLI reference](docs/getting-started/cli.md) — complete command reference.
-- [Research workflow](docs/index.md#research-workflow) — phase-by-phase guides.
+- [Research workflow](docs/index.md#research-workflow) — capability-by-capability guides.
 - [Evaluation and model operations](docs/index.md#evaluation-and-model-operations) — benchmarks, routing, and qualification.
 
 ## Workflow at a glance
@@ -44,7 +44,7 @@ Literature → screening → documents → evidence → synthesis → gaps
     → results → manuscript → publication → novelty validation
 ```
 
-Each phase writes immutable artifacts with provenance. The SQLite artifact store is authoritative for research objects; JSONL sessions capture the runtime trajectory.
+Each capability writes immutable artifacts with provenance. The SQLite artifact store is authoritative for research objects; JSONL sessions capture the runtime trajectory.
 
 ## Repository layout
 

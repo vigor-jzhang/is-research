@@ -1,6 +1,6 @@
-# Findings, Contributions & Results Package — Phase 4A
+# Findings, Contributions & Results Package
 
-Phase 4A transforms the verified Phase 3 outputs into an immutable
+results assembly transforms the verified analytical-model outputs into an immutable
 `ResearchResultsPackage`:
 
 ```text
@@ -14,7 +14,7 @@ ResearchGap
 → ContributionClaim (corpus-bounded)
 → ResearchImplication (epistemic-status separated)
 → ResearchResultsPackage → evidence-grounded manuscript drafting
-  (Phase 4B, see docs/workflows/outputs/manuscript.md)
+  (manuscript drafting, see docs/workflows/outputs/manuscript.md)
 ```
 
 ## Schemas (`src/research_harness/research/schemas/results.py`)
@@ -24,7 +24,7 @@ ResearchGap
   | boundary_result), `supporting_proposition_ids`,
   `supporting_comparative_static_ids`, `supporting_numerical_result_ids`,
   `conditions` (preserved from all referenced supports), `confidence`
-  (high/medium/low), `knowledge_basis` (reused Phase 3A enum).
+  (high/medium/low), `knowledge_basis` (reused mechanism development enum).
 - `ContributionClaim` — `gap_id`, `finding_ids`, `claim`,
   `contribution_type` (theoretical | mechanism | analytical |
   empirical_implication | managerial | IS_literature | methodological),
@@ -38,7 +38,7 @@ ResearchGap
   selected_mechanism_id, model_id, equilibrium_analysis_id,
   equilibrium_candidate_id, numerical_experiment_id, finding_ids,
   contribution_claim_ids, implication_ids, limitations. Immutable input to
-  Phase 4B.
+  manuscript drafting.
 - `ResultsAssemblyExecution` — operational record (counts, role, timing).
 - `ResultsCritique` + `ResultsCritiqueIssue` (7 categories) + verdict
   (approve | revise | reject) — persisted separately; the package stays
@@ -153,7 +153,7 @@ critique, with provenance checks after reopen.
 
 Live (`tests/live/test_results_assembly_live.py`, opt-in
 `live_results_assembly`, needs OPENROUTER_API_KEY): assembles a real
-package on the completed live Phase 3 chain, verifying structural grounding
+package on the completed analytical-model chain, verifying structural grounding
 only (referenced ids exist/verified, conditions preserved, contribution-gap
 link, provenance). Recorded live run: 6 findings, 3 contributions, 6 implications;
 implications correctly separated into mathematically established /
