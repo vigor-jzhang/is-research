@@ -78,6 +78,11 @@ quote-style = "double"
 [tool.pyright]
 include = ["src"]
 pythonVersion = "3.12"
+# Without these, pyright falls back to a bare interpreter and reports hundreds
+# of spurious "Import could not be resolved" errors for every installed
+# dependency, burying the handful of real ones.
+venvPath = "."
+venv = ".venv"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false

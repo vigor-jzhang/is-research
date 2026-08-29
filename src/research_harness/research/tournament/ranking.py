@@ -50,11 +50,18 @@ RANKING_RULES: dict[str, Any] = {
 
 
 def _key(entry: LeaderboardEntry, field: str, desc: bool) -> tuple[float, int]:
+    """Ascending sort key for one dimension.
+
+    ``desc`` marks "higher is better" dimensions. Because ``sorted`` is
+    ascending, such values must be negated so that a larger evidence value
+    sorts first. ``None`` ("unknown") must sort last in *both* directions, so
+    it always maps to ``+inf``.
+    """
     value = getattr(entry, field, None)
     if value is None:
         # None (unknown) always sorts last regardless of direction
-        return (float("-inf") if desc else float("inf"), 1)
-    return (float(value), 0)
+        return (float("inf"), 1)
+    return (-float(value) if desc else float(value), 0)
 
 
 def build_entries(results: list[TournamentModelResult], threshold: float) -> list[LeaderboardEntry]:

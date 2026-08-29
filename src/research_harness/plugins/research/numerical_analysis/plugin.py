@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -544,12 +545,14 @@ class NumericalAnalysisService:
         """Evaluate a condition like '2*b != 0' or 'soc < 0' at a point."""
         import sympy
 
+        from research_harness.research.symbolic import safe_sympify
+
         for op in ("!=", "<=", ">=", "==", "<", ">"):
             if op in cond:
                 lhs, _, rhs = cond.partition(op)
                 try:
-                    lv = float(sympy.N(sympy.sympify(lhs).subs(subs), 12))  # type: ignore[arg-type]
-                    rv = float(sympy.N(sympy.sympify(rhs).subs(subs), 12))  # type: ignore[arg-type]
+                    lv = float(sympy.N(safe_sympify(lhs, auto_symbols=True).subs(subs), 12))
+                    rv = float(sympy.N(safe_sympify(rhs, auto_symbols=True).subs(subs), 12))
                 except Exception:  # noqa: BLE001
                     return None
                 if op == "!=":
@@ -565,7 +568,7 @@ class NumericalAnalysisService:
                 if op == ">":
                     return lv > rv
         try:
-            v = float(sympy.N(sympy.sympify(cond).subs(subs), 12))  # type: ignore[arg-type]
+            v = float(sympy.N(safe_sympify(cond, auto_symbols=True).subs(subs), 12))
             return v != 0.0
         except Exception:  # noqa: BLE001
             return None
@@ -579,7 +582,7 @@ class NumericalAnalysisService:
         exec_id: str,
         model_id: str,
         candidate_id: str,
-        numerical_results: list[NumericalResult | str],
+        numerical_results: Sequence[NumericalResult | str],
         params: dict[str, ModelParameter],
         candidate_exprs: dict[str, Any],
     ) -> list[str]:
@@ -648,7 +651,7 @@ class NumericalAnalysisService:
         candidate_id: str,
         prop_id: str,
         prop: Proposition,
-        numerical_results: list[NumericalResult | str],
+        numerical_results: Sequence[NumericalResult | str],
         params: dict[str, ModelParameter],
         candidate_exprs: dict[str, Any],
     ) -> RobustnessCheck:
@@ -751,7 +754,7 @@ class NumericalAnalysisService:
         model_id: str,
         candidate_id: str,
         model: FormalAnalyticalModel,
-        numerical_results: list[NumericalResult | str],
+        numerical_results: Sequence[NumericalResult | str],
         params: dict[str, ModelParameter],
         payoff_exprs: dict[str, Any],
     ) -> list[str]:

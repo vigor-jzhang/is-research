@@ -1083,3 +1083,63 @@ async def test_offline_report_is_deterministic_no_router(store: SQLiteArtifactSt
     assert report.overall_status == NoveltyReportStatus.unverified
     assert report.unverified_claims
     assert svc._router.calls == 0
+
+
+# --- regression: failed validation must never read as "clear" ---------------
+#
+# A claim whose plan/search/assess step raised never gets an entry in
+# ``status_by_claim``. Aggregation used to bucket only *known* statuses, so if
+# every claim failed all buckets were empty and the report came out ``clear``
+# -- a provider outage silently certified the manuscript's novelty.
+
+
+def test_aggregate_treats_unassessed_claim_as_unverified():
+    claims = ["c1", "c2", "c3"]
+    claims_by_id = {c: type("C", (), {"risk": ClaimRiskLevel.high})() for c in claims}
+
+    _crit, _weak, unverified, _safe, overall = NoveltyValidationService._aggregate_report_status(
+        None, claims, {}, claims_by_id
+    )
+    assert overall == NoveltyReportStatus.unverified
+    assert sorted(unverified) == claims
+
+
+def test_aggregate_partial_failure_is_not_clear():
+    claims = ["c1", "c2"]
+    claims_by_id = {c: type("C", (), {"risk": ClaimRiskLevel.high})() for c in claims}
+    statuses = {"c1": NoveltyClaimStatus.not_threatened_within_search_scope}
+
+    _c, _w, unverified, _s, overall = NoveltyValidationService._aggregate_report_status(
+        None, claims, statuses, claims_by_id
+    )
+    assert overall == NoveltyReportStatus.unverified
+    assert unverified == ["c2"]
+
+
+def test_aggregate_all_safe_still_clear():
+    """No false alarm: a fully assessed, non-threatened report is still clear."""
+    claims = ["c1", "c2"]
+    claims_by_id = {c: type("C", (), {"risk": ClaimRiskLevel.high})() for c in claims}
+    statuses = dict.fromkeys(claims, NoveltyClaimStatus.not_threatened_within_search_scope)
+
+    _c, _w, unverified, _s, overall = NoveltyValidationService._aggregate_report_status(
+        None, claims, statuses, claims_by_id
+    )
+    assert overall == NoveltyReportStatus.clear
+    assert unverified == []
+
+
+def test_aggregate_threatened_takes_precedence_over_unassessed():
+    claims = ["c1", "c2"]
+    claims_by_id = {c: type("C", (), {"risk": ClaimRiskLevel.high})() for c in claims}
+    statuses = {"c1": NoveltyClaimStatus.threatened}
+
+    _c, _w, _u, _s, overall = NoveltyValidationService._aggregate_report_status(
+        None, claims, statuses, claims_by_id
+    )
+    assert overall == NoveltyReportStatus.revise
+
+
+def test_aggregate_no_claims_is_unverified_not_clear():
+    _c, _w, _u, _s, overall = NoveltyValidationService._aggregate_report_status(None, [], {}, {})
+    assert overall == NoveltyReportStatus.unverified

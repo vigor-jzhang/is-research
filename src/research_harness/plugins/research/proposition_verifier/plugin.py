@@ -24,7 +24,7 @@ from research_harness.research.schemas.proposition import (
     PropositionVerificationStatus,
     StaticSign,
 )
-from research_harness.research.symbolic import parse_sympy
+from research_harness.research.symbolic import parse_sympy, safe_sympify
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +60,10 @@ class PropositionVerifierService:
                     fromlist=["EquilibriumCandidate"],
                 ).EquilibriumCandidate
             )
-            import sympy
-
             for e in cand.expressions:
-                candidate_map[e.variable] = sympy.sympify(e.expression.expression)  # type: ignore[arg-type]
+                candidate_map[e.variable] = safe_sympify(
+                    e.expression.expression, auto_symbols=True
+                )
         except Exception:
             pass
         checks, conditions, conditional = await self._run_checks(prop, candidate_map)
@@ -353,8 +353,8 @@ class PropositionVerifierService:
         expr = prop.mathematical_form.expression
         if "=" in expr and "==" not in expr:
             lhs, _, rhs = expr.partition("=")
-            lhs_sym = sympy.sympify(lhs).subs(candidate_map)  # type: ignore[arg-type]
-            rhs_sym = sympy.sympify(rhs).subs(candidate_map)  # type: ignore[arg-type]
+            lhs_sym = safe_sympify(lhs, auto_symbols=True).subs(candidate_map)
+            rhs_sym = safe_sympify(rhs, auto_symbols=True).subs(candidate_map)
             diff = sympy.simplify(lhs_sym - rhs_sym)
             if diff == 0:
                 checks.append(

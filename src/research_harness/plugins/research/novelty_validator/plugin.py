@@ -2522,6 +2522,12 @@ class NoveltyValidationService:
         status_by_claim: dict[str, NoveltyClaimStatus],
         claims: dict[str, NoveltyClaim],
     ) -> tuple[list[str], list[str], list[str], list[str], NoveltyReportStatus]:
+        # No claims at all means nothing was assessed, so novelty is unproven
+        # rather than confirmed. Report that instead of falling through to
+        # ``clear`` on four empty buckets.
+        if not claim_ids:
+            return [], [], [], [], NoveltyReportStatus.unverified
+
         critical_threats = [
             cid
             for cid in claim_ids
@@ -2532,8 +2538,14 @@ class NoveltyValidationService:
         weakened = [
             cid for cid in claim_ids if status_by_claim.get(cid) == NoveltyClaimStatus.weakened
         ]
+        # A claim absent from ``status_by_claim`` never produced an assessment
+        # (its plan/search/assess step raised). Treating that as anything other
+        # than unverified would let a provider outage or budget exhaustion be
+        # reported as "no threat found".
         unverified = [
-            cid for cid in claim_ids if status_by_claim.get(cid) == NoveltyClaimStatus.unverified
+            cid
+            for cid in claim_ids
+            if status_by_claim.get(cid) in (None, NoveltyClaimStatus.unverified)
         ]
         safe = [
             cid
@@ -2804,6 +2816,12 @@ class NoveltyValidationService:
 
         # ---- 2. reuse policy (deterministic) ------------------------------
         reusable: dict[str, str] = {}
+        # Old assessment id -> the NEW claim id it is being reused for. An
+        # assessment's own ``claim_id`` points at the claim artifact that was
+        # current when it was written, which is not necessarily the claim
+        # artifact in the new manuscript (claims are re-extracted each run),
+        # so the mapping is recorded here where the correspondence is known.
+        reusable_target_claim: dict[str, str] = {}
         revalidation_reasons: dict[str, str] = {}
         affected: list[str] = []
         for cid in unchanged:
@@ -2831,6 +2849,7 @@ class NoveltyValidationService:
             reusable[old_aid] = (
                 "unchanged claim; previous assessment complete and search policy compatible"
             )
+            reusable_target_claim[old_aid] = cid
         for cid in modified:
             affected.append(cid)
             revalidation_reasons[cid] = "modified claim (wording/type/risk/scope)"
@@ -2910,10 +2929,20 @@ class NoveltyValidationService:
 
         # ---- 5. new report (reused + new assessments) ---------------------
         reused_ids = list(reusable)
+        # ``reusable`` holds the *previous* assessment ids. Index statuses by
+        # the new manuscript's claim ids, using the correspondence recorded
+        # when each assessment was accepted for reuse; falling back to the
+        # assessment's own ``claim_id`` (which may belong to an older
+        # generation of claim artifacts) would leave reused claims looking
+        # unassessed and report them as unverified.
         status_by_claim: dict[str, NoveltyClaimStatus] = {}
-        for aid in reused_ids + new_assessment_ids:
+        for aid in reused_ids:
             a = (await self._store.get(aid)).parse_payload(NoveltyClaimAssessment)
-            status_by_claim[a.claim_id] = a.status
+            target = reusable_target_claim.get(aid)
+            status_by_claim[target if target is not None else str(a.claim_id)] = a.status
+        for aid in new_assessment_ids:
+            a = (await self._store.get(aid)).parse_payload(NoveltyClaimAssessment)
+            status_by_claim[str(a.claim_id)] = a.status
         claims = {
             env.artifact_id: env.parse_payload(NoveltyClaim)
             for env in await self._store.list(artifact_type="novelty_claim")
@@ -3187,8 +3216,16 @@ class NoveltyValidationService:
         revision = list(report.weakened_claims)
         unverified = list(report.unverified_claims)
 
+        # Never certify a package when validation did not actually cover the
+        # claims: a "clear" report produced by a partial or failed run is not
+        # evidence of novelty.
+        claims_failed = int(report.coverage_summary.get("claims_failed") or 0)
+        incomplete = claims_failed > 0 or len(report.claim_assessment_ids) < len(report.claim_ids)
+
         if package.status != SubmissionPackageStatus.ready:
             status = ReadinessStatus.blocked
+        elif report.overall_status == NoveltyReportStatus.clear and incomplete:
+            status = ReadinessStatus.unverified
         elif report.overall_status == NoveltyReportStatus.clear:
             status = ReadinessStatus.ready
         elif report.overall_status == NoveltyReportStatus.revise:

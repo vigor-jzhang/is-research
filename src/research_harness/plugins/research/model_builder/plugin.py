@@ -170,10 +170,9 @@ class ModelSpecificationResponse(BaseModel):
 def _free_symbols_of(expr: str, known: set[str]) -> tuple[set[str], str | None]:
     """Parse a SymPy-compatible expression; return (free symbol names, error)."""
     try:
-        import sympy
+        from research_harness.research.symbolic import safe_sympify
 
-        known_syms: dict[str, Any] = {s: sympy.Symbol(s) for s in known}
-        parsed = sympy.sympify(expr, locals=known_syms)  # type: ignore[arg-type]
+        parsed = safe_sympify(expr, {s: s for s in known})
         return {str(s) for s in parsed.free_symbols}, None
     except Exception as e:  # noqa: BLE001
         return set(), f"invalid expression {expr!r}: {e}"

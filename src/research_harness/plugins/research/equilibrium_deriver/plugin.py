@@ -688,10 +688,10 @@ class EquilibriumDeriverService:
         )
 
     def _free_symbols(self, expr: str) -> set[str]:
-        try:
-            import sympy
+        from research_harness.research.symbolic import safe_sympify
 
-            return {str(s) for s in sympy.sympify(expr).free_symbols}
+        try:
+            return {str(s) for s in safe_sympify(expr, auto_symbols=True).free_symbols}
         except Exception:  # noqa: BLE001
             return set()
 

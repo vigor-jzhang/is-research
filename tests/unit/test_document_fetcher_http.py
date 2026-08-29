@@ -574,3 +574,108 @@ def test_fetcher_rejects_non_global_cgnat_address(monkeypatch):
     )
     with pytest.raises(ValueError, match="non-global"):
         fetcher_http._validate_url("https://public-looking.example/paper.pdf")
+
+
+@pytest.mark.asyncio
+async def test_injected_transport_reaches_handler_for_unresolvable_host(tmp_path):
+    """An injected transport must not require a real DNS lookup.
+
+    Offline benchmarks (e.g. document-acquisition-v1) inject a MockTransport
+    serving hostnames that do not resolve. ``_validate_url`` used to perform a
+    live ``getaddrinfo`` before dispatching, so every fetch failed with
+    ``invalid_url`` and the transport was never reached.
+    """
+    from research_harness.plugins.documents.fetcher_http.plugin import HttpFetcherService
+    from research_harness.research.schemas.document_acquisition import DocumentAcquisition
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+    from research_harness.research.schemas.paper import PaperRecord
+
+    store = SQLiteArtifactStore(path=tmp_path / "art.db")
+    blobs = FilesystemBlobStore(root=tmp_path / "blobs")
+    paper = PaperRecord(title="T")
+    p_env = ArtifactEnvelope.create(payload=paper, artifact_type="paper_record", producer="test")
+    await store.put(p_env)
+    ident = PaperIdentity(
+        member_paper_artifact_ids=[p_env.artifact_id],
+        canonical_identifiers=[],
+        resolution_method=ResolutionMethod.exact_identifier,
+        resolution_evidence=[],
+    )
+    ident_env = ArtifactEnvelope.create(
+        payload=ident, artifact_type="paper_identity", producer="test"
+    )
+    await store.put(ident_env)
+
+    # Deliberately unresolvable, and unlike example.com it stays that way.
+    url = "https://offline-fixture.invalid/paper.pdf"
+    loc = DocumentLocation(
+        paper_identity_id=ident_env.artifact_id,
+        resolver="test",
+        url=url,
+        is_direct_download=True,
+    )
+    loc_env = ArtifactEnvelope.create(
+        payload=loc, artifact_type="document_location", producer="test"
+    )
+    await store.put(loc_env)
+
+    pdf_bytes = _make_pdf_bytes("offline")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, content=pdf_bytes)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    svc = HttpFetcherService(artifact_store=store, blob_store=blobs, http_client=client)
+    acq_id = await svc.fetch(loc_env.artifact_id)
+    acq = (await store.get(acq_id)).parse_payload(DocumentAcquisition)
+
+    assert seen == [url], "injected transport was never reached"
+    assert acq.status.value == "downloaded"
+    assert acq.failure_code is None
+
+    await client.aclose()
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_host_fails_cleanly_without_injected_client(tmp_path):
+    """Without an injected client DNS is still consulted and failure is clean."""
+    from research_harness.plugins.documents.fetcher_http.plugin import HttpFetcherService
+    from research_harness.research.schemas.document_acquisition import DocumentAcquisition
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+    from research_harness.research.schemas.paper import PaperRecord
+
+    store = SQLiteArtifactStore(path=tmp_path / "art.db")
+    blobs = FilesystemBlobStore(root=tmp_path / "blobs")
+    paper = PaperRecord(title="T")
+    p_env = ArtifactEnvelope.create(payload=paper, artifact_type="paper_record", producer="test")
+    await store.put(p_env)
+    ident = PaperIdentity(
+        member_paper_artifact_ids=[p_env.artifact_id],
+        canonical_identifiers=[],
+        resolution_method=ResolutionMethod.exact_identifier,
+        resolution_evidence=[],
+    )
+    ident_env = ArtifactEnvelope.create(
+        payload=ident, artifact_type="paper_identity", producer="test"
+    )
+    await store.put(ident_env)
+    loc = DocumentLocation(
+        paper_identity_id=ident_env.artifact_id,
+        resolver="test",
+        url="https://offline-fixture.invalid/paper.pdf",
+        is_direct_download=True,
+    )
+    loc_env = ArtifactEnvelope.create(
+        payload=loc, artifact_type="document_location", producer="test"
+    )
+    await store.put(loc_env)
+
+    svc = HttpFetcherService(artifact_store=store, blob_store=blobs)
+    acq_id = await svc.fetch(loc_env.artifact_id)
+    acq = (await store.get(acq_id)).parse_payload(DocumentAcquisition)
+    assert acq.status.value == "failed"
+    assert acq.failure_code == "invalid_url"
+    await store.close()

@@ -33,9 +33,11 @@ from research_harness.research.schemas.evaluation import (
 
 
 def _sympy_equivalent(a: str, b: str) -> bool:
+    from research_harness.research.symbolic import safe_sympify
+
     try:
-        expr_a = sympy.sympify(a)
-        expr_b = sympy.sympify(b)
+        expr_a = safe_sympify(a, auto_symbols=True)
+        expr_b = safe_sympify(b, auto_symbols=True)
         diff = sympy.simplify(sympy.cancel(sympy.together(expr_a - expr_b)))  # type: ignore[operator]
         return bool(diff == 0)
     except Exception:  # noqa: BLE001

@@ -55,7 +55,19 @@ def _is_private_hostname(host: str) -> bool:
         return low == "localhost" or low.endswith(".localhost")
 
 
-def _validate_url(url: str) -> tuple[str, int, tuple[str, ...]]:
+def _validate_url(
+    url: str, *, resolve: bool = True
+) -> tuple[str, int, tuple[str, ...]]:
+    """Validate a URL for safe fetching.
+
+    The scheme/host/userinfo checks are always applied. DNS resolution is
+    applied only when ``resolve`` is true: resolution exists to feed the
+    pinned network backend (which defends against DNS rebinding), so it is
+    both unnecessary and harmful when the caller supplies its own transport
+    — an injected transport (e.g. ``httpx.MockTransport`` in offline
+    benchmarks and tests) is never reached if validation performs a real
+    lookup on a hostname that cannot resolve.
+    """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"URL scheme must be http/https, got {parsed.scheme!r} for {url!r}")
@@ -64,22 +76,29 @@ def _validate_url(url: str) -> tuple[str, int, tuple[str, ...]]:
         raise ValueError(f"URL must have hostname: {url!r}")
     if _is_private_hostname(host):
         raise ValueError(f"URL host is private/local and rejected: {host!r} in {url!r}")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if parsed.username or parsed.password:
+        raise ValueError(f"URL with userinfo rejected: {url!r}")
+    if not resolve:
+        return host, port, ()
     # Hostname strings are not sufficient: DNS can map a public-looking name
     # to loopback, private, or metadata addresses. Validate every resolved IP
     # immediately before the client is allowed to connect.
     try:
-        addresses = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as e:
         raise ValueError(f"URL hostname could not be resolved: {host!r}") from e
     if not addresses:
         raise ValueError(f"URL hostname did not resolve: {host!r}")
-    resolved = tuple(dict.fromkeys(sockaddr[0] for _, _, _, _, sockaddr in addresses))
+    # ``getaddrinfo`` yields a union of sockaddr shapes; only the string form
+    # is meaningful for IP validation here.
+    resolved: tuple[str, ...] = tuple(
+        dict.fromkeys(str(sockaddr[0]) for _, _, _, _, sockaddr in addresses)
+    )
     for address in resolved:
         if _is_private_hostname(address):
             raise ValueError(f"URL hostname resolves to private or non-global address: {host!r}")
-    if parsed.username or parsed.password:
-        raise ValueError(f"URL with userinfo rejected: {url!r}")
-    return host, parsed.port or (443 if parsed.scheme == "https" else 80), resolved
+    return host, port, resolved
 
 
 def _is_pdf_bytes(data: bytes) -> bool:
@@ -140,6 +159,7 @@ class HttpFetcherService:
         max_redirects: int = 5,
         max_bytes: int = 52428800,
         events: Any | None = None,
+        resolve_dns: bool | None = None,
     ) -> None:
         self._store = artifact_store
         self._blobs = blob_store
@@ -150,6 +170,10 @@ class HttpFetcherService:
         self._events = events
         self._own_client = False
         self._pinned_backend = _PinnedNetworkBackend()
+        # Only resolve (and pin) DNS for a client we construct ourselves. An
+        # injected client brings its own transport, so a real lookup would
+        # dead-end offline fixtures and benchmarks without adding protection.
+        self._resolve_dns = (http_client is None) if resolve_dns is None else resolve_dns
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is not None:
@@ -185,9 +209,13 @@ class HttpFetcherService:
         # This satisfies "same location already produced successful acquisition with same immutable blob -> reuse"
         # We will after fetch compare digest.
 
+        # Resolve the client before validating: whether DNS is resolved (and
+        # the result pinned) depends on whether we own the transport.
+        client = await self._get_client()
+
         # Validate initial URL
         try:
-            _validate_url(url)
+            _validate_url(url, resolve=self._resolve_dns)
         except ValueError as e:
             return await self._create_failed_acquisition(
                 paper_identity_id,
@@ -198,7 +226,6 @@ class HttpFetcherService:
             )
 
         started = datetime.now(UTC)
-        client = await self._get_client()
         current_url = url
         redirect_count = 0
         final_url = url
@@ -229,7 +256,7 @@ class HttpFetcherService:
         try:
             while redirect_count <= self._max_redirects:
                 # Validate each redirect url
-                host, port, addresses = _validate_url(current_url)
+                host, port, addresses = _validate_url(current_url, resolve=self._resolve_dns)
                 if self._own_client:
                     self._pinned_backend.pin(host, port, addresses)
                 try:
