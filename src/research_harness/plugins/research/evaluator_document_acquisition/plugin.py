@@ -248,6 +248,20 @@ class DocumentAcquisitionEvaluator:
                 failures_detail.append(f"CORPUS AVAILABILITY MISMATCH: {sorted(mismatches)[:5]}")
             else:
                 corpus_ok = corpus_total
+        elif (
+            expected_available
+            or expected_unavailable
+            or expected_restricted
+            or expected_failed
+        ):
+            # No FullTextCorpus was produced at all, so every corpus
+            # expectation went unchecked. Skipping silently would let a run
+            # whose corpus assembly failed score as though the corpus had been
+            # verified (corpus_ok/corpus_total both stay 0).
+            failures_detail.append(
+                "CORPUS MISSING: the case declares corpus classifications but no "
+                "full_text_corpus artifact was produced"
+            )
 
         # ---- metrics -------------------------------------------------------
 

@@ -287,3 +287,50 @@ async def test_no_execution_produced():
     result = await EvidenceEvaluator().evaluate(_ctx(_case(_expected()), []))
     assert result.status == EvaluatorStatus.failed
     assert result.score is None
+
+
+# --- regression: a missing blob store is a config fact, not a failure -----
+#
+# blob_store is an *optional* harness dependency, but the evaluator appended
+# "statement grounding not verified (no blob store)" to failures_detail
+# whenever it was absent and the case had evidence items. Every case of the
+# benchmark therefore failed for a deployment reason the operator could not
+# fix by improving the pipeline. When that is the only thing wrong, the
+# grounding dimension is unverifiable rather than failed.
+
+
+async def test_missing_blob_store_does_not_fail_otherwise_correct_case(blobs):
+    doc = await _doc_env(blobs, "d1", ["intro", "setup", STATEMENT, "conclusion"])
+    item = _item_env("e1", "d1", STATEMENT, [3])
+    produced = [doc, item, _execution_env(), _corpus_env()]
+    # Same artifacts, but no blob store attached.
+    result = await EvidenceEvaluator().evaluate(_ctx(_case(_expected()), produced, None))
+
+    assert result.status == EvaluatorStatus.skipped
+    assert "no blob store" in (result.explanation or "")
+    # The dimensions that do not need page text are still evaluated.
+    metrics = result.value["metrics"]
+    assert metrics["evidence_recall"]["value"] == 1.0
+    assert metrics["locator_accuracy"]["value"] == 1.0
+    assert metrics["category_accuracy"]["value"] == 1.0
+
+
+async def test_missing_blob_store_never_reports_a_pass(blobs):
+    """Unverifiable must never degrade into 'passed'."""
+    doc = await _doc_env(blobs, "d1", ["intro", "setup", STATEMENT, "conclusion"])
+    item = _item_env("e1", "d1", STATEMENT, [3])
+    produced = [doc, item, _execution_env(), _corpus_env()]
+    result = await EvidenceEvaluator().evaluate(_ctx(_case(_expected()), produced, None))
+    assert result.status != EvaluatorStatus.passed
+
+
+async def test_real_failure_still_fails_without_blob_store(blobs):
+    """A genuine mismatch is still 'failed', not downgraded to 'skipped'."""
+    doc = await _doc_env(blobs, "d1", ["intro", "setup", STATEMENT, "tail"])
+    # Wrong category: fails independently of grounding.
+    item = _item_env("e1", "d1", STATEMENT, [3], category="mechanism")
+    produced = [doc, item, _execution_env(), _corpus_env()]
+    result = await EvidenceEvaluator().evaluate(_ctx(_case(_expected()), produced, None))
+
+    assert result.status == EvaluatorStatus.failed
+    assert "CATEGORY MISMATCHES" in result.explanation

@@ -189,7 +189,10 @@ class EvaluationHarnessService:
         payload = BenchmarkCase(
             id=case.id,
             benchmark_id=benchmark_id,
-            version=1,
+            # Persist the declared version. Hardcoding 1 meant a case bumped to
+            # version 2 could never be registered: the version check compares
+            # against the stored value, which would never advance.
+            version=case.version,
             name=case.name,
             description=case.description,
             input=case.input,

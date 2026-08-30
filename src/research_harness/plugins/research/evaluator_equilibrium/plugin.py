@@ -260,8 +260,16 @@ class EquilibriumEvaluator:
         # ---- best-response accuracy (symbolic vs model FOC solutions) --
         br_matches = 0
         br_total = 0
+        # Best responses that could not be checked at all, as opposed to ones
+        # that were checked and disagreed.
+        br_uncheckable = 0
         br_failures: list[str] = []
         raw_foc_by_key: dict[tuple[str, str], Any] = {}
+        # Record *why* the FOCs could not be derived instead of discarding the
+        # reason: without them every best response becomes "uncheckable" and
+        # ``br_accuracy`` would fall through to its 1.0 default, reporting a
+        # perfect score for a case that was never actually checked.
+        foc_error: str | None = None
         try:
             for payoff in model.payoffs:
                 for dv in payoff.decision_variables:
@@ -270,7 +278,8 @@ class EquilibriumEvaluator:
                         sympy.Symbol(dv),
                     )
                     raw_foc_by_key[(payoff.actor_id, dv)] = foc
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            foc_error = f"{type(e).__name__}: {e}"
             raw_foc_by_key = {}
         for env in ctx.produced_artifacts:
             if env.artifact_type != "best_response":
@@ -283,6 +292,7 @@ class EquilibriumEvaluator:
             actor_id = br.get("actor_id")
             foc = raw_foc_by_key.get((str(actor_id or ""), str(variable or "")))
             if foc is None:
+                br_uncheckable += 1
                 continue
             br_total += 1
             try:
@@ -303,7 +313,15 @@ class EquilibriumEvaluator:
 
         # ---- metrics ---------------------------------------------------
         expected_total = len(expected_solution)
-        foc_total = len(list(game_consistent_focs(model)))
+        # A malformed model (e.g. a payoff that will not parse) makes the FOCs
+        # underivable. Report that as an unverifiable result rather than
+        # letting the exception escape and abort the whole evaluation.
+        foc_derivation_error: str | None = None
+        try:
+            foc_total = len(list(game_consistent_focs(model)))
+        except Exception as e:  # noqa: BLE001
+            foc_derivation_error = f"{type(e).__name__}: {e}"
+            foc_total = 0
         foc_accuracy = (
             max(0, foc_total - len(foc_residual_failures)) / foc_total if foc_total else 1.0
         )
@@ -413,6 +431,23 @@ class EquilibriumEvaluator:
             )
         if br_failures:
             failures_detail.append("BEST RESPONSE MISMATCHES: " + "; ".join(br_failures))
+        if br_uncheckable:
+            # Never let an inability to check read as success. Either the model
+            # FOCs could not be derived, or a produced best response refers to
+            # an actor/variable the model does not define; both leave the
+            # response unverified rather than correct.
+            reason = f"model FOCs could not be derived ({foc_error})" if foc_error else (
+                "no matching first-order condition in the model"
+            )
+            failures_detail.append(
+                f"BEST RESPONSE UNVERIFIABLE: {reason}; "
+                f"{br_uncheckable} produced best response(s) were not checked"
+            )
+        if foc_derivation_error is not None:
+            failures_detail.append(
+                f"FOC UNVERIFIABLE: the model's first-order conditions could not be "
+                f"derived ({foc_derivation_error})"
+            )
         if selected_candidate_id is None and expected_status not in (
             None,
             "failed",

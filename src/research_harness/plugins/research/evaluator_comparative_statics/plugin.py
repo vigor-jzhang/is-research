@@ -211,12 +211,18 @@ class ComparativeStaticsEvaluator:
                 )
 
             recomputed: Any | None = None
+            # Keep the reason: a failure to recompute silently disables both
+            # the "contradicts recomputed derivative" check and the
+            # "definite sign overclaim" check below, so swallowing it lets an
+            # unchecked case score as though it had been verified.
+            recompute_error: str | None = None
             if outcome in candidate_exprs:
                 try:
                     expr = parse_sympy(candidate_exprs[outcome], table)
                     recomputed = sympy.simplify(sympy.diff(expr, sympy.Symbol(param)))
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
                     recomputed = None
+                    recompute_error = f"{type(e).__name__}: {e}"
             if recomputed is not None and derivative_ok:
                 if not sympy_equivalent(str(recomputed), produced_derivative, table):
                     failures_detail.append(
@@ -241,6 +247,13 @@ class ComparativeStaticsEvaluator:
                         f"DEFINITE SIGN OVERCLAIM d{outcome}/d{param}: produced "
                         f"{produced_sign!r} but the derivative is ambiguous"
                     )
+
+            if recompute_error is not None:
+                failures_detail.append(
+                    f"DERIVATIVE UNVERIFIABLE d{outcome}/d{param}: could not recompute "
+                    f"from the candidate expression ({recompute_error}); the produced "
+                    f"derivative and its sign were not cross-checked"
+                )
 
             # ---- conditions ----------------------------------------------
             produced_conditions = [str(c) for c in produced.get("conditions") or []]

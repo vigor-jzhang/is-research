@@ -265,3 +265,51 @@ async def test_no_acquisition_artifacts_fails():
     result = await DocumentAcquisitionEvaluator().evaluate(_ctx(_case({}), []))
     assert result.status == EvaluatorStatus.failed
     assert result.score is None
+
+
+# --- regression: declared corpus expectations must actually be checked -----
+#
+# The corpus block was guarded by ``if corpora:``, so when no FullTextCorpus
+# was produced at all every ``expected_corpus_*`` expectation was skipped,
+# ``corpus_ok``/``corpus_total`` stayed 0 and the case could still pass -- a
+# run whose corpus assembly failed looked like a verified corpus.
+
+
+async def test_missing_corpus_with_corpus_expectations_fails():
+    """Corpus expectations declared, no corpus produced -> cannot be a pass."""
+    from research_harness.plugins.research.evaluator_document_acquisition.plugin import (
+        DocumentAcquisitionEvaluator,
+    )
+
+    ref = {
+        "expected_status": {"p0": "failed"},
+        "expected_corpus_failed": ["p0"],
+    }
+    # An acquisition was produced (so the evaluator does not short-circuit) but
+    # no FullTextCorpus followed: the corpus expectation is then unchecked, and
+    # that must not be reported as a pass.
+    produced = [
+        _identity_env("p0"),
+        _acq_env("a0", "p0", "failed"),
+    ]
+    result = await DocumentAcquisitionEvaluator().evaluate(_ctx(_case(ref), produced))
+
+    assert result.status == EvaluatorStatus.failed
+    assert "CORPUS MISSING" in (result.explanation or "")
+
+
+async def test_missing_corpus_is_fine_when_no_corpus_expectations():
+    """No corpus expectations declared -> absence of a corpus is not a failure."""
+    from research_harness.plugins.research.evaluator_document_acquisition.plugin import (
+        DocumentAcquisitionEvaluator,
+    )
+
+    ref = {
+        "expected_status": {},
+        "expected_corpus_available": [],
+        "expected_corpus_unavailable": [],
+        "expected_corpus_restricted": [],
+        "expected_corpus_failed": [],
+    }
+    result = await DocumentAcquisitionEvaluator().evaluate(_ctx(_case(ref), []))
+    assert "CORPUS MISSING" not in (result.explanation or "")

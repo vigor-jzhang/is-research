@@ -158,7 +158,8 @@ def readiness_report() -> ReadinessResult:
     elif gaps_exist:
         verdict = "ready_with_gaps"
         narrative = (
-            "Deterministic gating is complete across all 31 benchmark families "
+            f"Deterministic gating is complete across all {criteria['benchmark_count']} "
+            "benchmark families "
             "(incl. evidence enrichment, model routing, live-quality reasoning/"
             "critic/fast, production-routing readiness, model qualification, "
             "task-specific qualification, the 7D.2 calibration audit, and the "

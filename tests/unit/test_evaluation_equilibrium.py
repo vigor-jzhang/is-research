@@ -377,3 +377,80 @@ async def test_no_execution_produced():
     result = await EquilibriumEvaluator().evaluate(_ctx(_case(_expected()), []))
     assert result.status == EvaluatorStatus.failed
     assert result.score is None
+
+
+# --- regression: a crash must not be scored as a perfect result -----------
+#
+# Deriving the model's FOCs used to be wrapped in a bare
+# ``except Exception: raw_foc_by_key = {}``. Every produced best response then
+# became "uncheckable", so ``br_total`` stayed 0 and ``br_accuracy`` fell
+# through to its ``1.0`` default -- a case that was never checked reported a
+# perfect best-response score.
+
+
+def _best_response(actor_id: str, variable: str, expression: str):
+    return ArtifactEnvelope[dict].create(
+        payload={
+            "actor_id": actor_id,
+            "decision_variable": variable,
+            "response_expression": {"expression": expression},
+            "implicit": False,
+        },
+        artifact_type="best_response",
+        producer="test",
+    )
+
+
+def _unparseable_payoff_model(model_id: str = "m1") -> FormalAnalyticalModel:
+    """A model whose payoff expression cannot be parsed, so no FOC exists."""
+    m = _cournot_model(model_id)
+    return m.model_copy(
+        update={
+            "payoffs": [
+                PayoffFunction(
+                    actor_id="f1",
+                    objective_type="profit",
+                    expression=Expression(expression="(a - q1 - q2) * q1 )"),
+                    decision_variables=["q1"],
+                    parameters=["a"],
+                )
+            ]
+        }
+    )
+
+
+async def test_unparseable_model_focs_are_not_a_perfect_score():
+    case = _case(_expected(expected_solution={}))
+    produced = [
+        _model_env(_unparseable_payoff_model(), "m1"),
+        _candidate_env("cand-1", [("q1", "(a-c)/3")]),
+        _verification_env("cand-1", "verified"),
+        _analysis_env("cand-1"),
+        _execution_env(),
+        _best_response("f1", "q1", "(a-c)/2"),
+    ]
+    result = await EquilibriumEvaluator().evaluate(_ctx(case, produced))
+
+    assert result.status == EvaluatorStatus.failed
+    assert "BEST RESPONSE UNVERIFIABLE" in (result.explanation or "")
+    # The metric must not claim a perfect score for an unchecked case.
+    metrics = (result.value or {}).get("metrics", {})
+    br = metrics.get("best_response_accuracy")
+    assert br is None or br.get("count") == 0
+
+
+async def test_best_response_without_a_matching_foc_is_not_scored_correct():
+    """A best response the model has no FOC for is unverified, not correct."""
+    case = _case(_expected(expected_solution={}))
+    produced = [
+        _model_env(_cournot_model(), "m1"),
+        _candidate_env("cand-1", [("q1", "(a-c)/3")]),
+        _verification_env("cand-1", "verified"),
+        _analysis_env("cand-1"),
+        _execution_env(),
+        _best_response("nobody", "qX", "a/3"),
+    ]
+    result = await EquilibriumEvaluator().evaluate(_ctx(case, produced))
+
+    assert result.status == EvaluatorStatus.failed
+    assert "BEST RESPONSE UNVERIFIABLE" in (result.explanation or "")

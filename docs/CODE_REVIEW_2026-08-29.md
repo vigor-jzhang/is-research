@@ -64,17 +64,22 @@ in the working tree, uncommitted.
 | **H3** policy rank `None` sorts first | **Fixed** (round 2) | `routing/policies.py` |
 | **C7** SQLite cross-thread corruption | **Fixed** (round 3) | `storage/artifacts_sqlite/plugin.py` |
 | **C5** equilibrium `verified` on zero checks | **Fixed** (round 3) | `equilibrium_verifier/plugin.py` |
-| The H/M/L backlog | **Not started** | — |
+| **M5** swallowed recomputation failures | **Fixed** (round 4) | `evaluator_equilibrium`, `evaluator_comparative_statics` |
+| **M6** evidence fails without a blob store | **Fixed** (round 4) | `evaluator_evidence` |
+| **M7** corpus checks skipped on empty corpus | **Fixed** (round 4) | `evaluator_document_acquisition` |
+| **M14/M15/M16** trivial defects | **Fixed** (round 4) | `evaluation_harness`, `benchmarks`, `evaluation_readiness` |
+| The remaining H/M/L backlog | **Not started** | — |
 
-**Post-fix verification (after round 3):**
+**Post-fix verification (after round 4):**
 
 | Check | Before | After |
 |---|---|---|
 | `ruff check src tests` | Pass | **Pass** |
 | `pyright` | 705 (misleading) | **0 errors** |
-| `pytest tests/unit tests/integration` | 961 passed, **1 failed** | **1085 passed, 0 failed** |
+| `pytest tests/unit tests/integration` | 961 passed, **1 failed** | **1094 passed, 0 failed** |
 
-All eight critical findings (C1–C8) are now addressed.
+All eight critical findings (C1–C8) are addressed as of round 3. Round 4 targeted the
+contained fail-open cluster in the evaluators.
 
 ### Notes on the round-1 implementation
 
@@ -151,6 +156,58 @@ All eight critical findings (C1–C8) are now addressed.
   `hard_failed` logic yields `failed` with no change to the status ladder — and the gap
   is visible in `verification.checks` instead of being silently omitted.
 
+### Round 4 notes
+
+This round deliberately took the **contained fail-open cluster** in the evaluators rather
+than H2/H4/H5, because the latter change qualification *semantics* (see §1.2).
+
+- **M5.** Two distinct fail-open paths.
+  - `evaluator_equilibrium`: deriving the model's FOCs was wrapped in a bare
+    `except Exception: raw_foc_by_key = {}`. Every produced best response then became
+    "uncheckable", `br_total` stayed 0, and `br_accuracy` fell through to its `1.0`
+    default — a case that was never checked reported a **perfect** best-response score.
+    Now the reason is retained and an unverifiable best response is a failure. Also
+    fixed the sibling path: an unguarded `game_consistent_focs` call let a malformed
+    model raise out of the evaluator entirely; it now reports `FOC UNVERIFIABLE`.
+    (Note: the reviewer's claim that unsolvable best responses were dropped from the
+    denominator was wrong — `br_total` is incremented *before* the `try`, so that path
+    was already fail-closed.)
+  - `evaluator_comparative_statics`: `except Exception: recomputed = None` silently
+    disabled **both** the "produced derivative contradicts the recomputed one" check and
+    the "definite sign asserted while the derivative is ambiguous" check. Now reported.
+- **M6.** `blob_store` is an *optional* harness dependency, but the evaluator appended
+  "statement grounding not verified (no blob store)" to `failures_detail` whenever it was
+  absent and the case had evidence items — so every case failed for a deployment reason
+  the operator could not fix. When that is the only thing wrong, the case is now
+  `skipped` (unverifiable) rather than `failed`. A genuine mismatch is still `failed`;
+  recall/locator/category are still evaluated either way.
+- **M7** corpus expectations were guarded by `if corpora:`, so when no `FullTextCorpus`
+  was produced every `expected_corpus_*` expectation went unchecked and the case could
+  still pass.
+- **M14/M15/M16** — case `version` is now persisted instead of hardcoded to `1` (a
+  version bump could previously never be registered); an empty `repetition_rates` list no
+  longer divides by zero; the readiness narrative derives the benchmark count instead of
+  hardcoding 31.
+
+### §1.2 Open items deliberately deferred
+
+These change *qualification semantics* rather than fixing a crash, so they deserve a look
+at the consequences (67 `role_leaderboard` artifacts and 15 `qualification_campaign`
+artifacts exist in local run state) before being applied:
+
+- **H2** — errored cases excluded from `deterministic_pass_rate`, the eligibility gate.
+  A model that errors on 99% of cases currently scores 1.0.
+- **H4** — failed tournament repetitions dropped, and their call records never counted,
+  so a flaky model is scored on its lucky run and looks *more* reliable.
+- **H5** — the calibration audit verdict ignores 6 of 8 checks, so those defect classes
+  are never excluded from qualification.
+
+Also noted but not fixed: **stale local run state**. `.research/artifacts.db` (gitignored,
+~30 MB) contains artifacts whose computed values the round 1–3 fixes change the meaning
+of — 67 `role_leaderboard` (ranked with the inverted comparator), 40
+`novelty_validation_report`, 26 `submission_readiness_gate`, 14 `routing_decision`. It
+should be archived or re-derived before those results are trusted.
+
 ### Verification that the new tests are genuine regression tests
 
 Each new test was confirmed to **fail** against the pre-fix code and **pass** after:
@@ -167,6 +224,10 @@ Each new test was confirmed to **fail** against the pre-fix code and **pass** af
 | `test_routing_policies.py` (6 new, H3) | 1 failed | 6 pass |
 | `test_artifact_store.py` (3 new, C7) | 2 failed on each of 3 runs | 20 pass on each of 3 runs |
 | `test_equilibrium.py` (2 new, C5) | 1 failed | 14 pass |
+| `test_evaluation_equilibrium.py` (2 new, M5) | 2 failed | 11 pass |
+| `test_evaluation_comparative_statics.py` (2 new, M5) | 2 failed | 15 pass |
+| `test_evaluation_evidence.py` (3 new, M6) | 1 failed | 14 pass |
+| `test_evaluation_document_acquisition.py` (2 new, M7) | 1 failed | 9 pass |
 
 > The H1 row is the interesting one: reverting the fix produces **3** failures at
 > `PYTHONHASHSEED` 1/2/3/5 but only **2** at seed 4 — the nondeterminism is visible

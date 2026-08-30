@@ -9929,7 +9929,9 @@ def _lq_result(
     created = (
         datetime.now(UTC) - timedelta(seconds=age_seconds) if age_seconds else datetime.now(UTC)
     )
-    if repetition_rates is not None:
+    # An empty list is not the same as None: None means "no repetition data",
+    # whereas [] would divide by zero.
+    if repetition_rates:
         det_mean = sum(repetition_rates) / len(repetition_rates)
         det_worst = min(repetition_rates)
         det_var = (

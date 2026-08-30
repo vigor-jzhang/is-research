@@ -381,3 +381,95 @@ async def test_no_statics_produced():
     result = await ComparativeStaticsEvaluator().evaluate(_ctx(_case({}), []))
     assert result.status == EvaluatorStatus.failed
     assert result.score is None
+
+
+# --- regression: a failure to recompute must not silently skip checks -----
+#
+# Recomputing the derivative from the candidate expression used to be
+# ``except Exception: recomputed = None``. That silently disabled BOTH the
+# "produced derivative contradicts the recomputed one" check and the
+# "definite sign asserted while the derivative is ambiguous" check, so a case
+# that could not be cross-checked scored as though it had been verified.
+
+
+async def test_unrecomputable_derivative_is_reported_not_silently_skipped():
+    from research_harness.research.schemas.equilibrium import (
+        EquilibriumCandidate,
+        EquilibriumExpression,
+    )
+    from research_harness.research.schemas.model import Expression as EqExpression
+
+    # A candidate expression that cannot be parsed, so the recomputation used
+    # to cross-check the produced derivative fails.
+    bad_candidate = ArtifactEnvelope.create(
+        payload=EquilibriumCandidate(
+            model_id="m1",
+            expressions=[
+                EquilibriumExpression(
+                    variable="q",
+                    expression=EqExpression(expression="(a - c) / 2 )", symbols_used=["a", "c"]),
+                    conditions=[],
+                    solution_method=SolutionMethod("simultaneous"),
+                )
+            ],
+            decision_variables=["q"],
+            solution_method=SolutionMethod("simultaneous"),
+            proposed_by="sympy",
+            verification_status=VerificationStatus.verified,
+        ),
+        artifact_type="equilibrium_candidate",
+        producer="test",
+    )
+    produced = [
+        _model_env(_monopoly_model()),
+        bad_candidate,
+        _static_env("q", "a", "1/2", "positive"),
+    ]
+    result = await ComparativeStaticsEvaluator().evaluate(
+        _ctx(_case(_cs_reference({"q/a": _static_ref("1/2", "positive")})), produced)
+    )
+
+    assert result.status == EvaluatorStatus.failed
+    assert "DERIVATIVE UNVERIFIABLE" in (result.explanation or "")
+
+
+async def test_recompute_failure_does_not_mask_a_real_mismatch():
+    """A wrong derivative is still reported when recomputation also fails."""
+    from research_harness.research.schemas.equilibrium import (
+        EquilibriumCandidate,
+        EquilibriumExpression,
+    )
+    from research_harness.research.schemas.model import Expression as EqExpression
+
+    bad_candidate = ArtifactEnvelope.create(
+        payload=EquilibriumCandidate(
+            model_id="m1",
+            expressions=[
+                EquilibriumExpression(
+                    variable="q",
+                    expression=EqExpression(expression="(a - c) / 2 )", symbols_used=["a", "c"]),
+                    conditions=[],
+                    solution_method=SolutionMethod("simultaneous"),
+                )
+            ],
+            decision_variables=["q"],
+            solution_method=SolutionMethod("simultaneous"),
+            proposed_by="sympy",
+            verification_status=VerificationStatus.verified,
+        ),
+        artifact_type="equilibrium_candidate",
+        producer="test",
+    )
+    produced = [
+        _model_env(_monopoly_model()),
+        bad_candidate,
+        # Deliberately wrong derivative.
+        _static_env("q", "a", "99", "positive"),
+    ]
+    result = await ComparativeStaticsEvaluator().evaluate(
+        _ctx(_case(_cs_reference({"q/a": _static_ref("1/2", "positive")})), produced)
+    )
+
+    assert result.status == EvaluatorStatus.failed
+    assert "WRONG DERIVATIVE" in (result.explanation or "")
+    assert "DERIVATIVE UNVERIFIABLE" in (result.explanation or "")

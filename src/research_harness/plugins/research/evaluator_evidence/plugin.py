@@ -30,6 +30,8 @@ from research_harness.research.schemas.evaluation import (
     EvaluatorStatus,
 )
 
+_GROUNDING_UNVERIFIABLE = "statement grounding not verified (no blob store)"
+
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower().strip())
@@ -329,10 +331,23 @@ class EvidenceEvaluator:
             failures_detail.append(f"DOCUMENTS WITH REQUIRED EVIDENCE MISSED: {documents_missed}")
         if without_mismatch:
             failures_detail.append(f"DOCUMENTS WITHOUT EVIDENCE MISMATCH: {without_mismatch}")
-        if not grounding_verified and total_items:
-            failures_detail.append("statement grounding not verified (no blob store)")
+        grounding_unverifiable = not grounding_verified and bool(total_items)
+        if grounding_unverifiable:
+            failures_detail.append(_GROUNDING_UNVERIFIABLE)
 
-        status = EvaluatorStatus.failed if failures_detail else EvaluatorStatus.passed
+        # A missing blob store is a deployment fact, not a benchmark failure:
+        # blob_store is an *optional* harness dependency, so a legitimate
+        # deployment without one must not turn every case into a failure. If it
+        # is the only thing wrong, decline to judge rather than reporting a
+        # failure the operator cannot act on. Every other dimension (recall,
+        # locator, category, duplicates) is still evaluated either way, and a
+        # skipped case is never scored as a pass.
+        if failures_detail == [_GROUNDING_UNVERIFIABLE]:
+            status = EvaluatorStatus.skipped
+        elif failures_detail:
+            status = EvaluatorStatus.failed
+        else:
+            status = EvaluatorStatus.passed
 
         return EvaluatorResult(
             case_id=ctx.case.id,
