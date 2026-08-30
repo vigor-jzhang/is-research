@@ -395,3 +395,105 @@ async def test_external_custom_artifact_without_storage_change(tmp_path: pathlib
     assert env.artifact_id != env2.artifact_id
     assert env.content_hash != env2.content_hash
     await store.close()
+
+
+# --- regression: concurrent writers must not lose artifacts ---------------
+#
+# The store shares one sqlite3 connection opened with check_same_thread=False
+# but had no lock. ``put`` is a read-modify-write (existence check, then
+# insert) and ``add_provenance`` validates, walks the graph and then inserts,
+# so concurrent callers interleaved their statements and transactions. That
+# produced "cannot start a transaction within a transaction" errors and, far
+# worse, calls that reported success while the artifact was never persisted.
+
+
+def _concurrent_puts(store: SQLiteArtifactStore, n: int) -> tuple[list[int], list[str]]:
+    """Put ``n`` distinct artifacts from ``n`` threads. Returns (ok, errors)."""
+    import asyncio
+    import threading
+
+    reported_ok: list[int] = []
+    errors: list[str] = []
+    lock = threading.Lock()
+    # A barrier maximises contention: all threads reach put() together.
+    barrier = threading.Barrier(n)
+
+    def worker(i: int) -> None:
+        env = ArtifactEnvelope[dict].create(
+            payload={"i": i}, artifact_type="concurrent", producer="test"
+        )
+        barrier.wait()
+        try:
+            asyncio.run(store.put(env))
+            with lock:
+                reported_ok.append(i)
+        except Exception as e:  # noqa: BLE001
+            with lock:
+                errors.append(f"{type(e).__name__}: {e}")
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return reported_ok, errors
+
+
+@pytest.mark.asyncio
+async def test_concurrent_puts_all_persisted(tmp_path: pathlib.Path):
+    store = SQLiteArtifactStore(path=tmp_path / "artifacts.db")
+    n = 40
+    reported_ok, errors = _concurrent_puts(store, n)
+
+    # No interleaving errors, and every write was accepted.
+    assert not errors, f"concurrent puts raised: {errors[:3]}"
+    assert len(reported_ok) == n
+
+    # The critical invariant: reported success means persisted.
+    persisted = {
+        env.payload["i"] for env in await store.list(artifact_type="concurrent")
+    }
+    assert persisted == set(range(n))
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_puts_never_silently_lost(tmp_path: pathlib.Path):
+    """Even if some writes error, none may report success yet be missing."""
+    store = SQLiteArtifactStore(path=tmp_path / "artifacts.db")
+    n = 40
+    reported_ok, _errors = _concurrent_puts(store, n)
+
+    persisted = {
+        env.payload["i"] for env in await store.list(artifact_type="concurrent")
+    }
+    lost = sorted(set(reported_ok) - persisted)
+    assert not lost, f"artifacts reported success but were never persisted: {lost}"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_store_usable_from_another_thread(tmp_path: pathlib.Path):
+    """check_same_thread=False promises cross-thread use; exercise it."""
+    import asyncio
+    import threading
+
+    store = SQLiteArtifactStore(path=tmp_path / "artifacts.db")
+    env = ArtifactEnvelope[dict].create(
+        payload={"v": 1}, artifact_type="threaded", producer="test"
+    )
+    result: dict[str, object] = {}
+
+    def worker() -> None:
+        async def _run() -> None:
+            await store.put(env)
+            result["exists"] = await store.exists(env.artifact_id)
+
+        asyncio.run(_run())
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert result.get("exists") is True
+    assert len(await store.list(artifact_type="threaded")) == 1
+    await store.close()

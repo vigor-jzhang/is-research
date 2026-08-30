@@ -186,7 +186,9 @@ class EquilibriumVerifierService:
         foc_exprs: list[tuple[str, str, Any]] = game_consistent_focs(model)
         game_payoffs: dict[str, Any] = game_consistent_payoffs(model)
         foc_ok = True
+        foc_evaluated = 0
         for actor, dv, foc in foc_exprs:
+            foc_evaluated += 1
             residual = sympy.simplify(sympy.cancel(foc.subs(candidate_map)))  # type: ignore[arg-type]
             if residual == 0:
                 checks.append(
@@ -207,6 +209,31 @@ class EquilibriumVerifierService:
                         symbolic_detail=str(residual),
                     )
                 )
+        # Mandatory check inventory: an absent check must never be worth a
+        # pass. ``foc_exprs`` can legitimately be empty (a payoff that declares
+        # no decision variables, or a model whose declared decision variables
+        # are never attached to an actor), and in that case the loop above
+        # records nothing — which previously left ``hard_failed`` false and the
+        # candidate ``verified`` despite no first-order condition ever being
+        # evaluated. Record the gap as a failed check instead.
+        decision_pairs = [
+            (p.actor_id, dv) for p in model.payoffs for dv in p.decision_variables
+        ]
+        expected_focs = len(decision_pairs) if decision_pairs else len(model_decisions)
+        if expected_focs and foc_evaluated < expected_focs:
+            foc_ok = False
+            checks.append(
+                VerificationCheck(
+                    check_type=CheckType.foc_residual,
+                    passed=False,
+                    detail=(
+                        f"only {foc_evaluated} of {expected_focs} expected first-order "
+                        f"condition(s) could be evaluated; the remainder were not "
+                        f"checked, so the equilibrium is unverified"
+                    ),
+                )
+            )
+
         if not foc_ok:
             return checks, conditions, notes
 

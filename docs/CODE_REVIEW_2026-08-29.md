@@ -62,15 +62,19 @@ in the working tree, uncommitted.
 | **C8** `skipped` scored as `passed` | **Fixed** (round 2) | `evaluation_harness` + `schemas/evaluation.py` |
 | **H1** `resolved_model` nondeterminism | **Fixed** (round 2) | `tournament/accounting.py` |
 | **H3** policy rank `None` sorts first | **Fixed** (round 2) | `routing/policies.py` |
-| **C5, C7** and the H/M/L backlog | **Not started** | — |
+| **C7** SQLite cross-thread corruption | **Fixed** (round 3) | `storage/artifacts_sqlite/plugin.py` |
+| **C5** equilibrium `verified` on zero checks | **Fixed** (round 3) | `equilibrium_verifier/plugin.py` |
+| The H/M/L backlog | **Not started** | — |
 
-**Post-fix verification (after round 2):**
+**Post-fix verification (after round 3):**
 
 | Check | Before | After |
 |---|---|---|
 | `ruff check src tests` | Pass | **Pass** |
 | `pyright` | 705 (misleading) | **0 errors** |
-| `pytest tests/unit tests/integration` | 961 passed, **1 failed** | **1080 passed, 0 failed** |
+| `pytest tests/unit tests/integration` | 961 passed, **1 failed** | **1085 passed, 0 failed** |
+
+All eight critical findings (C1–C8) are now addressed.
 
 ### Notes on the round-1 implementation
 
@@ -118,6 +122,35 @@ in the working tree, uncommitted.
   `max` over a `set`, which was hash-order dependent.
 - **H3.** `build_rank_key` maps unknown evidence to `+inf` for both directions.
 
+### Round 3 notes
+
+- **C7 (measured data loss).** The store shared one connection opened with
+  `check_same_thread=False` but had **no lock**, while `put` (existence check → insert)
+  and `add_provenance` (validate → cycle-walk → insert) are read-modify-write sequences.
+  Every operation is now serialised through a `threading.RLock`, and the multi-step
+  sequences run inside a *single* critical section using new synchronous primitives
+  (`_exists_sync`, `_get_sync`, `_links_sync`, `_would_create_cycle_sync`), which also
+  closes the TOCTOU between check and insert. Transactions use `BEGIN IMMEDIATE` and
+  `PRAGMA busy_timeout = 5000`.
+  **Deadlock safety:** the lock is a `threading.RLock`, never an `asyncio` lock, and the
+  invariant is that *no await ever happens while it is held* — all lock-protected
+  sections are synchronous and event publication stays outside them. This is documented
+  in the class docstring. Note that an `asyncio.Lock` would NOT have been safe here,
+  because the same connection is also reachable from other threads.
+  Measured with 60 threads putting 60 distinct artifacts:
+
+  | | reported success | errors | actually persisted | silently lost |
+  |---|---|---|---|---|
+  | before | 29–34 | 26–31 | 14–22 | **8–15** |
+  | after | 60 | 0 | 60 | **0** |
+
+- **C5.** Rather than adding a `VerificationStatus` value (the deriver switches on it via
+  `dict` lookups that would `KeyError`), `_run_checks` now records an explicit
+  **failed** `foc_residual` check when fewer first-order conditions were evaluated than
+  the model declares. `foc_residual` is already a hard check type, so the existing
+  `hard_failed` logic yields `failed` with no change to the status ladder — and the gap
+  is visible in `verification.checks` instead of being silently omitted.
+
 ### Verification that the new tests are genuine regression tests
 
 Each new test was confirmed to **fail** against the pre-fix code and **pass** after:
@@ -132,6 +165,8 @@ Each new test was confirmed to **fail** against the pre-fix code and **pass** af
 | `test_evaluation_harness.py` (2 new, C8) | n/a (new cases) | 18 pass |
 | `test_tournament_accounting.py` (2 new, H1) | 3 failed (seed-dependent: 2 at seed 4) | 13 pass at every seed |
 | `test_routing_policies.py` (6 new, H3) | 1 failed | 6 pass |
+| `test_artifact_store.py` (3 new, C7) | 2 failed on each of 3 runs | 20 pass on each of 3 runs |
+| `test_equilibrium.py` (2 new, C5) | 1 failed | 14 pass |
 
 > The H1 row is the interesting one: reverting the fix produces **3** failures at
 > `PYTHONHASHSEED` 1/2/3/5 but only **2** at seed 4 — the nondeterminism is visible

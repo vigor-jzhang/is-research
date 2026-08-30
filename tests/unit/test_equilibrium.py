@@ -688,3 +688,100 @@ async def test_provenance_after_reopen(tmp_path: pathlib.Path):
     ex_parents = await store2.get_parents(exec_id)
     assert any(p.source_artifact_id == model_id for p in ex_parents)
     await store2.close()
+
+
+# --- regression: absence of a check must never be worth a pass -------------
+#
+# ``_run_checks`` can reach the end having evaluated no first-order condition
+# at all (e.g. a payoff that declares no decision variables, so
+# ``game_consistent_focs`` returns []). Every status branch tested only for
+# checks that were *recorded*, so an empty check list left ``hard_failed``
+# false and the candidate was marked ``verified`` with no mathematical
+# verification performed.
+
+
+async def _model_with_undeclared_payoff_variables(store) -> str:
+    """Model declares a decision variable its payoff never claims.
+
+    ``p`` is a decision variable, so a candidate that supplies it passes
+    symbol validation, but no payoff declares it, so there is no first-order
+    condition to evaluate.
+    """
+    model_id = await _monopoly_model(store)
+    m = (await store.get(model_id)).parse_payload(FormalAnalyticalModel)
+    m2 = m.model_copy(
+        update={
+            "payoffs": [
+                PayoffFunction(
+                    actor_id="platform",
+                    objective_type="profit",
+                    expression=_expr("a*p"),
+                    decision_variables=[],
+                    parameters=["a"],
+                )
+            ]
+        }
+    )
+    env2 = ArtifactEnvelope.create(
+        payload=m2, artifact_type="formal_analytical_model", producer="test"
+    )
+    await store.put(env2)
+    return env2.artifact_id
+
+
+async def _verify_candidate(store, model_id, exprs):
+    """Persist a candidate for ``model_id`` and run the verifier on it."""
+    from research_harness.plugins.research.equilibrium_verifier.plugin import (
+        EquilibriumVerifierService,
+    )
+    from research_harness.research.schemas.equilibrium import (
+        EquilibriumCandidate,
+        EquilibriumExpression,
+    )
+
+    cand = EquilibriumCandidate(
+        model_id=model_id,
+        expressions=[
+            EquilibriumExpression(variable=v, expression=_expr(e))
+            for v, e in exprs
+        ],
+        decision_variables=[v for v, _e in exprs],
+        solution_method="simultaneous",
+        proposed_by="llm",
+    )
+    env = ArtifactEnvelope.create(
+        payload=cand, artifact_type="equilibrium_candidate", producer="test"
+    )
+    await store.put(env)
+    verifier = EquilibriumVerifierService(artifact_store=store)
+    v_id = await verifier.verify(env.artifact_id)
+    return (await store.get(v_id)).parse_payload(EquilibriumVerification)
+
+
+@pytest.mark.asyncio
+async def test_no_foc_evaluated_is_not_verified(tmp_path: pathlib.Path):
+    store = SQLiteArtifactStore(path=tmp_path / "art.db")
+    model_id = await _model_with_undeclared_payoff_variables(store)
+    v = await _verify_candidate(store, model_id, [("p", "a/2")])
+
+    assert v.status == VerificationStatus.failed
+    # The gap is recorded explicitly rather than silently omitted.
+    foc = [chk for chk in v.checks if chk.check_type.value == "foc_residual"]
+    assert foc, "no foc_residual check recorded at all"
+    assert not foc[-1].passed
+    assert "could be evaluated" in foc[-1].detail
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_verified_requires_real_foc_evidence(tmp_path: pathlib.Path):
+    """A candidate marked verified must carry passing FOC evidence."""
+    store = SQLiteArtifactStore(path=tmp_path / "art.db")
+    model_id = await _monopoly_model(store)
+    v = await _verify_candidate(store, model_id, [("p", "(a + c)/2")])
+
+    foc = [chk for chk in v.checks if chk.check_type.value == "foc_residual"]
+    assert foc, "expected at least one evaluated FOC"
+    if v.status == VerificationStatus.verified:
+        assert all(chk.passed for chk in foc)
+    await store.close()

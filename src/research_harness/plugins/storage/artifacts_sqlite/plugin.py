@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,17 +27,37 @@ class SQLiteArtifactStore:
     """SQLite-backed artifact store.
 
     Uses standard sqlite3, no ORM. Tables: artifacts, provenance.
+
+    Threading model
+    ---------------
+    A single connection is shared and opened with ``check_same_thread=False``,
+    so every operation is serialised through ``self._lock``. This matters
+    because most operations are read-modify-write (``put`` checks existence
+    then inserts; ``add_provenance`` validates, walks the graph, then
+    inserts): without a lock those steps interleave across threads, which
+    corrupts transactions and can report success for an artifact that was
+    never persisted.
+
+    The lock is a plain ``threading.RLock``, never an ``asyncio`` lock, so it
+    is safe from both threads and a single event loop. The invariant that
+    keeps it deadlock-free is: **no await ever happens while the lock is
+    held.** All lock-protected sections are synchronous, and the public
+    ``async`` methods perform their awaits (event publication) outside them.
     """
 
     def __init__(self, path: str | Path, events: Any | None = None) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.events = events
+        self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # Enable foreign keys and WAL for durability
         self._conn.execute("PRAGMA foreign_keys = ON;")
         self._conn.execute("PRAGMA journal_mode = WAL;")
+        # Wait rather than failing immediately when another writer holds the
+        # database lock.
+        self._conn.execute("PRAGMA busy_timeout = 5000;")
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -103,12 +125,6 @@ class SQLiteArtifactStore:
         self._conn.commit()
 
     async def put(self, envelope: ArtifactEnvelope[Any]) -> None:
-        # Immutability: reject duplicate id
-        if await self.exists(envelope.artifact_id):
-            raise ArtifactStoreError(
-                f"artifact {envelope.artifact_id!r} already exists (immutable)"
-            )
-
         # Verify content_hash matches payload (defense)
         expected = compute_content_hash(envelope.payload)  # type: ignore[arg-type]
         if envelope.content_hash != expected:
@@ -129,39 +145,46 @@ class SQLiteArtifactStore:
                 f"failed to serialize payload for {envelope.artifact_id!r}: {e}"
             ) from e
 
-        # Atomic transaction
-        try:
-            cur = self._conn.cursor()
-            cur.execute("BEGIN;")
-            cur.execute(
-                """
-                INSERT INTO artifacts (
-                    artifact_id, artifact_type, schema_version, created_at,
-                    session_id, run_id, producer, content_hash, payload_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                """,
-                (
-                    envelope.artifact_id,
-                    envelope.artifact_type,
-                    envelope.schema_version,
-                    envelope.created_at.isoformat(),
-                    envelope.session_id,
-                    envelope.run_id,
-                    envelope.producer,
-                    envelope.content_hash,
-                    payload_json,
-                    metadata_json,
-                ),
-            )
-            self._conn.commit()
-        except sqlite3.IntegrityError as e:
-            self._conn.rollback()
-            raise ArtifactStoreError(
-                f"artifact {envelope.artifact_id!r} already exists: {e}"
-            ) from e
-        except Exception:
-            self._conn.rollback()
-            raise
+        # Atomic transaction. The immutability check and the insert must be one
+        # critical section: checked separately, two writers can both observe
+        # "absent" and then both insert (or interleave their transactions).
+        with self._lock:
+            if self._exists_sync(envelope.artifact_id):
+                raise ArtifactStoreError(
+                    f"artifact {envelope.artifact_id!r} already exists (immutable)"
+                )
+            try:
+                cur = self._conn.cursor()
+                cur.execute("BEGIN IMMEDIATE;")
+                cur.execute(
+                    """
+                    INSERT INTO artifacts (
+                        artifact_id, artifact_type, schema_version, created_at,
+                        session_id, run_id, producer, content_hash, payload_json, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        envelope.artifact_id,
+                        envelope.artifact_type,
+                        envelope.schema_version,
+                        envelope.created_at.isoformat(),
+                        envelope.session_id,
+                        envelope.run_id,
+                        envelope.producer,
+                        envelope.content_hash,
+                        payload_json,
+                        metadata_json,
+                    ),
+                )
+                self._conn.commit()
+            except sqlite3.IntegrityError as e:
+                self._conn.rollback()
+                raise ArtifactStoreError(
+                    f"artifact {envelope.artifact_id!r} already exists: {e}"
+                ) from e
+            except Exception:
+                self._conn.rollback()
+                raise
 
         # Emit observable event (session trajectory)
         if self.events is not None:
@@ -189,18 +212,60 @@ class SQLiteArtifactStore:
                     "failed to emit artifact.created event for %s", envelope.artifact_id
                 )
 
-    async def get(self, artifact_id: str) -> ArtifactEnvelope[Any]:
-        cur = self._conn.cursor()
-        cur.execute("SELECT * FROM artifacts WHERE artifact_id = ?;", (artifact_id,))
-        row = cur.fetchone()
+    # ------------------------------------------------------------------
+    # Synchronous primitives. Every public operation funnels through these so
+    # that the multi-step read-modify-write sequences below can run inside a
+    # single lock acquisition without awaiting.
+    # ------------------------------------------------------------------
+
+    def _exists_sync(self, artifact_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT 1 FROM artifacts WHERE artifact_id = ? LIMIT 1;", (artifact_id,)
+                )
+                return cur.fetchone() is not None
+            finally:
+                cur.close()
+
+    def _get_sync(self, artifact_id: str) -> ArtifactEnvelope[Any]:
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute("SELECT * FROM artifacts WHERE artifact_id = ?;", (artifact_id,))
+                row = cur.fetchone()
+            finally:
+                cur.close()
         if row is None:
             raise ArtifactStoreError(f"artifact {artifact_id!r} not found")
         return self._row_to_envelope(row)
 
+    _LINK_COLUMNS: dict[str, str] = {
+        "parents": "target_artifact_id",
+        "children": "source_artifact_id",
+    }
+
+    def _links_sync(self, which: str, artifact_id: str) -> list[ProvenanceLink]:
+        # Column comes from a fixed whitelist, never from caller input.
+        column = self._LINK_COLUMNS[which]
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    f"SELECT * FROM provenance WHERE {column} = ?;",
+                    (artifact_id,),
+                )
+                rows = cur.fetchall()
+            finally:
+                cur.close()
+        return [self._row_to_link(r) for r in rows]
+
+    async def get(self, artifact_id: str) -> ArtifactEnvelope[Any]:
+        return self._get_sync(artifact_id)
+
     async def exists(self, artifact_id: str) -> bool:
-        cur = self._conn.cursor()
-        cur.execute("SELECT 1 FROM artifacts WHERE artifact_id = ? LIMIT 1;", (artifact_id,))
-        return cur.fetchone() is not None
+        return self._exists_sync(artifact_id)
 
     async def list(
         self,
@@ -230,9 +295,13 @@ class SQLiteArtifactStore:
             query += " LIMIT -1 OFFSET ?"
             params.append(offset)
 
-        cur = self._conn.cursor()
-        cur.execute(query, tuple(params))
-        rows = cur.fetchall()
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(query, tuple(params))
+                rows = cur.fetchall()
+            finally:
+                cur.close()
         return [self._row_to_envelope(r) for r in rows]
 
     async def find_by_type(self, artifact_type: str) -> list[ArtifactEnvelope[Any]]:
@@ -243,51 +312,60 @@ class SQLiteArtifactStore:
         if link.source_artifact_id == link.target_artifact_id:
             raise ArtifactStoreError("self-provenance edges are not permitted")
 
-        # Validate both artifacts exist
-        if not await self.exists(link.source_artifact_id):
-            raise ArtifactStoreError(f"source artifact {link.source_artifact_id!r} not found")
-        if not await self.exists(link.target_artifact_id):
-            raise ArtifactStoreError(f"target artifact {link.target_artifact_id!r} not found")
-
-        # Cycle detection for lineage relations
-        if link.relation in (
-            ProvenanceRelation.derived_from,
-            ProvenanceRelation.extracted_from,
-            ProvenanceRelation.generated_from,
-            ProvenanceRelation.supersedes,
-        ):
-            if await self._would_create_cycle(link.source_artifact_id, link.target_artifact_id):
+        # Validate existence and run cycle detection inside the same critical
+        # section as the insert: validated separately, two writers can both
+        # pass the checks and then insert a cycle.
+        with self._lock:
+            if not self._exists_sync(link.source_artifact_id):
                 raise ArtifactStoreError(
-                    f"adding provenance {link.relation.value} {link.source_artifact_id!r} -> {link.target_artifact_id!r} would create cycle"
+                    f"source artifact {link.source_artifact_id!r} not found"
+                )
+            if not self._exists_sync(link.target_artifact_id):
+                raise ArtifactStoreError(
+                    f"target artifact {link.target_artifact_id!r} not found"
                 )
 
-        try:
-            cur = self._conn.cursor()
-            cur.execute("BEGIN;")
-            cur.execute(
-                """
-                INSERT INTO provenance (
-                    source_artifact_id, target_artifact_id, relation, created_at, producer, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?);
-                """,
-                (
-                    link.source_artifact_id,
-                    link.target_artifact_id,
-                    link.relation.value,
-                    link.created_at.isoformat(),
-                    link.producer,
-                    json.dumps(link.metadata, ensure_ascii=False, sort_keys=True),
-                ),
-            )
-            self._conn.commit()
-        except sqlite3.IntegrityError as e:
-            self._conn.rollback()
-            raise ArtifactStoreError(
-                f"provenance edge already exists or constraint violation: {e}"
-            ) from e
-        except Exception:
-            self._conn.rollback()
-            raise
+            # Cycle detection for lineage relations
+            if link.relation in (
+                ProvenanceRelation.derived_from,
+                ProvenanceRelation.extracted_from,
+                ProvenanceRelation.generated_from,
+                ProvenanceRelation.supersedes,
+            ):
+                if self._would_create_cycle_sync(
+                    link.source_artifact_id, link.target_artifact_id
+                ):
+                    raise ArtifactStoreError(
+                        f"adding provenance {link.relation.value} {link.source_artifact_id!r} -> {link.target_artifact_id!r} would create cycle"
+                    )
+
+            try:
+                cur = self._conn.cursor()
+                cur.execute("BEGIN IMMEDIATE;")
+                cur.execute(
+                    """
+                    INSERT INTO provenance (
+                        source_artifact_id, target_artifact_id, relation, created_at, producer, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        link.source_artifact_id,
+                        link.target_artifact_id,
+                        link.relation.value,
+                        link.created_at.isoformat(),
+                        link.producer,
+                        json.dumps(link.metadata, ensure_ascii=False, sort_keys=True),
+                    ),
+                )
+                self._conn.commit()
+            except sqlite3.IntegrityError as e:
+                self._conn.rollback()
+                raise ArtifactStoreError(
+                    f"provenance edge already exists or constraint violation: {e}"
+                ) from e
+            except Exception:
+                self._conn.rollback()
+                raise
 
         if self.events is not None:
             try:
@@ -315,16 +393,10 @@ class SQLiteArtifactStore:
                 )
 
     async def get_parents(self, artifact_id: str) -> list[ProvenanceLink]:
-        cur = self._conn.cursor()
-        cur.execute("SELECT * FROM provenance WHERE target_artifact_id = ?;", (artifact_id,))
-        rows = cur.fetchall()
-        return [self._row_to_link(r) for r in rows]
+        return self._links_sync("parents", artifact_id)
 
     async def get_children(self, artifact_id: str) -> list[ProvenanceLink]:
-        cur = self._conn.cursor()
-        cur.execute("SELECT * FROM provenance WHERE source_artifact_id = ?;", (artifact_id,))
-        rows = cur.fetchall()
-        return [self._row_to_link(r) for r in rows]
+        return self._links_sync("children", artifact_id)
 
     async def get_provenance(
         self, artifact_id: str
@@ -336,49 +408,54 @@ class SQLiteArtifactStore:
     async def get_lineage(
         self, artifact_id: str, direction: str = "ancestors"
     ) -> list[ArtifactEnvelope[Any]]:
-        # Walk ancestors or descendants transitively (BFS, closest first)
-        visited: set[str] = set()
-        queue: list[str] = [artifact_id]
-        result: list[ArtifactEnvelope[Any]] = []
-        # Don't include the starting artifact itself in result, only lineage
-        visited.add(artifact_id)
-        # BFS
-        while queue:
-            current = queue.pop(0)
-            if direction == "ancestors":
-                links = await self.get_parents(current)
-                # parents are sources where current is target
-                next_ids = [link.source_artifact_id for link in links]
-            elif direction == "descendants":
-                links = await self.get_children(current)
-                next_ids = [link.target_artifact_id for link in links]
-            else:
-                raise ArtifactStoreError(
-                    f"unknown direction {direction!r}, use ancestors/descendants"
-                )
-            for nid in next_ids:
-                if nid not in visited:
+        if direction not in ("ancestors", "descendants"):
+            raise ArtifactStoreError(
+                f"unknown direction {direction!r}, use ancestors/descendants"
+            )
+        # Walk ancestors or descendants transitively (BFS, closest first).
+        # Held under the lock for the whole traversal so the graph cannot
+        # change underneath and yield a half-updated lineage.
+        with self._lock:
+            visited: set[str] = {artifact_id}
+            queue: deque[str] = deque([artifact_id])
+            result: list[ArtifactEnvelope[Any]] = []
+            # Don't include the starting artifact itself in result, only lineage
+            while queue:
+                current = queue.popleft()
+                if direction == "ancestors":
+                    # parents are sources where current is target
+                    links = self._links_sync("parents", current)
+                    next_ids = [link.source_artifact_id for link in links]
+                else:
+                    links = self._links_sync("children", current)
+                    next_ids = [link.target_artifact_id for link in links]
+                for nid in next_ids:
+                    if nid in visited:
+                        continue
                     visited.add(nid)
                     try:
-                        env = await self.get(nid)
-                        result.append(env)
+                        result.append(self._get_sync(nid))
                     except ArtifactStoreError:
                         # Should not happen as we validated existence, but skip
                         continue
                     queue.append(nid)
-        return result
+            return result
 
-    async def _would_create_cycle(self, source_id: str, target_id: str) -> bool:
+    def _would_create_cycle_sync(self, source_id: str, target_id: str) -> bool:
+        """True if adding source->target would close a cycle.
+
+        Callers must already hold ``self._lock`` (or be inside a critical
+        section): the BFS must see a stable graph, otherwise two concurrent
+        inserts can each miss the other's edge and create a cycle.
+        """
         # Check if target can reach source via existing edges (then adding source->target would cycle)
         # Perform BFS from target following children edges (outgoing)
-        visited: set[str] = set()
-        queue: list[str] = [target_id]
-        visited.add(target_id)
+        visited: set[str] = {target_id}
+        queue: deque[str] = deque([target_id])
         while queue:
-            cur = queue.pop(0)
+            cur = queue.popleft()
             # Get children of cur (where cur is source)
-            cur_children = await self.get_children(cur)
-            for link in cur_children:
+            for link in self._links_sync("children", cur):
                 nxt = link.target_artifact_id
                 if nxt == source_id:
                     return True
@@ -435,10 +512,11 @@ class SQLiteArtifactStore:
         )
 
     async def close(self) -> None:
-        try:
-            self._conn.close()
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                self._conn.close()
+            except Exception:
+                logger.exception("error closing artifact store connection")
 
 
 class ArtifactsSqlitePlugin(Plugin):
