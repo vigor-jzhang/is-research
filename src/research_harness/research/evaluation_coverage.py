@@ -30,7 +30,16 @@ COVERAGE_MATRIX: tuple[CoverageRow, ...] = (
         phase="5A/5B",
         benchmark="novelty-threat-v1",
         evaluator="evaluator.deterministic",
-        metrics=("pass_rate", "deterministic_gate_failures"),
+        # Must match the metric ids the evaluator actually emits; stale rows
+        # mislead operators about what a benchmark measures.
+        metrics=(
+            "candidate_relationship_accuracy",
+            "claim_status_accuracy",
+            "report_status_accuracy",
+            "false_clear_count",
+            "false_clear_rate",
+            "false_threat_count",
+        ),
         gating="deterministic",
         edge_cases=("documented limitation claims", "reviewed-corpus-bounded claims"),
         gaps=("novelty revalidation across changing literature is benchmarked standalone (7A.1)",),

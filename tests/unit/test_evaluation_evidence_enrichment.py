@@ -278,3 +278,78 @@ async def test_source_preserved_when_expected():
     )
     result = await EvidenceEnrichmentEvaluator().evaluate(_ctx(_case(ref), produced))
     assert result.status == EvaluatorStatus.passed
+
+
+# --- regression: stale_reuse_rate and provenance_version_accuracy ---------
+#
+# ``stale_reuse_rate`` used ``max(stale, 1)`` as its denominator, so it was
+# always exactly 0.0 or 1.0 -- a boolean dressed as a rate, useless for
+# trending. ``provenance_version_accuracy`` was a copy of
+# grounding_hits/grounding_total, so the declared check ("execution -> plan ->
+# identity links hold") was never actually performed.
+
+
+async def test_stale_reuse_rate_is_a_proportion_not_a_flag():
+    """2 of 3 enrichments in the second run are stale -> 2/3, not 1.0."""
+    ref = {
+        "expected_run_count": 2,
+        "expected_outcomes": ["enriched", "enriched", "enriched"],
+    }
+    produced = [
+        _report(
+            [
+                {"label": "baseline", "execution_ids": ["e1", "e2", "e3"]},
+                {"label": "changed", "execution_ids": ["e1", "e2", "e4"]},
+            ]
+        ),
+    ]
+    result = await EvidenceEnrichmentEvaluator().evaluate(_ctx(_case(ref), produced))
+
+    rate = result.value["dimension_scores"]["stale_reuse_rate"]
+    # e1 and e2 are reused from the baseline; e4 is new -> 2 of 3 eligible.
+    assert rate == 2 / 3, f"stale_reuse_rate was {rate}, expected 2/3"
+
+
+async def test_stale_reuse_rate_is_zero_when_nothing_is_reused():
+    ref = {
+        "expected_run_count": 2,
+        "expected_outcomes": ["enriched", "enriched"],
+    }
+    produced = [
+        _report(
+            [
+                {"label": "baseline", "execution_ids": ["e1"]},
+                {"label": "changed", "execution_ids": ["e2"]},
+            ]
+        ),
+    ]
+    result = await EvidenceEnrichmentEvaluator().evaluate(_ctx(_case(ref), produced))
+    assert result.value["dimension_scores"]["stale_reuse_rate"] == 0.0
+
+
+async def test_provenance_metric_is_not_a_copy_of_grounding():
+    """provenance_version_accuracy must measure provenance, not grounding."""
+    ref = {
+        "expected_run_count": 1,
+        "expected_outcomes": ["enriched"],
+        "expected_grounded": True,
+    }
+    produced = [
+        _report([{"label": "baseline", "execution_ids": ["e1"]}]),
+        _execution(eid="e1", outcome=EnrichmentOutcome.enriched, plan_id="plan-1"),
+        _plan(pid="plan-1"),
+    ]
+    # No provenance supplied, so the provenance check reports "not measured"
+    # instead of silently reusing the grounding figure.
+    result = await EvidenceEnrichmentEvaluator().evaluate(_ctx(_case(ref), produced))
+
+    metrics = result.value["metrics"]
+    grounding = metrics["enrichment_grounding_accuracy"]
+    provenance = metrics["provenance_version_accuracy"]
+
+    # Grounding was measured here; provenance had no links to measure.
+    assert grounding["count"] > 0
+    assert provenance["count"] == 0, "provenance claimed a measurement without any links"
+    assert provenance["value"] != grounding["value"] or (
+        provenance["count"] != grounding["count"]
+    )

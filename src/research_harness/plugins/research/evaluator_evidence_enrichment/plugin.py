@@ -54,6 +54,11 @@ class EvidenceEnrichmentEvaluator:
         runs = list(report.get("runs") or [])
         by_id = {e.artifact_id: e for e in ctx.produced_artifacts}
         provenance = ctx.provenance or {}
+        # Counted separately from grounding: provenance_version_accuracy used to
+        # be a copy of grounding_hits/grounding_total, so the declared check
+        # ("execution -> plan -> identity links hold") was never performed.
+        provenance_total = 0
+        provenance_hits = 0
 
         def _parents(aid: str) -> set[str]:
             return {str(getattr(p, "source_artifact_id", "")) for p in provenance.get(aid, [])}
@@ -112,6 +117,26 @@ class EvidenceEnrichmentEvaluator:
                 attempt_ids = [str(x) for x in (execution.get("attempt_ids") or [])]
                 result_ids = [str(x) for x in (execution.get("resulting_evidence_ids") or [])]
                 run_attempt_ids.extend(attempt_ids)
+
+                # provenance chain: execution -> plan -> paper identity. Only
+                # measured when provenance links were supplied for this
+                # execution, so a context without provenance reports "not
+                # measured" rather than a false zero.
+                if plan_id and plan_id in by_id and _parents(eid):
+                    provenance_total += 1
+                    linked = plan_id in _parents(eid)
+                    plan_identity_id = str(
+                        envelope_payload_dict(by_id[plan_id]).get("paper_identity_id") or ""
+                    )
+                    if (
+                        linked
+                        and plan_identity_id
+                        and plan_identity_id in by_id
+                        and _parents(plan_id)
+                    ):
+                        linked = plan_identity_id in _parents(plan_id)
+                    if linked:
+                        provenance_hits += 1
 
                 outcome_total += 1
                 if expected_outcome is None or outcome == expected_outcome:
@@ -244,11 +269,19 @@ class EvidenceEnrichmentEvaluator:
                 failures.append("SOURCE PRESERVATION: no paper records produced")
 
         # ---- stale reuse across runs ----------------------------------------
+        # ``stale`` counts executions reused across runs; ``reuse_checked``
+        # counts how many executions were *eligible* to be stale, so the rate
+        # is an actual proportion. Using ``max(stale, 1)`` as the denominator
+        # made the value always 0.0 or 1.0 -- a boolean dressed as a rate.
         stale = 0
+        reuse_checked = 0
         if len(runs) > 1:
             seen: set[str] = set()
-            for run in runs:
+            for idx, run in enumerate(runs):
                 ids = {str(x) for x in (run.get("enrichment_execution_ids") or [])}
+                if idx > 0:
+                    # Only executions compared against an earlier run can be stale.
+                    reuse_checked += len(ids)
                 overlap = ids & seen
                 if overlap:
                     stale += len(overlap)
@@ -260,7 +293,9 @@ class EvidenceEnrichmentEvaluator:
             a = {str(x) for x in (runs[0].get("enrichment_execution_ids") or [])}
             b = {str(x) for x in (runs[1].get("enrichment_execution_ids") or [])}
             if a & b:
-                stale += len(a & b)
+                # Deliberately does not increment ``stale``: the loop above has
+                # already counted this overlap, and counting it twice inflated
+                # the metric.
                 failures.append(
                     f"STALE REUSE: changed source set reused {len(a & b)} enrichment execution(s)"
                 )
@@ -309,9 +344,10 @@ class EvidenceEnrichmentEvaluator:
             "stale_reuse_rate": _metric(
                 "stale_reuse_rate",
                 float(stale),
-                max(stale, 1),
+                reuse_checked,
                 "rate",
-                "enrichment executions reused across a changed source set",
+                "share of enrichments eligible for cross-run comparison that were "
+                "stale (reused from an earlier run)",
             ),
             "preacquisition_accuracy": _metric(
                 "preacquisition_accuracy",
@@ -326,10 +362,10 @@ class EvidenceEnrichmentEvaluator:
             ),
             "provenance_version_accuracy": _metric(
                 "provenance_version_accuracy",
-                float(grounding_hits),
-                grounding_total,
+                float(provenance_hits),
+                provenance_total,
                 "rate",
-                "enrichment execution/plan/attempt provenance links hold",
+                "enrichment execution -> plan -> paper identity provenance links hold",
             ),
         }
 
@@ -357,7 +393,7 @@ class EvidenceEnrichmentEvaluator:
                     "unsupported_rejection_accuracy": (
                         1.0 if (not expected_no_invented or invented_items == 0) else 0.0
                     ),
-                    "stale_reuse_rate": float(stale / max(stale, 1)) if stale else 0.0,
+                    "stale_reuse_rate": (stale / reuse_checked) if reuse_checked else 0.0,
                     "preacquisition_accuracy": (
                         1.0
                         if (not expected_preacquisition)
@@ -368,7 +404,7 @@ class EvidenceEnrichmentEvaluator:
                         )
                     ),
                     "provenance_version_accuracy": (
-                        (grounding_hits / grounding_total) if grounding_total else 0.0
+                        (provenance_hits / provenance_total) if provenance_total else 0.0
                     ),
                 },
             },

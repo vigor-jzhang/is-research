@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -73,6 +74,8 @@ from research_harness.research.schemas.evaluation import (
 )
 
 _PRODUCER = "research.evaluation_harness"
+
+logger = logging.getLogger(__name__)
 
 
 def _definition_hash(payload: Any) -> str:
@@ -311,6 +314,25 @@ class EvaluationHarnessService:
             )
             case_result_ids.append(cr_id)
             case_results.append(case_result)
+
+            # ``failures`` is meant to be the run's error inventory, but only
+            # the hard case-run exception path ever appended to it. An
+            # evaluator that raised was converted to a status=error result and
+            # recorded nowhere, so metadata["failures"] == [] while cases
+            # carried errors -- operators read emptiness as "nothing went
+            # wrong".
+            for r in results:
+                if r.status == EvaluatorStatus.error:
+                    failures.append(
+                        f"{cid}: evaluator {r.evaluator_id} errored: {r.explanation}"
+                    )
+            if case_result.status == EvaluationCaseStatus.error and case_result.error:
+                failures.append(f"{cid}: {case_result.error}")
+            elif workflow_error:
+                # Non-fatal workflow error: the case may still be scored
+                # correctly (a refused-but-correct run), but it is still an
+                # error the operator should see.
+                failures.append(f"{cid}: workflow reported an error: {workflow_error}")
 
         latency_ms = max(0, int((datetime.now(UTC) - started).total_seconds() * 1000))
         report = await self._aggregate_report(
@@ -790,11 +812,19 @@ class EvaluationHarnessService:
         false_clear = 0
         false_threat = 0
         evaluator_errors = 0
+        aggregation_errors = 0
         for cr in case_results:
             for rid in cr.evaluator_result_ids:
                 try:
                     env = await self._store.get(rid)
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    # A transient store failure used to be dropped silently,
+                    # quietly shrinking every metric denominator with no signal
+                    # in the report. Count it so the aggregates can be judged.
+                    aggregation_errors += 1
+                    logger.warning(
+                        "could not read evaluator result %s while aggregating: %s", rid, e
+                    )
                     continue
                 result = env.parse_payload(EvaluatorResult)
                 if result.status == EvaluatorStatus.error:
@@ -826,11 +856,18 @@ class EvaluationHarnessService:
         for metric_id in sorted(accum):
             acc = accum[metric_id]
             kind = _KINDS.get(acc["kind"], EvaluationMetricKind.quantity)
-            value = (
-                _rate(acc["value"], acc["count"])
-                if kind in (EvaluationMetricKind.rate, EvaluationMetricKind.score) and acc["count"]
-                else acc["value"]
+            proportional = kind in (
+                EvaluationMetricKind.rate,
+                EvaluationMetricKind.score,
             )
+            if proportional and acc["count"]:
+                value = _rate(acc["value"], acc["count"])
+                measured = True
+            else:
+                value = acc["value"]
+                # A rate/score with no denominator is a raw numerator, not a
+                # proportion: flag it so a 0.0 is not read as "0% measured".
+                measured = not proportional
             metrics.append(
                 EvaluationMetric(
                     metric_id=metric_id,
@@ -839,6 +876,7 @@ class EvaluationHarnessService:
                     value=value,
                     count=acc["count"],
                     definition=acc["definition"],
+                    measured=measured,
                 )
             )
         metrics.extend(
@@ -908,7 +946,23 @@ class EvaluationHarnessService:
             execution_latency_ms=latency_ms,
             evaluator_versions=evaluator_versions,
             model_roles=model_roles,
-            metadata={"token_usage": token_usage, "failures": failures},
+            metadata={
+                "token_usage": token_usage,
+                "failures": failures,
+                # A case can legitimately be scored as passed while still
+                # carrying an error string (the workflow reported a failure
+                # that is itself the correct behaviour, e.g. a refused
+                # manuscript). Counted here so ``cases_passed`` is not read as
+                # "cases with no error".
+                "workflow_error_count": sum(
+                    1
+                    for c in case_results
+                    if c.error and c.status == EvaluationCaseStatus.passed
+                ),
+                # Non-zero means some metric denominators are smaller than
+                # they should be, so the aggregates understate coverage.
+                "aggregation_error_count": aggregation_errors,
+            },
         )
 
     # ------------------------------------------------------------------

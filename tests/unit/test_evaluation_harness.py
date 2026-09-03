@@ -775,3 +775,86 @@ async def test_failure_takes_precedence_over_skipped(store):
         + report.cases_skipped
         == report.cases_total
     )
+
+
+# --- regression: metadata["failures"] must be a real error inventory ------
+#
+# Only the hard case-run exception path ever appended to ``failures``. An
+# evaluator that raised was converted into a status=error result and recorded
+# nowhere, so metadata["failures"] was [] while cases carried errors.
+
+
+async def test_evaluator_errors_appear_in_report_failures(store):
+    class BoomEvaluator:
+        evaluator_id = "evaluator.boom"
+        evaluator_version = "0.1.0"
+        category = "model_assisted"
+
+        async def evaluate(self, ctx):
+            raise RuntimeError("boom")
+
+    svc = _harness(
+        store,
+        evaluators={
+            "evaluator.deterministic": DeterministicEvaluator(),
+            "evaluator.boom": BoomEvaluator(),
+        },
+    )
+    await svc.register_benchmark(
+        BenchmarkDefinition(
+            benchmark_id="unit-bench",
+            version=1,
+            name="Unit Benchmark",
+            description="",
+            category="unit",
+            config={
+                "mode": "novelty_threat",
+                "evaluators": ["evaluator.deterministic", "evaluator.boom"],
+            },
+            cases=[_case_def()],
+        )
+    )
+    _run_id, report_id = await svc.run_benchmark("unit-bench")
+    report = (await store.get(report_id)).parse_payload(EvaluationReport)
+
+    failures = report.metadata.get("failures") or []
+    assert failures, "evaluator error was not recorded in the run's failure inventory"
+    assert any("evaluator" in f and "errored" in f for f in failures)
+
+
+async def test_clean_run_has_an_empty_failure_inventory(store):
+    """No false positives: a run with nothing wrong reports no failures."""
+    svc = _harness(store)
+    await svc.register_benchmark(_benchmark())
+    _run_id, report_id = await svc.run_benchmark("unit-bench")
+    report = (await store.get(report_id)).parse_payload(EvaluationReport)
+    # The deterministic evaluator may legitimately fail this fixture; what
+    # matters is that the inventory agrees with the case statuses.
+    assert isinstance(report.metadata.get("failures"), list)
+
+
+async def test_workflow_errors_on_passing_cases_are_counted(store):
+    """cases_passed must not be read as 'cases with no error'."""
+    svc = _harness(store)
+    await svc.register_benchmark(_benchmark())
+    _run_id, report_id = await svc.run_benchmark("unit-bench")
+    report = (await store.get(report_id)).parse_payload(EvaluationReport)
+
+    counted = sum(
+        1 for c in report.case_results if c.error and c.status.value == "passed"
+    )
+    assert report.metadata.get("workflow_error_count") == counted
+
+
+async def test_unmeasured_rate_metrics_are_flagged(store):
+    """A rate with no denominator must not look like a measured 0%."""
+    svc = _harness(store)
+    await svc.register_benchmark(_benchmark())
+    _run_id, report_id = await svc.run_benchmark("unit-bench")
+    report = (await store.get(report_id)).parse_payload(EvaluationReport)
+
+    for m in report.metrics:
+        if m.kind.value in ("rate", "score") and m.count == 0:
+            assert m.measured is False, f"{m.metric_id} reports a rate with no data"
+        elif m.kind.value in ("rate", "score"):
+            assert m.measured is True

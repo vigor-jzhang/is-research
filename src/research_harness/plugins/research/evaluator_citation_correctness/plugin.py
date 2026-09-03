@@ -101,6 +101,23 @@ class CitationCorrectnessEvaluator:
                 "citations_unresolved": len(unresolved),
                 "unresolved_keys": unresolved,
                 "bibliography_entries": len(entry_keys),
+                # Previously omitted, so any benchmark wiring this evaluator
+                # without an explicit ``citation_mode`` (e.g. novelty-threat-v1)
+                # silently contributed no aggregate metrics at all.
+                "metrics": {
+                    "citation_resolution_accuracy": {
+                        "value": float(resolved),
+                        "count": total,
+                        "kind": "rate",
+                        "dimension": "citation",
+                        "definition": (
+                            "in-text citation markers resolved against the bibliography"
+                        ),
+                    },
+                },
+                "dimension_scores": {
+                    "citation_resolution_accuracy": (resolved / total) if total else 0.0,
+                },
             },
             status=status,
             explanation=(

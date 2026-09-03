@@ -354,3 +354,54 @@ async def test_inline_rendering_check():
     result = await CitationCorrectnessEvaluator().evaluate(_ctx(case, papers + [ms]))
     assert result.status == EvaluatorStatus.passed
     assert result.value["inline_matches"] == 1
+
+
+# --- regression: placeholder_check mode must contribute metrics -----------
+#
+# ``_placeholder_check`` returned a value dict with no ``metrics`` and no
+# ``dimension_scores``. Because the harness only aggregates metrics from
+# deterministic evaluators, any benchmark wiring this evaluator without an
+# explicit ``citation_mode`` (it defaults to placeholder_check, e.g.
+# novelty-threat-v1) silently contributed nothing to the report.
+
+
+def _ctx_default_mode(case: BenchmarkCase, produced: list) -> EvaluatorContext:
+    """No citation_mode -> placeholder_check, as novelty-threat-v1 does."""
+    return EvaluatorContext(
+        case=case,
+        case_envelope=ArtifactEnvelope.create(
+            payload=case, artifact_type="benchmark_case", producer="test"
+        ),
+        produced_artifacts=produced,
+        config={},
+    )
+
+
+async def test_placeholder_check_emits_metrics():
+    ms = _manuscript(
+        ["Prior work [CITE:c1] studies welfare."],
+        {"c1": "identity-a"},
+        [_entry("identity-a", ["c1"])],
+    )
+    result = await CitationCorrectnessEvaluator().evaluate(
+        _ctx_default_mode(_case({}), [ms])
+    )
+
+    value = result.value or {}
+    assert value.get("metrics"), "placeholder_check produced no aggregate metrics"
+    metric = value["metrics"]["citation_resolution_accuracy"]
+    assert metric["count"] == 1
+    assert metric["value"] == 1.0
+    assert "citation_resolution_accuracy" in (value.get("dimension_scores") or {})
+
+
+async def test_placeholder_check_metrics_reflect_unresolved_citations():
+    # Marker with no matching bibliography entry.
+    ms = _manuscript(["Prior work [CITE:missing] studies welfare."], {}, [])
+    result = await CitationCorrectnessEvaluator().evaluate(
+        _ctx_default_mode(_case({}), [ms])
+    )
+
+    metric = result.value["metrics"]["citation_resolution_accuracy"]
+    assert metric["count"] == 1
+    assert metric["value"] == 0.0

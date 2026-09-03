@@ -68,15 +68,24 @@ in the working tree, uncommitted.
 | **M6** evidence fails without a blob store | **Fixed** (round 4) | `evaluator_evidence` |
 | **M7** corpus checks skipped on empty corpus | **Fixed** (round 4) | `evaluator_document_acquisition` |
 | **M14/M15/M16** trivial defects | **Fixed** (round 4) | `evaluation_harness`, `benchmarks`, `evaluation_readiness` |
+| **M1** `failures` not an error inventory | **Fixed** (round 5) | `evaluation_harness/plugin.py` |
+| **M2** case `passed` while carrying an error | **Fixed** (round 5) | `evaluation_harness/plugin.py` |
+| **M3** `stale_reuse_rate` is a boolean, not a rate | **Fixed** (round 5) | `evaluator_evidence_enrichment` |
+| **M4** `provenance_version_accuracy` duplicated another metric | **Fixed** (round 5) | `evaluator_evidence_enrichment` |
+| **M9** `placeholder_check` emits no metrics | **Fixed** (round 5) | `evaluator_citation_correctness` |
+| **M10** sanity evaluator emits no metrics | **Fixed** (round 5) | `evaluator_sanity` |
+| **M11** stale coverage-matrix metric row | **Fixed** (round 5) | `evaluation_coverage.py` |
+| **M12** rate metrics change meaning at `count == 0` | **Fixed** (round 5) | `schemas/evaluation.py` + harness |
+| **M13** store read failures shrink denominators | **Fixed** (round 5) | `evaluation_harness/plugin.py` |
 | The remaining H/M/L backlog | **Not started** | — |
 
-**Post-fix verification (after round 4):**
+**Post-fix verification (after round 5):**
 
 | Check | Before | After |
 |---|---|---|
 | `ruff check src tests` | Pass | **Pass** |
 | `pyright` | 705 (misleading) | **0 errors** |
-| `pytest tests/unit tests/integration` | 961 passed, **1 failed** | **1094 passed, 0 failed** |
+| `pytest tests/unit tests/integration` | 961 passed, **1 failed** | **1107 passed, 0 failed** |
 
 All eight critical findings (C1–C8) are addressed as of round 3. Round 4 targeted the
 contained fail-open cluster in the evaluators.
@@ -208,6 +217,41 @@ of — 67 `role_leaderboard` (ranked with the inverted comparator), 40
 `novelty_validation_report`, 26 `submission_readiness_gate`, 14 `routing_decision`. It
 should be archived or re-derived before those results are trusted.
 
+### Round 5 notes
+
+- **M1.** `metadata["failures"]` is meant to be the run's error inventory, but only the
+  hard `_run_case` exception path appended to it. An evaluator that raised was converted
+  into a `status=error` result and recorded nowhere, so `failures` was `[]` while cases
+  carried errors — operators read emptiness as "nothing went wrong". Evaluator errors,
+  case errors and workflow errors are now all recorded.
+- **M2.** `case_result.error` is written but never read anywhere in `src/`, so this was a
+  *visibility* problem rather than a logic bug. A case can legitimately be `passed` while
+  carrying an error (the workflow reported a failure that is itself the correct
+  behaviour). Added `workflow_error_count` to the report metadata so `cases_passed` is not
+  misread as "cases with no error".
+- **M3.** `stale_reuse_rate` used `max(stale, 1)` as its denominator, so it was always
+  exactly 0.0 or 1.0 — a boolean dressed as a rate. Now `stale / reuse_checked`, where
+  `reuse_checked` counts executions actually eligible to be stale. Also removed a
+  double-count: the `expected_executions_differ` branch re-added an overlap the loop had
+  already counted.
+- **M4.** `provenance_version_accuracy` was a copy of `grounding_hits/grounding_total`, so
+  the declared check ("execution → plan → identity links hold") was never performed. It now
+  measures the provenance chain, and — like the existing defensive checks — reports
+  *not measured* (count 0) when no provenance links were supplied, rather than a false zero.
+- **M9/M10.** Both evaluators returned value dicts with no `metrics`. Because the harness
+  only aggregates metrics from deterministic evaluators, benchmarks wiring them silently
+  contributed nothing (e.g. `novelty-threat-v1` wires `evaluator.citation_correctness`
+  without a `citation_mode`, so it defaults to `placeholder_check`). Both now emit metrics.
+  Note M9's second half was *not* applied: switching `novelty-threat-v1` to
+  `manuscript_citation` is a behavioural change, and emitting metrics from
+  `placeholder_check` makes that unnecessary.
+- **M11.** The `novelty-threat-v1` coverage row declared `("pass_rate",
+  "deterministic_gate_failures")`; the evaluator actually emits six unrelated ids. Corrected.
+  Nothing validates the matrix against evaluator output — a test doing so remains a gap.
+- **M12.** Added `measured: bool` to `EvaluationMetric` (default `True`, so existing
+  artifacts and callers are unaffected). A rate/score with no denominator now reports
+  `measured=False` instead of a `0.0` that is indistinguishable from a measured 0%.
+
 ### Verification that the new tests are genuine regression tests
 
 Each new test was confirmed to **fail** against the pre-fix code and **pass** after:
@@ -228,6 +272,10 @@ Each new test was confirmed to **fail** against the pre-fix code and **pass** af
 | `test_evaluation_comparative_statics.py` (2 new, M5) | 2 failed | 15 pass |
 | `test_evaluation_evidence.py` (3 new, M6) | 1 failed | 14 pass |
 | `test_evaluation_document_acquisition.py` (2 new, M7) | 1 failed | 9 pass |
+| `test_evaluation_harness.py` (4 new, M1/M2/M12) | 3 failed | 22 pass |
+| `test_evaluation_evidence_enrichment.py` (3 new, M3/M4) | 2 failed | 10 pass |
+| `test_evaluation_citation.py` (2 new, M9) | 2 failed | 12 pass |
+| `test_evaluation_sanity.py` (4 new, M10) | 3 failed | 4 pass |
 
 > The H1 row is the interesting one: reverting the fix produces **3** failures at
 > `PYTHONHASHSEED` 1/2/3/5 but only **2** at seed 4 — the nondeterminism is visible

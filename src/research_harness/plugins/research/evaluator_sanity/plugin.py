@@ -118,6 +118,40 @@ class EvaluatorSanityEvaluator:
         ):
             failures.append("provider-error case (no artifacts) must never pass the evaluator")
 
+        # This evaluator is deterministic, so the harness aggregates its
+        # metric contributions -- but it previously emitted none, so the
+        # benchmark reported only case_pass_rate and none of the declared
+        # dimensions.
+        metrics: dict[str, dict[str, Any]] = {
+            "evaluator_verdict_accuracy": {
+                "value": 0.0 if got_status != expected_status else 1.0,
+                "count": 1,
+                "kind": "rate",
+                "dimension": "evaluator_sanity",
+                "definition": (
+                    "the target evaluator's verdict matched the expected verdict"
+                ),
+            },
+        }
+        if expected_diagnostics:
+            metrics["task_diagnostics_accuracy"] = {
+                "value": float(len(expected_diagnostics) - len(missing_diag)),
+                "count": len(expected_diagnostics),
+                "kind": "rate",
+                "dimension": "evaluator_sanity",
+                "definition": "expected task diagnostics were populated",
+            }
+        if reference.get("expect_provider_not_success"):
+            metrics["provider_error_safety"] = {
+                "value": 0.0 if got_status == EvaluatorStatus.passed.value else 1.0,
+                "count": 1,
+                "kind": "rate",
+                "dimension": "evaluator_sanity",
+                "definition": (
+                    "a provider-error case (no artifacts) never passes the evaluator"
+                ),
+            }
+
         result_status = EvaluatorStatus.failed if failures else EvaluatorStatus.passed
         return EvaluatorResult(
             case_id=ctx.case.id,
@@ -132,6 +166,13 @@ class EvaluatorSanityEvaluator:
                 "expected_status": expected_status,
                 "target_explanation": target_result.explanation,
                 "task_diagnostics": diag,
+                "metrics": metrics,
+                "dimension_scores": {
+                    metric_id: (
+                        (spec["value"] / spec["count"]) if spec["count"] else 0.0
+                    )
+                    for metric_id, spec in metrics.items()
+                },
             },
             status=result_status,
             explanation="; ".join(failures) if failures else "evaluator sanity checks matched",

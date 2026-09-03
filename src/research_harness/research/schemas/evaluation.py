@@ -171,6 +171,10 @@ class EvaluationMetric(BaseModel):
     value: float
     count: int = Field(default=0, description="Denominator / sample size")
     definition: str = ""
+    # False when a rate/score metric had no denominator to divide by, so its
+    # value is a raw numerator rather than a proportion. Distinguishes
+    # "measured 0%" from "never measured" -- both otherwise look like 0.0.
+    measured: bool = Field(default=True)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"extra": "forbid"}
