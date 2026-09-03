@@ -17,6 +17,13 @@ venv/
 # Research sessions (JSONL append-only)
 .research/
 
+# Archived run state from before the round 1-5 semantic fixes. Computed under
+# semantics those rounds proved wrong (inverted comparator, errored cases
+# dropped from denominators), so it must not be read as current. Keep ignored:
+# it is ~30MB of SQLite. Point config.artifacts.path at it to inspect.
+# See docs/CODE_REVIEW_2026-08-29.md section 1.2.
+.research-pre-round5/
+
 # IDE
 .idea/
 .vscode/

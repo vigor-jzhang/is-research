@@ -217,6 +217,26 @@ of — 67 `role_leaderboard` (ranked with the inverted comparator), 40
 `novelty_validation_report`, 26 `submission_readiness_gate`, 14 `routing_decision`. It
 should be archived or re-derived before those results are trusted.
 
+**Resolved 2026-09-03 (archived, not re-derived).** `.research/` was the *default* live
+store (`config/schema.py:58`), so this was not idle scratch data: new runs appended to
+the same database alongside pre-fix artifacts. The directory was moved to
+`.research-pre-round5/` (30 MB, 9,053 artifacts), and `.gitignore` gained a matching
+entry — without it the archive would have shown up as untracked and a `git add -A`
+would have swept 30 MB of SQLite into the repository. The default path was confirmed to
+recreate itself on demand (`artifacts_sqlite/plugin.py:50` runs
+`path.parent.mkdir(parents=True, exist_ok=True)`), and now holds an empty schema with 0
+artifacts.
+
+The archive is retained read-only and remains inspectable by pointing
+`config.artifacts.path` at `.research-pre-round5/artifacts.db`. **H2/H4/H5 are now
+unblocked.** Re-derivation (option c) was deliberately deferred: `role_leaderboard` and
+`qualification_campaign` come from `evaluation_model_tournament` and
+`evaluation_live_quality`, so re-running them costs real model calls and is only
+comparable if the same models and config are reused. Note that envelopes carry only
+`created_at` and `producer` — there is no code-version marker, so nothing *within* the
+data records that an artifact was computed pre-fix. The directory name is the only
+record, which is why archiving beats leaving the artifacts in place.
+
 ### Round 5 notes
 
 - **M1.** `metadata["failures"]` is meant to be the run's error inventory, but only the
