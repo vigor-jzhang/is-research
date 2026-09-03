@@ -711,10 +711,13 @@ COVERAGE_MATRIX: tuple[CoverageRow, ...] = (
         phase="7D.3B",
         benchmark="live-quality-evaluator-sanity-v1",
         evaluator="evaluator.evaluator_sanity",
+        # Metric ids the evaluator actually emits. Before round 5 it emitted
+        # no metrics at all, and this row listed free-text descriptions that
+        # no aggregation could ever match.
         metrics=(
-            "evaluator verdict matches expectation (known-good passes / known-bad fails)",
-            "scalar vs list reference id handling",
-            "provider errors never counted as successes",
+            "evaluator_verdict_accuracy",
+            "task_diagnostics_accuracy",
+            "provider_error_safety",
         ),
         gating="deterministic",
         edge_cases=(

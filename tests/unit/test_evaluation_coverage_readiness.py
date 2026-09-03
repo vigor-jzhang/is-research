@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from research_harness.research.benchmarks import BUILTIN_BENCHMARKS
 from research_harness.research.evaluation_coverage import (
     COVERAGE_MATRIX,
@@ -95,3 +97,28 @@ def test_readiness_verdict_not_ready_when_e2e_missing():
         assert result.verdict == "not_ready"
     finally:
         benchmarks.BUILTIN_BENCHMARKS = original
+
+
+_METRIC_ID = re.compile(r"[a-z][a-z0-9_]*")
+
+
+def test_coverage_matrix_metrics_are_metric_ids():
+    """Every declared metric must be an id the harness can aggregate.
+
+    Rows have drifted into free-text descriptions: the sanity-audit row listed
+    sentences ("provider errors never counted as successes") until round 5.
+    No aggregation can ever match a sentence, so the row advertises coverage
+    that is not measurable -- the same class of staleness as the
+    novelty-threat-v1 row, which declared metric ids its evaluator never
+    emitted.
+    """
+    for row in COVERAGE_MATRIX:
+        for metric in row.metrics:
+            assert _METRIC_ID.fullmatch(metric), f"{row.benchmark}: {metric!r} is not a metric id"
+
+
+def test_coverage_matrix_metrics_are_unique_per_row():
+    for row in COVERAGE_MATRIX:
+        assert len(set(row.metrics)) == len(row.metrics), (
+            f"{row.benchmark}: duplicate metric ids in {row.metrics}"
+        )

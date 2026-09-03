@@ -77,6 +77,8 @@ in the working tree, uncommitted.
 | **M11** stale coverage-matrix metric row | **Fixed** (round 5) | `evaluation_coverage.py` |
 | **M12** rate metrics change meaning at `count == 0` | **Fixed** (round 5) | `schemas/evaluation.py` + harness |
 | **M13** store read failures shrink denominators | **Fixed** (round 5) | `evaluation_harness/plugin.py` |
+| **M8** `acq-duplicate-blob` vacuous | **Investigated** (round 6) — production correct, coverage added | `fetcher_http`, `benchmarks` |
+| Coverage matrix vs evaluator output | **Partly fixed** (round 6) | `evaluation_coverage.py` + test |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -271,6 +273,27 @@ record, which is why archiving beats leaving the artifacts in place.
 - **M12.** Added `measured: bool` to `EvaluationMetric` (default `True`, so existing
   artifacts and callers are unaffected). A rate/score with no denominator now reports
   `measured=False` instead of a `0.0` that is indistinguishable from a measured 0%.
+
+### Round 6 notes
+
+- **M8 (investigated, not "fixed").** The finding describes a vacuous benchmark case,
+  and the tempting fix — make the case fetch the same location twice — is not
+  achievable through case input. The production guarantee is implemented and correct
+  (`fetcher_http/plugin.py:448-485`); what was missing was any test of it. Testing it
+  directly is worth more than contriving a benchmark that appears to exercise it:
+  the contrived version would have produced two *different* location ids, passed
+  while writing two identical blobs, and looked like a fix. The case now carries a
+  comment recording that it cannot fail.
+- **Coverage matrix (partly fixed).** Added `test_coverage_matrix_metrics_are_metric_ids`
+  and `test_coverage_matrix_metrics_are_unique_per_row`. The first immediately caught a
+  second stale row of the same class as M11: `live-quality-evaluator-sanity-v1` listed
+  free-text sentences ("provider errors never counted as successes") rather than metric
+  ids, so it advertised coverage no aggregation could ever match. Now lists the three
+  ids the sanity evaluator emits after round 5.
+  **Still open:** this only checks that declared metrics are well-formed ids. It does
+  not run each benchmark and compare declared metrics against emitted ones, which is
+  what would catch the next M11-class row. That check belongs in an integration test,
+  since running all 28 benchmarks is too slow for the unit suite.
 
 ### Verification that the new tests are genuine regression tests
 
@@ -908,6 +931,20 @@ because of transient 429s is a **correctness** failure.
   no corpus is produced, so a failed orchestrator can pass.
 - **M8** `benchmarks/__init__.py:6673-6691` — `acq-duplicate-blob` is vacuous: the
   orchestrator runs once, so `dup_groups` is always empty and `duplicate_ok = 1`.
+  **Investigated in round 6; the production code is correct but had no coverage.**
+  The guarantee is real and implemented — `fetcher_http/plugin.py:448-485` rescans
+  existing acquisitions and returns the existing id when location, sha256, downloaded
+  status and blob presence all match. The check is simply unreachable from the
+  benchmark: `_resolve_locations` deduplicates by URL
+  (`acquisition_orchestrator/plugin.py:71-96`) and the orchestrator fetches each
+  location at most once per run, so no location can yield two acquisitions. Adding a
+  second paper with the same URL does not help either — it produces a *different*
+  location id, which neither the evaluator's `(location_id, sha256)` grouping nor the
+  fetcher's reuse (keyed on location id) will match, so the case would still pass
+  while writing two identical blobs. Resolved by testing the guarantee where it
+  lives: `test_fetcher_reuses_acquisition_for_identical_bytes` (verified to fail when
+  the reuse block is disabled). The benchmark case now carries a comment recording
+  that it cannot fail, so it is not "fixed" the wrong way later.
 - **M9** `evaluator_citation_correctness:84-89` — `total == 0` ⇒ `passed`; and
   `placeholder_check` mode emits no `metrics`/`dimension_scores`, so `novelty-threat-v1`
   (wired without `citation_mode`) contributes **zero** aggregate metrics.

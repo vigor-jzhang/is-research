@@ -6673,6 +6673,17 @@ DOCUMENT_ACQUISITION_V1: BenchmarkDefinition = BenchmarkDefinition(
         _acq_case(
             "acq-duplicate-blob",
             "duplicate blob reuse",
+            # NOTE: this case currently cannot fail. The evaluator groups
+            # downloaded acquisitions by (document_location_id, sha256) and
+            # fails only when one location yields two acquisitions, but the
+            # orchestrator deduplicates locations by URL and fetches each one
+            # at most once per run, so the group is always empty. Adding a
+            # second paper with the same URL does not help: it produces a
+            # *different* location id, which neither this check nor the
+            # fetcher's reuse (keyed on location id) will match. The
+            # underlying guarantee is covered instead by
+            # tests/unit/test_document_fetcher_http.py::
+            # test_fetcher_reuses_acquisition_for_identical_bytes.
             "Fetching the same location twice with identical bytes reuses the "
             "same acquisition (no duplicate blob is created).",
             papers=[

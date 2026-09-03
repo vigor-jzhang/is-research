@@ -679,3 +679,77 @@ async def test_unresolvable_host_fails_cleanly_without_injected_client(tmp_path)
     assert acq.status.value == "failed"
     assert acq.failure_code == "invalid_url"
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_fetcher_reuses_acquisition_for_identical_bytes(tmp_path: pathlib.Path):
+    """Fetching the same location twice with identical bytes reuses one acquisition.
+
+    This is the guarantee the ``acq-duplicate-blob`` benchmark case claims to
+    check (fetcher_http/plugin.py:448-485). The benchmark cannot reach it: the
+    orchestrator deduplicates locations by URL, so each location is fetched at
+    most once per run and the evaluator's duplicate group is always empty. That
+    left this production path with no coverage at all.
+    """
+    from research_harness.plugins.documents.fetcher_http.plugin import HttpFetcherService
+    from research_harness.research.schemas.document_acquisition import DocumentAcquisition
+    from research_harness.research.schemas.identity import PaperIdentity, ResolutionMethod
+    from research_harness.research.schemas.paper import PaperRecord
+
+    store = SQLiteArtifactStore(path=tmp_path / "art.db")
+    blobs = FilesystemBlobStore(root=tmp_path / "blobs")
+    pdf_bytes = _make_pdf_bytes("duplicate blob reuse")
+
+    paper = PaperRecord(title="T")
+    p_env = ArtifactEnvelope.create(payload=paper, artifact_type="paper_record", producer="test")
+    await store.put(p_env)
+    ident = PaperIdentity(
+        member_paper_artifact_ids=[p_env.artifact_id],
+        canonical_identifiers=[],
+        resolution_method=ResolutionMethod.exact_identifier,
+        resolution_evidence=[],
+    )
+    ident_env = ArtifactEnvelope.create(
+        payload=ident, artifact_type="paper_identity", producer="test"
+    )
+    await store.put(ident_env)
+    loc = DocumentLocation(
+        paper_identity_id=ident_env.artifact_id,
+        resolver="test",
+        url="https://example.com/paper.pdf",
+        is_direct_download=True,
+    )
+    loc_env = ArtifactEnvelope.create(
+        payload=loc, artifact_type="document_location", producer="test"
+    )
+    await store.put(loc_env)
+
+    fetch_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal fetch_count
+        fetch_count += 1
+        return httpx.Response(
+            200,
+            content=pdf_bytes,
+            headers={"content-type": "application/pdf", "content-length": str(len(pdf_bytes))},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    svc = HttpFetcherService(
+        artifact_store=store, blob_store=blobs, http_client=client, max_bytes=50 * 1024 * 1024
+    )
+
+    first_id = await svc.fetch(loc_env.artifact_id)
+    second_id = await svc.fetch(loc_env.artifact_id)
+
+    assert second_id == first_id, "second fetch created a duplicate acquisition"
+    acquisitions = await store.list(artifact_type="document_acquisition")
+    assert len(acquisitions) == 1, "identical bytes produced more than one acquisition"
+
+    acq = (await store.get(first_id)).parse_payload(DocumentAcquisition)
+    assert acq.status.value == "downloaded"
+    assert acq.sha256 == hashlib.sha256(pdf_bytes).hexdigest()
+
+    await client.aclose()
+    await store.close()
