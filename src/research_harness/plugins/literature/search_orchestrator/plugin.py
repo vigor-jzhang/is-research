@@ -28,6 +28,7 @@ class LiteratureSearchOrchestratorService:
         max_results_per_query_per_source: int = 50,
         max_total_provider_requests: int = 50,
         max_total_papers: int = 500,
+        max_pages_per_query: int = 5,
     ) -> None:
         self._store = artifact_store
         self._ingestor = ingestor
@@ -37,6 +38,9 @@ class LiteratureSearchOrchestratorService:
         self._max_results_per_query = max_results_per_query_per_source
         self._max_requests = max_total_provider_requests
         self._max_papers = max_total_papers
+        # Safety bound for H19 pagination: a provider that always returns a
+        # next_page_token must not loop forever.
+        self._max_pages_per_query = max_pages_per_query
 
     async def execute(self, strategy_artifact_id: str) -> str:
         # Load strategy
@@ -62,6 +66,7 @@ class LiteratureSearchOrchestratorService:
         paper_identity_ids: list[str] = []
         provider_failures: list[dict[str, Any]] = []
         provider_searches_attempted = 0
+        identity_resolution_failed = False
         provider_searches_succeeded = 0
         provider_searches_failed = 0
         raw_paper_count = 0
@@ -119,55 +124,97 @@ class LiteratureSearchOrchestratorService:
                     )
                     continue
 
-                # Build search request for this query+source
-                req = LiteratureSearchRequest(
-                    query=query.query,
-                    year_from=query.year_from,
-                    year_to=query.year_to,
-                    limit=self._max_results_per_query,
-                    page_token=None,
-                )
-
-                try:
-                    search_env, _snapshot_envs, paper_envs = await self._ingestor.ingest_search(
-                        source, req, query_artifact_id=qid
-                    )
-                    # Provenance for traceability: search record derived_from query
-                    await self._store.add_provenance(
-                        ProvenanceLink(
-                            relation=ProvenanceRelation.derived_from,
-                            source_artifact_id=qid,
-                            target_artifact_id=search_env.artifact_id,
-                            producer="literature.search_orchestrator",
+                # Follow next_page_token so a query is not truncated to the
+                # first page (H19). Bounded by the paper/request budgets and by
+                # a page cap, so a provider that always returns a token cannot
+                # spin forever.
+                page_token: str | None = None
+                pages_fetched = 0
+                while True:
+                    if total_requests >= self._max_requests:
+                        provider_failures.append(
+                            {
+                                "query_id": qid,
+                                "provider": src_name,
+                                "error": "budget max_total_provider_requests reached",
+                            }
                         )
+                        break
+                    if total_papers >= self._max_papers:
+                        break
+                    if pages_fetched >= self._max_pages_per_query:
+                        break
+
+                    if pages_fetched > 0:
+                        provider_searches_attempted += 1
+                        total_requests += 1
+
+                    # Build search request for this query+source
+                    req = LiteratureSearchRequest(
+                        query=query.query,
+                        year_from=query.year_from,
+                        year_to=query.year_to,
+                        limit=self._max_results_per_query,
+                        page_token=page_token,
                     )
 
-                    search_record_ids.append(search_env.artifact_id)
-                    for pe in paper_envs:
-                        if pe.artifact_id not in paper_ids:
-                            paper_ids.append(pe.artifact_id)
-                            raw_paper_count += 1
-                            total_papers += 1
-                            if total_papers >= self._max_papers:
-                                break
-                    provider_searches_succeeded += 1
+                    try:
+                        (
+                            search_env,
+                            _snapshot_envs,
+                            paper_envs,
+                        ) = await self._ingestor.ingest_search(source, req, query_artifact_id=qid)
+                        # Provenance for traceability: search record derived_from query
+                        await self._store.add_provenance(
+                            ProvenanceLink(
+                                relation=ProvenanceRelation.derived_from,
+                                source_artifact_id=qid,
+                                target_artifact_id=search_env.artifact_id,
+                                producer="literature.search_orchestrator",
+                            )
+                        )
 
-                    # Add provenance from execution perspective: we will link later
+                        search_record_ids.append(search_env.artifact_id)
+                        for pe in paper_envs:
+                            if pe.artifact_id not in paper_ids:
+                                paper_ids.append(pe.artifact_id)
+                                raw_paper_count += 1
+                                total_papers += 1
+                                if total_papers >= self._max_papers:
+                                    break
+                        provider_searches_succeeded += 1
+                        pages_fetched += 1
 
-                except Exception as e:
-                    provider_searches_failed += 1
-                    provider_failures.append(
-                        {
-                            "query_id": qid,
-                            "provider": src_name,
-                            "error": str(e),
-                            "query": query.query,
-                        }
-                    )
-                    logger.warning(
-                        "Provider search failed for query %s source %s: %s", qid, src_name, e
-                    )
-                    continue
+                        # Add provenance from execution perspective: we will link later
+
+                    except Exception as e:
+                        provider_searches_failed += 1
+                        provider_failures.append(
+                            {
+                                "query_id": qid,
+                                "provider": src_name,
+                                "error": str(e),
+                                "query": query.query,
+                            }
+                        )
+                        logger.warning(
+                            "Provider search failed for query %s source %s: %s",
+                            qid,
+                            src_name,
+                            e,
+                        )
+                        break
+
+                    next_token = getattr(search_env, "next_page_token", None)
+                    if next_token is None:
+                        page_payload = getattr(search_env, "payload", None)
+                        if isinstance(page_payload, dict):
+                            next_token = page_payload.get("next_page_token")
+                        elif page_payload is not None:
+                            next_token = getattr(page_payload, "next_page_token", None)
+                    if not next_token or next_token == page_token:
+                        break
+                    page_token = str(next_token)
 
                 # Check budgets after each
                 if total_papers >= self._max_papers:
@@ -186,7 +233,19 @@ class LiteratureSearchOrchestratorService:
             else:
                 paper_identity_ids = []
         except Exception as e:
-            logger.warning("Identity resolver not available or failed: %s", e)
+            # H23: a total resolution failure used to be indistinguishable from
+            # "zero papers found" -- both left paper_identity_ids empty, and the
+            # execution still reported provider_searches_succeeded > 0. That
+            # empty set then silently widened the next stage (H22).
+            logger.error("Identity resolution failed: %s", e)
+            identity_resolution_failed = True
+            provider_failures.append(
+                {
+                    "query_id": "*",
+                    "provider": "paper_identity_resolver",
+                    "error": f"identity resolution failed: {e}",
+                }
+            )
             paper_identity_ids = []
 
         completed_at = datetime.now(UTC)
@@ -218,7 +277,11 @@ class LiteratureSearchOrchestratorService:
                     "max_results_per_query": self._max_results_per_query,
                     "max_requests": self._max_requests,
                     "max_papers": self._max_papers,
-                }
+                    "max_pages_per_query": self._max_pages_per_query,
+                },
+                # H23: lets a caller distinguish "resolution failed" from
+                # "no papers were found".
+                "identity_resolution_failed": identity_resolution_failed,
             },
         )
         exec_env = ArtifactEnvelope.create(

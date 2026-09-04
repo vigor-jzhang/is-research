@@ -10,6 +10,10 @@ from urllib.parse import quote
 
 import httpx
 
+from research_harness.contracts.literature import (
+    LiteratureRateLimitError,
+    LiteratureResponseError,
+)
 from research_harness.kernel.plugin import Plugin, PluginContext, PluginMetadata
 from research_harness.research.envelope import ArtifactEnvelope
 from research_harness.research.provenance.relations import ProvenanceLink, ProvenanceRelation
@@ -52,6 +56,18 @@ def _map_version(raw: str | None) -> VersionType:
     if low in ("submittedversion", "submitted_version"):
         return VersionType.submittedVersion
     return VersionType.unknown
+
+
+
+def _parse_retry_after(resp: Any) -> float | None:
+    """Read Retry-After as seconds, tolerating the HTTP-date form."""
+    raw = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 class UnpaywallLocatorService:
@@ -292,11 +308,20 @@ class UnpaywallLocatorService:
                         continue
             return []
         if resp.status_code == 429:
+            # H24: returning [] made a rate-limited run indistinguishable from
+            # "no open-access copy exists", silently under-acquiring a
+            # systematic review. Raising lets the orchestrator record a
+            # locator error instead (it already catches locator exceptions).
+            retry_after = _parse_retry_after(resp)
             logger.warning("Unpaywall rate limited for %s", norm_doi)
-            return []
+            raise LiteratureRateLimitError(
+                f"Unpaywall rate limited (429) for {norm_doi}", retry_after=retry_after
+            )
         if resp.status_code >= 500:
             logger.warning("Unpaywall server error %s for %s", resp.status_code, norm_doi)
-            return []
+            raise LiteratureResponseError(
+                f"Unpaywall server error {resp.status_code} for {norm_doi}"
+            )
         if resp.status_code != 200:
             logger.warning("Unpaywall unexpected status %s for %s", resp.status_code, norm_doi)
             return []

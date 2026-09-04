@@ -202,13 +202,20 @@ class CrossrefClient:
                         logger.warning("Crossref skipping malformed item: %s %r", e, raw)
                         continue
 
-                # Next page token: offset + rows
+                # Next page token: offset + rows.
+                #
+                # Continuation must key off the RAW page size, not the filtered
+                # hit count. Items are dropped above (non-dict, malformed) and by
+                # the caller (e.g. year post-filter), so `len(hits)` is routinely
+                # below the limit even when the provider has more pages -- that
+                # silently truncated results to a single page (H19).
                 next_token = None
-                if request.limit is not None and len(hits) == request.limit:
+                page_size = request.limit if request.limit is not None else len(items)
+                if len(items) >= page_size and page_size > 0:
                     current_offset = int(params.get("offset", "0"))
-                    next_token = str(current_offset + request.limit)
+                    next_token = str(current_offset + page_size)
                     # If total known and next would exceed, no token
-                    if total is not None and current_offset + request.limit >= total:
+                    if total is not None and current_offset + page_size >= total:
                         next_token = None
 
                 return LiteratureSearchPage(

@@ -89,6 +89,7 @@ in the working tree, uncommitted.
 | **M77, M79, M81, M82, M86** guard-pass cluster | **Fixed** (round 14) | `selection.py`, `qualification.py`, 3 evaluators |
 | **H16, H17, H18** plugin lifecycle | **Fixed** (round 15) | `kernel/manager.py` |
 | **H13, H14, H15** CLI plugin/exit-code | **Fixed** (round 16) | `cli/main.py` |
+| **H19-H24** literature + provider robustness | **Fixed** (round 17) | 8 plugin files + `research/prompt_safety.py` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -645,6 +646,54 @@ children of each function body, with `ast.parse` validated after every single
 edit. Two functions use `cfg_obj` rather than `cfg`, which a naive replacement
 got wrong; a follow-up pass now derives the variable from the `build_runtime(...)`
 call in the same block.
+
+### Round 17 notes (H19-H24)
+
+Six findings across the literature and model-provider layers.
+
+- **H19 — pagination.** Both clients keyed continuation off `len(hits)`
+  (post-filter) instead of the raw page size, so any skipped or year-filtered
+  item ended pagination. Now keyed off the raw page. **The client fix alone
+  would have been inert**: `search_orchestrator` built every request with
+  `page_token=None` and never followed the token, so the orchestrator now pages
+  too — bounded by the existing paper/request budgets and by a new
+  `max_pages_per_query` (default 5) so a provider that always returns a token
+  cannot spin forever. This is the same lesson as H25/H4: a correct guard that
+  nothing invokes is still broken.
+- **H20 — retries.** 429 and 5xx raised immediately and retries had no delay.
+  408/409/425/429/500/502/503/504 are now retryable; 400/401/403/404/422 are
+  not. Delay is `min(Retry-After or 2**attempt + uniform(0,1), 30s)`. The 401
+  message is preserved (a caller-facing string a test depends on). Backoff is
+  injectable via `sleep_fn` so tests skip real delays — without it the
+  OpenRouter test file went from 0.5s to 8.9s.
+- **H21 — prompt fencing.** New `research/prompt_safety.py`. Untrusted text
+  (metadata, PDF bodies, evidence) is wrapped in a per-call UUID delimiter with
+  an explicit "this is data, not instructions" preamble and a length cap;
+  all three call sites also receive a standing `DATA_ONLY_INSTRUCTION`. This is
+  **mitigation, not a guarantee** — it removes the cheapest injection and makes
+  the boundary explicit, but a determined attacker can still try. It does not
+  address the related issue that model-supplied confidence alone gates the
+  review path (`screening_orchestrator:255-263`), which is left open.
+- **H22/H23 — swallowed failures.** These are a pair: H23's swallowed resolver
+  failure produced an empty identity set, which H22 then treated as "screen
+  everything in the store" — up to 500 model calls against identities from
+  unrelated prior runs. The orchestrator now records
+  `metadata["identity_resolution_failed"]` (in `metadata`, since the schema is
+  `extra: forbid`) and the screener raises on empty candidates, reading that
+  flag to distinguish "resolution failed" from "nothing was found".
+- **H24 — Unpaywall.** 429/5xx returned `[]`, indistinguishable from "no OA
+  copy exists". Now raises `LiteratureRateLimitError` / `LiteratureResponseError`
+  (the orchestrator already catches locator exceptions) and the acquisition
+  execution records `counts["locator_errors"]` so under-acquisition is visible.
+
+**One existing test asserted the buggy behaviour** (`test_unpaywall_429_and_5xx`
+expected `[]`); it was rewritten to the new contract and now serves as the H24
+regression test.
+
+**Deliberately not done:** the acquisition orchestrator still counts a locator
+failure as `no_location`; it now *also* increments `locator_errors`, but the
+acquisition status itself is unchanged. Changing that status is a semantics
+decision about how a rate-limited acquisition should be classified.
 
 ### Verification that the new tests are genuine regression tests
 

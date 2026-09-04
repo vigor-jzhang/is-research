@@ -169,6 +169,14 @@ class EvidenceExtractorService:
         Validates every candidate against the chunk (grounding). Raises
         ValueError on malformed/ungrounded output; returns [] for empty.
         """
+        # H21: the chunk body is full text fetched from an arbitrary OA host,
+        # so fence it before it reaches the prompt.
+        from research_harness.research.prompt_safety import (
+            DATA_ONLY_INSTRUCTION,
+            fence_untrusted,
+        )
+
+        fenced_text = fence_untrusted(chunk.text, label="document text")
         prompt = f"""You are a research reader extracting structured evidence from a scholarly paper.
 
 You are given pages {chunk.start_page}-{chunk.end_page} of FullTextDocument {chunk.document_id}.
@@ -182,7 +190,9 @@ Task: Extract only evidence that is directly supported by the provided text.
 - Do not reason step by step. Return JSON only, matching the schema.
 
 Text:
-{chunk.text}
+{fenced_text}
+
+{DATA_ONLY_INSTRUCTION}
 """
         from research_harness.contracts.model import Message, ModelRequest
 

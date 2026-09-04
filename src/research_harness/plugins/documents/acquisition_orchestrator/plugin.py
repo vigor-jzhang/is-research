@@ -34,6 +34,8 @@ class DocumentAcquisitionOrchestratorService:
         max_candidates: int = 500,  # alias for safety
     ) -> None:
         self._store = artifact_store
+        # Reset per run; surfaced as counts["locator_errors"] (H24).
+        self._locator_errors = 0
         self._blobs = blob_store
         self._fetcher = fetcher
         self._extractor = extractor
@@ -54,13 +56,17 @@ class DocumentAcquisitionOrchestratorService:
             except Exception as e:
                 logger.warning("metadata locator failed for %s: %s", paper_identity_id, e)
                 meta_ids = []
+                self._locator_errors += 1
 
         if self._unpaywall_locator is not None:
             try:
                 unpaywall_ids = await self._unpaywall_locator.resolve(paper_identity_id)
             except Exception as e:
+                # H24: a rate-limited or failing provider must not be recorded
+                # as "no open-access copy exists".
                 logger.warning("unpaywall locator failed for %s: %s", paper_identity_id, e)
                 unpaywall_ids = []
+                self._locator_errors += 1
 
         # Merge with priority: meta direct PDFs first, then unpaywall
         # We need to sort each list deterministically already; then combine
@@ -162,6 +168,7 @@ class DocumentAcquisitionOrchestratorService:
         acquisition_ids: list[str] = []
         fulltext_ids: list[str] = []
         failures: list[dict[str, Any]] = []
+        self._locator_errors = 0
         counts = {
             "total_included": len(candidate_ids),
             "locations_found": 0,
@@ -175,6 +182,9 @@ class DocumentAcquisitionOrchestratorService:
             "text_extracted": 0,
             "insufficient_text": 0,
             "encrypted": 0,
+            # H24: distinguishes "the provider errored" from "no OA copy
+            # exists". Both previously produced zero locations.
+            "locator_errors": 0,
         }
 
         # Idempotency: check if execution already exists for this screened set
@@ -343,7 +353,7 @@ class DocumentAcquisitionOrchestratorService:
             full_text_document_ids=fulltext_ids,
             started_at=started,
             completed_at=completed,
-            counts=counts,
+            counts={**counts, "locator_errors": self._locator_errors},
             failures=failures,
             metadata={},
         )

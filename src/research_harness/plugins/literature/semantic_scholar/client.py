@@ -198,11 +198,17 @@ class SemanticScholarClient:
                         logger.warning("Semantic Scholar skipping malformed item: %s %r", e, raw)
                         continue
 
+                # Continuation must key off the RAW page size, not the filtered
+                # hit count: the year post-filter and skipped malformed items
+                # above routinely leave `len(hits)` below the limit when the
+                # provider still has more pages, which silently truncated
+                # results to one page (H19).
                 next_token = None
-                if request.limit is not None and len(hits) == request.limit:
+                page_size = request.limit if request.limit is not None else len(raw_data)
+                if len(raw_data) >= page_size and page_size > 0:
                     # Check if more available
-                    if total is None or offset + request.limit < total:
-                        next_token = str(offset + request.limit)
+                    if total is None or offset + page_size < total:
+                        next_token = str(offset + page_size)
 
                 return LiteratureSearchPage(
                     provider="semantic_scholar",

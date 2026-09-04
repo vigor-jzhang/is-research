@@ -525,11 +525,21 @@ class LiteratureSynthesizerService:
                 + ("\n".join(ev_lines) if ev_lines else "  (no evidence)")
             )
 
+        # H21: the evidence text is extracted from arbitrary OA documents.
+        from research_harness.research.prompt_safety import (
+            DATA_ONLY_INSTRUCTION,
+            fence_untrusted,
+        )
+
+        fenced_evidence = fence_untrusted("\n".join(batch_text), label="evidence items")
+
         prompt = f"""You are a literature synthesizer comparing research papers within a corpus.
 
 Evidence items from the following paper profiles are provided (IDs are authoritative; you may ONLY cite IDs present below):
 
-{chr(10).join(batch_text)}
+{fenced_evidence}
+
+{DATA_ONLY_INSTRUCTION}
 
 Task: produce cross-paper synthesis themes and statements grounded ONLY in the provided evidence.
 - Every supporting_evidence_ids / conflicting_evidence_ids entry MUST be an evidence ID listed above.

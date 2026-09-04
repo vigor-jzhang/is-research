@@ -82,19 +82,26 @@ class ScreeningOrchestratorService:
         candidate_ids = list(search_exec.paper_identity_artifact_ids)
         # Also consider if execution has no identities (maybe it had paper_artifact_ids but not yet resolved?) - for now use those
         if not candidate_ids:
-            # Fallback: if execution has paper_artifact_ids but no identities, we need to resolve? But orchestrator should have already resolved via identity resolver
-            # For this phase, we expect paper_identity_artifact_ids to be populated by search orchestrator
-            # If empty, try to list all current paper identities
-            all_identities = await self._store.list(artifact_type="paper_identity")
-            # Filter to current (not superseded)
-            current = []
-            for env in all_identities:
-                # Check if superseded
-                children = await self._store.get_children(env.artifact_id)
-                is_superseded = any(c.relation == ProvenanceRelation.supersedes for c in children)
-                if not is_superseded:
-                    current.append(env.artifact_id)
-            candidate_ids = current
+            # H22: this used to fall back to every non-superseded paper_identity
+            # in the store, including identities from unrelated prior runs, and
+            # then spend up to the full model-call budget screening them. An
+            # empty candidate set is a failure signal (the search found nothing,
+            # or identity resolution failed -- see H23), not a request to screen
+            # the whole database.
+            resolution_failed = bool(
+                (search_exec.metadata or {}).get("identity_resolution_failed")
+            )
+            detail = (
+                "identity resolution failed upstream"
+                if resolution_failed
+                else "the search produced no candidate identities"
+            )
+            raise ValueError(
+                f"no candidate identities to screen: {detail} "
+                f"(search execution {search_exec_env.artifact_id!r} reported "
+                f"{len(search_exec.paper_artifact_ids)} raw paper record(s) and "
+                f"{len(search_exec.provider_failures)} provider failure(s))"
+            )
 
         # Filter to current non-superseded identities
         current_candidates: list[str] = []

@@ -126,6 +126,25 @@ class TitleAbstractScreenerService:
         # Information sufficiency pre-check: if abstract missing and title ambiguous, model should return insufficient, but we also enforce
         has_abstract = bool(view.abstract and view.abstract.strip())
         logger.debug("screening view %s has_abstract=%s", screening_view_id, has_abstract)
+
+        # H21: the title/abstract come from Crossref/Semantic Scholar metadata,
+        # which anyone can register. Fence them so a paper cannot carry
+        # instructions into this prompt.
+        from research_harness.research.prompt_safety import (
+            DATA_ONLY_INSTRUCTION,
+            fence_untrusted,
+        )
+
+        fenced_view = fence_untrusted(
+            (
+                f"Title: {view.title or 'No title'}\n"
+                f"Abstract: {view.abstract or 'No abstract available'}\n"
+                f"Authors: {', '.join(view.authors) if view.authors else 'Unknown'}\n"
+                f"Year: {view.year or 'Unknown'}\n"
+                f"Venue: {view.venue or 'Unknown'}"
+            ),
+            label="paper metadata",
+        )
         # Build prompt
         prompt = f"""You are a research assistant screening papers for a literature review.
 
@@ -139,11 +158,9 @@ Exclusion Criteria:
 {exclusion_str or "None"}
 
 Paper to screen (deterministic view, do not infer beyond this):
-Title: {view.title or "No title"}
-Abstract: {view.abstract or "No abstract available"}
-Authors: {", ".join(view.authors) if view.authors else "Unknown"}
-Year: {view.year or "Unknown"}
-Venue: {view.venue or "Unknown"}
+{fenced_view}
+
+{DATA_ONLY_INSTRUCTION}
 
 Task: Assess whether this paper should be included, excluded, or marked uncertain for the review.
 - If an explicit exclusion criterion is matched, decision should be exclude.

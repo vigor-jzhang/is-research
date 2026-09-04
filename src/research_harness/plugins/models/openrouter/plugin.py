@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import random
 import time
 from typing import Any
 
@@ -31,6 +33,38 @@ DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_TIMEOUT = 30.0
 MAX_RETRIES = 2
 
+# Statuses worth retrying: rate limits and server-side failures are transient,
+# whereas 401/403/400/404/422 will fail identically on every attempt (H20).
+RETRYABLE_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+NON_RETRYABLE_STATUSES = frozenset({400, 401, 403, 404, 422})
+MAX_BACKOFF_SECONDS = 30.0
+
+
+def _retry_after_seconds(resp: Any) -> float | None:
+    """Read Retry-After as seconds; the HTTP-date form is ignored."""
+    raw = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _backoff_delay(attempt: int, retry_after: float | None = None) -> float:
+    """Exponential backoff with jitter, capped; honours Retry-After."""
+    if retry_after is not None:
+        return min(max(retry_after, 0.0), MAX_BACKOFF_SECONDS)
+    return min(2**attempt + random.uniform(0.0, 1.0), MAX_BACKOFF_SECONDS)
+
+
+class _RetryableHTTPError(Exception):
+    """Internal: an HTTP status worth another attempt."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
 
 class OpenRouterProvider:
     """Adapter for OpenRouter chat completions."""
@@ -42,6 +76,7 @@ class OpenRouterProvider:
         timeout: float = DEFAULT_TIMEOUT,
         default_headers: dict[str, str] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        sleep_fn: Any = None,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.base_url = base_url.rstrip("/")
@@ -49,6 +84,8 @@ class OpenRouterProvider:
         self.default_headers = default_headers or {}
         self._client = http_client
         self._owns_client = http_client is None
+        # Injectable so tests can skip the real backoff delay (H20).
+        self._sleep = sleep_fn or asyncio.sleep
         self.capabilities = ModelCapabilities(
             tool_calling=True,
             structured_output=True,
@@ -90,8 +127,13 @@ class OpenRouterProvider:
 
                 if resp.status_code == 401:
                     raise ModelError(f"OpenRouter authentication failed (401): {resp.text}")
-                if resp.status_code == 429:
-                    raise ModelError(f"OpenRouter rate limited (429): {resp.text}")
+                if resp.status_code in NON_RETRYABLE_STATUSES:
+                    raise ModelError(f"OpenRouter error {resp.status_code}: {resp.text}")
+                if resp.status_code in RETRYABLE_STATUSES:
+                    raise _RetryableHTTPError(
+                        f"OpenRouter error {resp.status_code}: {resp.text}",
+                        _retry_after_seconds(resp),
+                    )
                 if resp.status_code >= 400:
                     raise ModelError(f"OpenRouter error {resp.status_code}: {resp.text}")
 
@@ -105,6 +147,7 @@ class OpenRouterProvider:
                 )
                 if attempt == MAX_RETRIES:
                     raise ModelError(f"OpenRouter request timed out after {self.timeout}s") from e
+                await self._sleep(_backoff_delay(attempt))
                 continue
             except httpx.ConnectError as e:
                 last_exc = e
@@ -113,6 +156,21 @@ class OpenRouterProvider:
                 )
                 if attempt == MAX_RETRIES:
                     raise ModelError(f"OpenRouter connection failed: {e}") from e
+                await self._sleep(_backoff_delay(attempt))
+                continue
+            except _RetryableHTTPError as e:
+                last_exc = e
+                if attempt == MAX_RETRIES:
+                    raise ModelError(str(e)) from e
+                delay = _backoff_delay(attempt, e.retry_after)
+                logger.warning(
+                    "OpenRouter retryable error (attempt %d/%d, retrying in %.2fs): %s",
+                    attempt + 1,
+                    MAX_RETRIES + 1,
+                    delay,
+                    e,
+                )
+                await self._sleep(delay)
                 continue
             except ModelError:
                 raise
@@ -122,6 +180,7 @@ class OpenRouterProvider:
                 if isinstance(e, httpx.TransportError):
                     if attempt == MAX_RETRIES:
                         raise ModelError(f"OpenRouter transport error: {e}") from e
+                    await self._sleep(_backoff_delay(attempt))
                     continue
                 raise ModelError(f"OpenRouter unexpected error: {e}") from e
 

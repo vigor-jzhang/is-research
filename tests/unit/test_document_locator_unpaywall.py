@@ -4,6 +4,10 @@ import pathlib
 import httpx
 import pytest
 
+from research_harness.contracts.literature import (
+    LiteratureRateLimitError,
+    LiteratureResponseError,
+)
 from research_harness.plugins.storage.artifacts_sqlite.plugin import SQLiteArtifactStore
 from research_harness.research.envelope import ArtifactEnvelope
 from research_harness.research.schemas.common import ExternalIdentifier
@@ -263,7 +267,10 @@ async def test_unpaywall_429_and_5xx(tmp_path: pathlib.Path):
     )
     await store.put(ident_env)
 
-    for status in [429, 500]:
+    # H24: a rate-limited or failing provider must not be reported as "no
+    # open-access copy exists" -- that silently under-acquires a systematic
+    # review. Both now raise a distinguishable error.
+    for status, expected in [(429, LiteratureRateLimitError), (500, LiteratureResponseError)]:
 
         def handler(request: httpx.Request, s=status) -> httpx.Response:
             return httpx.Response(s, json={})
@@ -272,8 +279,8 @@ async def test_unpaywall_429_and_5xx(tmp_path: pathlib.Path):
         svc = UnpaywallLocatorService(
             artifact_store=store, http_client=client, email="test@example.com"
         )
-        loc_ids = await svc.resolve(ident_env.artifact_id)
-        assert loc_ids == []
+        with pytest.raises(expected):
+            await svc.resolve(ident_env.artifact_id)
         await client.aclose()
     await store.close()
 

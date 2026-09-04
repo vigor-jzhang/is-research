@@ -7,6 +7,12 @@ from research_harness.kernel.errors import ModelError
 from research_harness.plugins.models.openrouter.plugin import OpenRouterProvider
 
 
+async def _no_sleep(_delay: float) -> None:
+    """Skip the real backoff so retry tests stay fast and deterministic."""
+    return None
+
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_successful_response():
@@ -64,7 +70,11 @@ async def test_tool_call_parsing():
             },
         )
     )
-    provider = OpenRouterProvider(api_key="k", base_url="https://openrouter.ai/api/v1")
+    provider = OpenRouterProvider(
+            api_key="k",
+            base_url="https://openrouter.ai/api/v1",
+            sleep_fn=_no_sleep,
+        )
     req = ModelRequest(
         messages=[Message(role="user", content="use echo")],
         tools=[
@@ -99,7 +109,11 @@ async def test_structured_output():
             },
         )
     )
-    provider = OpenRouterProvider(api_key="k", base_url="https://openrouter.ai/api/v1")
+    provider = OpenRouterProvider(
+            api_key="k",
+            base_url="https://openrouter.ai/api/v1",
+            sleep_fn=_no_sleep,
+        )
     req = ModelRequest(
         messages=[Message(role="user", content="give json")],
         response_schema={"type": "object", "properties": {"a": {"type": "integer"}}},
@@ -115,7 +129,11 @@ async def test_auth_failure_normalized():
     respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
         return_value=httpx.Response(401, text="Unauthorized")
     )
-    provider = OpenRouterProvider(api_key="bad", base_url="https://openrouter.ai/api/v1")
+    provider = OpenRouterProvider(
+            api_key="bad",
+            base_url="https://openrouter.ai/api/v1",
+            sleep_fn=_no_sleep,
+        )
     req = ModelRequest(messages=[Message(role="user", content="hi")], metadata={"model": "m"})
     with pytest.raises(ModelError, match="authentication failed"):
         await provider.complete(req)
@@ -140,7 +158,11 @@ async def test_malformed_response():
     respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={"bad": "data"})
     )
-    provider = OpenRouterProvider(api_key="k", base_url="https://openrouter.ai/api/v1")
+    provider = OpenRouterProvider(
+            api_key="k",
+            base_url="https://openrouter.ai/api/v1",
+            sleep_fn=_no_sleep,
+        )
     req = ModelRequest(messages=[Message(role="user", content="hi")], metadata={"model": "m"})
     with pytest.raises(ModelError, match="malformed"):
         await provider.complete(req)
@@ -179,7 +201,11 @@ async def test_usage_extraction():
             },
         )
     )
-    provider = OpenRouterProvider(api_key="k", base_url="https://openrouter.ai/api/v1")
+    provider = OpenRouterProvider(
+            api_key="k",
+            base_url="https://openrouter.ai/api/v1",
+            sleep_fn=_no_sleep,
+        )
     req = ModelRequest(messages=[Message(role="user", content="hi")], metadata={"model": "m"})
     resp = await provider.complete(req)
     assert resp.usage is not None
@@ -192,7 +218,11 @@ async def test_generic_error_normalized():
     respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
         return_value=httpx.Response(500, text="internal")
     )
-    provider = OpenRouterProvider(api_key="k", base_url="https://openrouter.ai/api/v1")
+    provider = OpenRouterProvider(
+            api_key="k",
+            base_url="https://openrouter.ai/api/v1",
+            sleep_fn=_no_sleep,
+        )
     req = ModelRequest(messages=[Message(role="user", content="hi")], metadata={"model": "m"})
     with pytest.raises(ModelError, match="500"):
         await provider.complete(req)
@@ -222,7 +252,11 @@ async def test_retry_on_transient_failure():
         )
 
     respx.post("https://openrouter.ai/api/v1/chat/completions").mock(side_effect=side_effect)
-    provider = OpenRouterProvider(api_key="k", base_url="https://openrouter.ai/api/v1")
+    provider = OpenRouterProvider(
+            api_key="k",
+            base_url="https://openrouter.ai/api/v1",
+            sleep_fn=_no_sleep,
+        )
     req = ModelRequest(messages=[Message(role="user", content="hi")], metadata={"model": "m"})
     resp = await provider.complete(req)
     assert resp.message.content == "recovered"
