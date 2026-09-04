@@ -82,6 +82,7 @@ in the working tree, uncommitted.
 | **H2** errored cases excluded from the pass-rate gate | **Fixed** (round 7) | `tournament/accounting.py`, `routing/selection.py` |
 | **H4** failed repetitions dropped, call records lost | **Fixed** (round 7) | `evaluation_model_tournament` |
 | **H5** calibration verdict ignores 6 of 8 checks | **Fixed** (round 8) | `benchmarks/calibration.py` |
+| **M77/M78/M79** found during rounds 7-8 | **Documented** (round 9), not fixed | `selection.py`, `tests/live/`, `calibration.py` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -364,6 +365,32 @@ future check forgets.
   records its defect as `case_id="*"`, which matches no real case id and so
   excludes nothing. There are no known cases to key it to, so making it work
   needs the consumer (`attribute_failures`) to treat `"*"` as a wildcard.
+
+### Round 9 notes (documentation only)
+
+No code changed. Three defects noticed while working rounds 7 and 8 are now
+written up as **M77**, **M78** and **M79** so they are not lost:
+
+- **M77** — the `model_error_rate` reliability gate is skipped entirely when the
+  rate is unknown, so an unmeasured model passes. This is the same fail-open
+  shape as H2 and was found while reading the gate that H2 added a check beside.
+  It was deliberately *not* fixed in round 7: changing it alters who qualifies,
+  which is a semantics decision like H2 rather than a defect repair, and it
+  deserves its own round with its own decision.
+- **M78** — the live suite is state-dependent and provider-flaky, so it cannot
+  serve as a regression gate. Recorded with the measurements behind that claim
+  (skips caused by shared-store prerequisites, and two different failure causes
+  for the same test across two runs). This matters for planning: rounds 1-8 have
+  no live coverage, and adding one would need the suite made deterministic
+  first.
+- **M79** — the calibration unknown-benchmark defect is keyed `case_id="*"`,
+  which matches nothing. Small, but it means one confirmed-defect path silently
+  does nothing.
+
+Two of the three (M77, M79) are cases where a check *looks* like it guards
+something and does not — the same shape as H2, H4, H5 and M8. That pattern is
+now the most common defect class in this codebase, and a review pass aimed
+specifically at "does this guard actually fire?" would likely find more.
 
 ### Verification that the new tests are genuine regression tests
 
@@ -1176,6 +1203,43 @@ because of transient 429s is a **correctness** failure.
   containment check, and `read_text()` without `encoding=`.
 - **M76** `main.py:6252-6256, 6489-6494, 6497-6502` — `_tournament_config`/`_routing_config`/
   `_live_quality_config` accept `extra_plugins` and ignore it; 23 call sites pass it.
+
+**Found during rounds 7-8 — documented, not yet fixed**
+
+- **M77** `research/routing/selection.py:146` — the reliability gate is
+  `if a.model_error_rate is not None and a.model_error_rate > max_error`. When the
+  rate is unknown the entire check is skipped and the candidate passes, so "we
+  could not measure whether this model errors" is treated as "it does not error".
+  `model_error_rate` is `None` whenever no calls were recorded
+  (`tournament/accounting.py:77`), so a candidate with no call records sails
+  through. The default `DEFAULT_MAX_MODEL_ERROR_RATE = 0.5` is also very lenient
+  even when the rate *is* measured. Same fail-open class as H2, which is how it
+  surfaced; deliberately left alone in round 7 to keep that change contained.
+  **Fix:** reject when the rate is unknown, or require it to be present for
+  qualification, rather than skipping the check.
+- **M78** `tests/live/` — the live suite cannot function as a regression gate.
+  Every live test builds a runtime from `configs/example.yaml` and uses
+  `artifact_store.default`, i.e. the shared `.research/artifacts.db`, so tests
+  accumulate state across the run and *which tests execute at all* depends on the
+  store's starting contents and on file ordering. **Measured:** a full run from an
+  empty store gave 10 passed / 2 failed / **9 skipped**, and all 9 skips were
+  `no X in store` prerequisite conditions. Provider flakiness was observed
+  directly: the pre-fix baseline failed `test_live_synthesis_smoke` with
+  `OpenRouter upstream error 502: Upstream error from Nvidia: Service temporarily
+  overloaded` — a different cause from the current run's failure on the same test,
+  so the two are not comparable. `tests/conftest.py` additionally skips live tests
+  unless `-m live` appears in the marker expression.
+  **Fix:** give each test an isolated store, retry transient upstream errors, and
+  only then decide whether the suite can gate anything.
+- **M79** `research/benchmarks/calibration.py:203-205` — the unknown-benchmark path
+  records `ConfirmedDefect(case_id="*")`, but `attribute_failures`
+  (`routing/qualification.py:158`) matches by **exact** case id, so `"*"` matches
+  no real case and the defect excludes nothing from qualification. Round 8 keys
+  benchmark-level *evaluator* defects to every case for exactly this reason; that
+  path has cases to enumerate, whereas this one does not.
+  **Fix:** have `attribute_failures` treat `"*"` as a wildcard. It is safe to do
+  globally because the consumer filters defect case ids by benchmark before
+  matching.
 
 ---
 
