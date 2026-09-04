@@ -71,14 +71,21 @@ class LiveQualityFastEvaluator:
         for title, expected_class in expected.items():
             actual = produced.get(title)
             per_class[expected_class]["total"] += 1
+            # Counted before the match test, so a correctly classified
+            # uncertain case is part of the denominator. Previously
+            # uncertain_expected was only incremented on mismatch, and the
+            # inner `if actual == "uncertain"` was unreachable (the branch is
+            # entered only when actual != expected_class), so uncertain_rate
+            # was a step function: 1.0 or 0.0, never a proportion.
+            if expected_class == "uncertain":
+                uncertain_expected += 1
+                if actual == "uncertain":
+                    uncertain_handled += 1
             if actual == expected_class:
                 matched += 1
                 per_class[expected_class]["matched"] += 1
             elif expected_class == "uncertain":
-                uncertain_expected += 1
-                if actual == "uncertain":
-                    uncertain_handled += 1
-                elif actual == "exclude":
+                if actual == "exclude":
                     false_exclusions += 1
                     failures.append(
                         f"false exclusion: expected uncertain, produced exclude for {title!r}"

@@ -154,7 +154,17 @@ def filter_eligible(
                     f"{a.structured_output_success_rate:.3f} < {min_structured:.3f}"
                 )
         if reason is None:
-            if a.model_error_rate is not None and a.model_error_rate > max_error:
+            if a.model_error_rate is None:
+                # Same reasoning as the structured-output rate above: unknown is
+                # not "low". model_error_rate is None when no calls were
+                # recorded (tournament/accounting.py:77), so there is no
+                # evidence about how often this model errors, and the
+                # qualification path treats that as failing
+                # (readiness.py maps None to 1.0 for error dimensions).
+                reason = (
+                    "reliability: model_error_rate unknown, cannot verify error behaviour"
+                )
+            elif a.model_error_rate > max_error:
                 reason = f"reliability: model_error_rate {a.model_error_rate:.3f} > {max_error:.3f}"
 
         # 4. explicit constraints

@@ -155,7 +155,12 @@ def attribute_failures(
     Returns (failure_attribution, excluded_failure_attribution)."""
     attribution: dict[str, int] = {}
     excluded: dict[str, int] = {}
-    if case_id in defect_case_ids:
+    # "*" marks a benchmark-level defect: the whole benchmark is defective, so
+    # every case in it is excluded. Matching it here is safe because callers
+    # filter defect case ids by benchmark before calling
+    # (evaluation_live_quality builds defect_cases with `if bid == benchmark_id`),
+    # so a "*" from one benchmark never leaks into another.
+    if case_id in defect_case_ids or "*" in defect_case_ids:
         # confirmed benchmark/evaluator defect -> excluded, never a model failure
         for _ in failures:
             excluded[FailureAttributionKind.benchmark_reference_defect.value] = (

@@ -189,7 +189,6 @@ def aggregate_run_results(
         "repetition_failure_rate": repetition_failure_rate,
         "cost_per_successful_case": cost_per_successful_case,
         "cost_per_successful_benchmark": cost_per_successful_benchmark,
-        "error_cases": error_cases,
     }
 
 

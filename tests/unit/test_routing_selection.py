@@ -414,3 +414,24 @@ def test_unknown_rate_allowed_when_structured_output_not_required():
     )
     assert len(eligible) == 1
     assert not rejected
+
+
+def test_unknown_model_error_rate_is_rejected():
+    """M77: an unmeasured error rate must not pass the reliability gate.
+
+    model_error_rate is None when no calls were recorded
+    (tournament/accounting.py:77), so there is no evidence about how often the
+    model errors. The qualification path treats that as failing
+    (readiness.py maps None to 1.0 for error dimensions), so routing should too.
+    """
+    board = _board([_entry("unmeasured", deterministic_pass_rate=0.95, model_error_rate=None)])
+    eligible, rejected = filter_eligible(build_assessments(board), _request())
+    assert not eligible
+    assert "model_error_rate" in (rejected[0].rejection_reason or "")
+
+
+def test_measured_model_error_rate_still_qualifies():
+    board = _board([_entry("solid", deterministic_pass_rate=0.95, model_error_rate=0.01)])
+    eligible, rejected = filter_eligible(build_assessments(board), _request())
+    assert len(eligible) == 1
+    assert not rejected

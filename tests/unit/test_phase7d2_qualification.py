@@ -141,6 +141,33 @@ def test_attribute_failure_text(text: str, expected: FailureAttributionKind) -> 
     assert attribute_failure_text(text) == expected
 
 
+def test_attribute_failures_treats_star_as_a_benchmark_level_defect() -> None:
+    """M79: "*" must exclude every case in a defective benchmark.
+
+    The calibration audit records unknown-benchmark defects as case_id="*",
+    and confirmed_defect_map is matched by exact case id, so "*" previously
+    matched nothing and the defect excluded nothing -- every failure stayed
+    counted against the model.
+    """
+    included, excluded = attribute_failures(
+        ["evidence[0]: unsupported reference 'x'", "decision_accuracy 0.5 < 0.8"],
+        defect_case_ids={"*"},
+        case_id="lq-evidence-extraction",
+    )
+    assert included == {}
+    assert excluded[FailureAttributionKind.benchmark_reference_defect.value] == 2
+
+
+def test_attribute_failures_star_does_not_leak_across_benchmarks() -> None:
+    """Callers filter defect ids by benchmark, so "*" only binds within its own."""
+    included, excluded = attribute_failures(
+        ["evidence[0]: unsupported reference 'x'"],
+        defect_case_ids=set(),
+        case_id="lq-evidence-extraction",
+    )
+    assert excluded == {}
+    assert included
+
 def test_attribute_failures_excludes_confirmed_defect_cases() -> None:
     included, excluded = attribute_failures(
         ["evidence[0]: unsupported reference 'x'", "decision_accuracy 0.5 < 0.8"],

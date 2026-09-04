@@ -58,6 +58,9 @@ class ModelQualificationEvaluator:
         tiebreak_ok = True
         stability_ok = True
         eligibility_ok = True
+        # Tracked so metrics can distinguish "checked and passed" from "never
+        # checked": the matrix path does not evaluate several of the checks.
+        is_matrix = bool(matrices)
 
         if matrices:
             (
@@ -101,17 +104,24 @@ class ModelQualificationEvaluator:
                 "rate",
                 "role status and primary/fallback selection match expectations",
             ),
+            # The matrix path does not evaluate rejection kinds or role
+            # isolation -- _check_matrix hard-codes both to True -- so they are
+            # reported as not measured (value 0, count 0) rather than as a
+            # perfect 1.0. Both halves are required: the harness sums values and
+            # counts across cases, so leaving the value at 1.0 while zeroing the
+            # count inflates the aggregate above 1.0. This mirrors how
+            # expected_tiebreak / expected_stability already gate their metrics.
             "rejection_classification_accuracy": _metric(
                 "rejection_classification_accuracy",
-                1.0 if rejection_ok else 0.0,
-                1,
+                0.0 if is_matrix else (1.0 if rejection_ok else 0.0),
+                0 if is_matrix else 1,
                 "rate",
                 "structured rejection kinds match expectations",
             ),
             "role_isolation_accuracy": _metric(
                 "role_isolation_accuracy",
-                1.0 if role_ok else 0.0,
-                1,
+                0.0 if is_matrix else (1.0 if role_ok else 0.0),
+                0 if is_matrix else 1,
                 "rate",
                 "qualification considers only the requested role's evidence",
             ),

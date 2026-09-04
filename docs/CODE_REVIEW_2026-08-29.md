@@ -86,6 +86,7 @@ in the working tree, uncommitted.
 | **H25, M80-M86** "does this guard fire?" pass | **Documented** (round 11), not fixed | `evaluation_live_quality`, `selection.py`, 4 evaluators |
 | **H25** live-quality dropped call records | **Fixed** (round 12) | `evaluation_live_quality/plugin.py` |
 | **M80** unknown structured-output rate passes | **Fixed** (round 13) | `routing/selection.py` |
+| **M77, M79, M81, M82, M86** guard-pass cluster | **Fixed** (round 14) | `selection.py`, `qualification.py`, 3 evaluators |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -527,6 +528,46 @@ would now yield no eligible candidate rather than routing on unverified
 evidence. That is a visible failure (no route chosen) rather than a silent one,
 but it is a behaviour change for that case. `require_structured_output=False`
 remains the documented opt-out, and is covered by a test.
+
+### Round 14 notes (guard-pass cluster: M77, M79, M81, M82, M86)
+
+Five findings from the round-11 pass, chosen because they are small, need no
+config-schema change, and share one shape: code that reports a verdict or a
+measurement it did not actually make.
+
+- **M77** — unknown `model_error_rate` now blocks, mirroring the M80 decision in
+  round 13. The two are the same shape in the same function, so leaving one
+  blocking and one passing would have been arbitrary. Justification is the same:
+  the qualification path maps `None` to `1.0` for error dimensions, i.e. it
+  treats "unknown" as "errors maximally".
+- **M79** — `attribute_failures` now treats `"*"` as a benchmark-level wildcard.
+  Safe because callers filter defect case ids by benchmark before matching
+  (`evaluation_live_quality` builds `defect_cases` with `if bid == benchmark_id`),
+  so a `"*"` from one benchmark cannot leak into another. A test pins that.
+- **M81** — the uncertain-case loop now counts `uncertain_expected` for **every**
+  case whose expected class is uncertain, before the match test. Previously it
+  was incremented only on mismatch, and `uncertain_handled` was unreachable, so
+  `uncertain_case_handling` was 1.0-or-0.0 — never a proportion. Correctly
+  classified uncertain cases were not even in the denominator.
+- **M82** — the matrix path reports `rejection_classification_accuracy` and
+  `role_isolation_accuracy` as not measured instead of a perfect 1.0.
+- **M86** — removed the dead `error_cases` return value.
+
+**A mistake worth recording.** The first M82 fix set `count=0` but left
+`value=1.0`. The harness sums values and counts across cases, so a value with no
+denominator made the benchmark-level aggregate `16/15 = 1.067` and broke an
+integration test. Representing "not measured" requires **both** halves — value 0
+*and* count 0 — which is exactly how the neighbouring `expected_tiebreak` and
+`expected_stability` metrics already do it. The convention was in the file; I
+should have read it before writing the fix.
+
+**Deliberately excluded from this round:** M83 (`task_completion_rate` is a
+constant 1.0 because nothing writes `_completed` — needs a decision on where
+completion data should come from, or removal of the metric), M84
+(`missing_abstract` — needs view-metadata plumbing in the orchestrator), and M85
+(five inert config knobs — fixing them means either wiring budgets into call
+loops or removing config fields, which is a breaking config change). Each
+deserves its own round rather than being squeezed in here.
 
 ### Verification that the new tests are genuine regression tests
 
@@ -1469,7 +1510,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
   unless `-m live` appears in the marker expression.
   **Fix:** give each test an isolated store, retry transient upstream errors, and
   only then decide whether the suite can gate anything.
-- **M79** `research/benchmarks/calibration.py:203-205` — the unknown-benchmark path
+- ~~**M79**~~ **Fixed (round 14).** `research/benchmarks/calibration.py:203-205` — the unknown-benchmark path
   records `ConfirmedDefect(case_id="*")`, but `attribute_failures`
   (`routing/qualification.py:158`) matches by **exact** case id, so `"*"` matches
   no real case and the defect excludes nothing from qualification. Round 8 keys
