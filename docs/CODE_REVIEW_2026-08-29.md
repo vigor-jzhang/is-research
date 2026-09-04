@@ -84,6 +84,7 @@ in the working tree, uncommitted.
 | **H5** calibration verdict ignores 6 of 8 checks | **Fixed** (round 8) | `benchmarks/calibration.py` |
 | **M77/M78/M79** found during rounds 7-8 | **Documented** (round 9), not fixed | `selection.py`, `tests/live/`, `calibration.py` |
 | **H25, M80-M86** "does this guard fire?" pass | **Documented** (round 11), not fixed | `evaluation_live_quality`, `selection.py`, 4 evaluators |
+| **H25** live-quality dropped call records | **Fixed** (round 12) | `evaluation_live_quality/plugin.py` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -464,6 +465,35 @@ Three observations about the shape itself:
   cover, and it feeds `provider_error_frequency` — a live qualification gate
   that is otherwise fail-closed, so understating it is precisely what lets a
   flaky model through. It should be fixed next.
+
+### Round 12 notes (H25)
+
+One-line fix, mirroring H4: `calls.extend(router.records)` on the exception
+path. Unlike H4, **no denominator change was needed here** — the live-quality
+loop already appends a `report_status="error"` task result for a crashed
+repetition, so `repetitions=len(task_results)` counted them. The tournament
+loop H4 fixed had dropped them entirely, hence its `failed_repetitions`
+counter. Only the records were being lost here.
+
+- **The defect is only visible when the crash is caused by provider errors.**
+  If the model call succeeds and the benchmark then fails for some other
+  reason, the record has `status="success"` and `provider_error_frequency` is
+  unchanged. It matters when the crash *is* a timeout / rate limit / provider
+  error, because those records are exactly what the gate counts. The regression
+  test therefore uses a provider that times out rather than one that succeeds.
+- **How the two gates interact.** `provider_error_frequency` is
+  `provider_errors / len(calls)`, so dropping records removed the numerator
+  along with the denominator. Note the failure mode is not "the gate flipped
+  to passing" in every case: if *all* repetitions crash, `calls` is empty and
+  `provider_error_frequency` is `None`, which `readiness.py` maps to `1.0` and
+  rejects. The dangerous case is a **mix** — one successful repetition plus
+  crashed ones — where the frequency was computed over survivors only and read
+  0.0 where the true rate is > 0.
+- **Test observation: the call list is not exposed.** `LiveQualityModelResult`
+  has no `calls` field, so the test asserts through the derived metrics
+  (`provider_error_frequency`, `failure_counts`) rather than the list itself.
+  The tournament result does expose `calls`, which is why H4's test could
+  assert on it directly.
 
 ### Verification that the new tests are genuine regression tests
 
@@ -1078,7 +1108,7 @@ because of transient 429s is a **correctness** failure.
 
 ---
 
-### H25 — Live quality: crashed repetitions drop their call records
+### H25 — Live quality: crashed repetitions drop their call records — **Fixed (round 12)**
 `plugins/research/evaluation_live_quality/plugin.py:126-142` — the repetition
 loop catches a failed `run_benchmark`, appends a `report_status="error"` task
 result, and `continue`s — which skips `calls.extend(router.records)` at line

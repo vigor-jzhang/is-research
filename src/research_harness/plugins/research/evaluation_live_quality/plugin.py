@@ -124,6 +124,15 @@ class LiveQualityService:
                     model_roles={role: model_config.requested_model},
                 )
             except Exception:  # noqa: BLE001
+                # The attempt still happened and the router recorded its calls
+                # (CandidateModelRouter calls _record(status="error") before
+                # raising). Keep them: dropping them shrank both the numerator
+                # and the denominator of provider_error_frequency and
+                # structured_output_failure_frequency, so a crashed repetition
+                # made a flaky model look *more* reliable than it is. This is
+                # the same defect as H4, fixed in the tournament loop but not
+                # here.
+                calls.extend(router.records)
                 task_results.append(
                     LiveQualityTaskResult(
                         repetition=rep,
