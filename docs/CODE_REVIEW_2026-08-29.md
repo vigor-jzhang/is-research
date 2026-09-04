@@ -78,7 +78,7 @@ in the working tree, uncommitted.
 | **M12** rate metrics change meaning at `count == 0` | **Fixed** (round 5) | `schemas/evaluation.py` + harness |
 | **M13** store read failures shrink denominators | **Fixed** (round 5) | `evaluation_harness/plugin.py` |
 | **M8** `acq-duplicate-blob` vacuous | **Investigated** (round 6) — production correct, coverage added | `fetcher_http`, `benchmarks` |
-| Coverage matrix vs evaluator output | **Partly fixed** (round 6) | `evaluation_coverage.py` + test |
+| Coverage matrix vs evaluator output | **Fixed** (round 10) | `evaluation_coverage.py` + integration test |
 | **H2** errored cases excluded from the pass-rate gate | **Fixed** (round 7) | `tournament/accounting.py`, `routing/selection.py` |
 | **H4** failed repetitions dropped, call records lost | **Fixed** (round 7) | `evaluation_model_tournament` |
 | **H5** calibration verdict ignores 6 of 8 checks | **Fixed** (round 8) | `benchmarks/calibration.py` |
@@ -391,6 +391,49 @@ Two of the three (M77, M79) are cases where a check *looks* like it guards
 something and does not — the same shape as H2, H4, H5 and M8. That pattern is
 now the most common defect class in this codebase, and a review pass aimed
 specifically at "does this guard actually fire?" would likely find more.
+
+### Round 10 notes (coverage matrix vs reality)
+
+Round 6 added a check that declared metrics are *well-formed ids*, which caught
+one stale row. This round added the check that actually matters — run every
+benchmark and compare the declared metrics against what is emitted — and it
+found **five more stale rows**:
+
+| Benchmark | Declared (wrong) | Actually emitted |
+|---|---|---|
+| `literature-retrieval-v1` | `retrieval_recall`, `ranking_accuracy`, `relevance_accuracy` | `recall@5/@10`, `precision@5/@10`, `f1@5/@10`, `mrr`, `duplicate_rate`, … |
+| `citation-correctness-v1` | `citation_accuracy`, `bibliography_fidelity` | `citation_resolution_accuracy`, `inline_citation_accuracy`, `bibliography_coverage`, … (11) |
+| `literature-screening-v1` | `inclusion_accuracy`, `exclusion_accuracy`, `review_accuracy` | `include_precision/recall/f1`, `exclude_accuracy`, `screening_accuracy`, … (10) |
+| `evidence-extraction-v1` | `evidence_grounding_rate`, `page_grounding_accuracy` | `evidence_precision/recall/f1`, `locator_accuracy`, `required_evidence_recall`, … (10) |
+| `mechanism-development-v1` | `mechanism_grounding_rate` | `grounding_accuracy`, `candidate_validity_rate`, `gap_alignment_accuracy`, … (10) |
+
+Three of the five declared metric ids that do not exist at all; the other two
+declared a subset that omitted most of what the evaluator measures.
+
+- **Convention confirmed, then encoded.** Every row that already passed had
+  `declared == emitted` exactly, so rows are meant to list the evaluator's full
+  substantive metric set. The five rows were corrected to match.
+- **Subset, not equality, is the assertion.** `novelty-threat-v1` wires two
+  evaluators and so emits `citation_resolution_accuracy` beyond its declared
+  set. Asserting equality would fail a correct row; the test asserts every
+  declared metric is emitted, which is the property that matters.
+- **The round-6 id check needed relaxing.** Retrieval metrics are named
+  `f1@10`, `precision@5`. The original `[a-z][a-z0-9_]*` pattern would have
+  rejected them, so it now permits `@`. Free-text is still caught, because
+  spaces, capitals and other punctuation remain invalid.
+- **Three rows remain unverifiable offline** (`live-quality-reasoning/critic/
+  fast-v1`): they error before emitting anything without a real provider. They
+  are on an explicit, asserted-small skip list, and their rows may be stale too
+  — that is now recorded rather than assumed.
+- **Cost:** ~22s, in `tests/integration`.
+
+### Observation recorded while building this (not yet a finding)
+
+Re-running a benchmark against a **non-empty** store gives different results
+from a fresh one: `novelty-threat-v1` reports 6/7 cases passed on a fresh store
+and 0/7 on a second run in the same store. The emitted metric ids are identical
+either way, so the coverage test is unaffected, but the pass count moving like
+that may indicate benchmark re-runs are not idempotent. Not investigated.
 
 ### Verification that the new tests are genuine regression tests
 

@@ -99,7 +99,11 @@ def test_readiness_verdict_not_ready_when_e2e_missing():
         benchmarks.BUILTIN_BENCHMARKS = original
 
 
-_METRIC_ID = re.compile(r"[a-z][a-z0-9_]*")
+# Metric ids are snake_case; "@" is allowed because the retrieval evaluator
+# emits rank-cutoff metrics such as f1@10 and precision@5. Spaces, capitals
+# and punctuation beyond "@" are still rejected, which is what catches
+# free-text descriptions masquerading as metric ids.
+_METRIC_ID = re.compile(r"[a-z0-9][a-z0-9_@]*")
 
 
 def test_coverage_matrix_metrics_are_metric_ids():
