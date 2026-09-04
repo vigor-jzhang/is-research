@@ -88,6 +88,7 @@ in the working tree, uncommitted.
 | **M80** unknown structured-output rate passes | **Fixed** (round 13) | `routing/selection.py` |
 | **M77, M79, M81, M82, M86** guard-pass cluster | **Fixed** (round 14) | `selection.py`, `qualification.py`, 3 evaluators |
 | **H16, H17, H18** plugin lifecycle | **Fixed** (round 15) | `kernel/manager.py` |
+| **H13, H14, H15** CLI plugin/exit-code | **Fixed** (round 16) | `cli/main.py` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -601,6 +602,49 @@ original H17 description did not mention, and it is pinned by a test.
 Note the pre-existing `test_setup_failure_rolls_back_services_and_subscriptions`
 passed before this round because its failing plugin registered nothing — it
 exercised rollback of a *successful* plugin, not of a partially-initialised one.
+
+### Round 16 notes (H13, H14, H15 — CLI)
+
+**H13 — required plugins ensured on the config-file path.** The report named
+four "worst offenders" and ~12 further sites to convert to a helper. Measuring
+first turned up a larger real scope: an AST pass over `cli/main.py` compared
+each command's default plugin list against what its ensure block actually
+guarantees, and found **14 commands** that dropped required plugins — the four
+in the report plus ten more (every command needing `model.openrouter`,
+`routing.role_router` and `autonomy.configurable`, e.g. `model_build`, whose
+default requires them but which ensured neither). 46 ensure sites now funnel
+through one `_ensure_plugins(cfg, *ids)` helper.
+
+- **The helper appends, never replaces**, so a config legitimately listing extra
+  plugins is preserved. Pinned by a test.
+- **Why the extra ten were missed originally:** their ensure block is a
+  `for req in [...]` loop that *looks* correct because it covers the storage
+  plugin, while the provider/router/autonomy trio comes from a separate
+  `if "model.openrouter" not in cfg.plugins: extend([...])` that no-ops when the
+  user configures any provider. A conditional keyed on one member of a group is
+  the same defect in a different costume.
+- **One false positive worth recording:** `literature_execute` splits its
+  ensures across two loops separated by a comment. My first verifier compared
+  each loop against the default individually and reported it broken; the union
+  covers everything. The verifier now unions.
+- **Regression test is structural.** `tests/unit/test_cli_plugin_requirements.py`
+  parses `cli/main.py` and asserts every command's ensure covers its whole
+  default list, so this cannot silently return. It does not execute commands.
+
+**H14** — `_manuscript_config` / `_publication_config` now pass `extra_plugins`
+through `_ensure_plugins`, so the research plugin survives the config-file path.
+
+**H15** — `publication validate` exits 1 on failure (and on a validation
+error), making it usable as a CI gate. Siblings `model_build` and
+`equilibrium_derive` already did this.
+
+**A process note.** The bulk AST rewrite corrupted the file on its first attempt
+(an `IndentationError`), because the region detection mixed ensure nodes from
+different nesting levels. It was reverted and redone restricted to direct
+children of each function body, with `ast.parse` validated after every single
+edit. Two functions use `cfg_obj` rather than `cfg`, which a naive replacement
+got wrong; a follow-up pass now derives the variable from the `build_runtime(...)`
+call in the same block.
 
 ### Verification that the new tests are genuine regression tests
 

@@ -446,6 +446,21 @@ def session_inspect(
 # ---------------------------------------------------------------------------
 
 
+def _ensure_plugins(cfg: Any, *plugin_ids: str) -> None:  # type: ignore[no-untyped-def]
+    """Append any missing required plugins to a loaded config.
+
+    Every command builds a default config listing everything it needs, but when
+    a config file was present most of them appended only a subset, so the
+    command ran without services it requires (H13) -- for example
+    ``model_build`` needs ``model.openrouter`` and ``routing.role_router`` but
+    ensured neither. Appends rather than replaces, so a config that legitimately
+    lists extra plugins is preserved.
+    """
+    for pid in plugin_ids:
+        if pid not in cfg.plugins:
+            cfg.plugins.append(pid)
+
+
 def _get_artifact_store(
     config: pathlib.Path | None,
 ) -> tuple[Any, pathlib.Path]:  # type: ignore[no-untyped-def]
@@ -889,9 +904,7 @@ def literature_plan(
                 }
             )
         # Ensure planner dependencies
-        for req in ["storage.artifacts_sqlite", "literature.search_planner"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "literature.search_planner", "model.openrouter", "routing.role_router")
         # Also need model router if planner uses it
         if "model.openrouter" not in cfg.plugins and "routing.role_router" not in cfg.plugins:
             cfg.plugins.extend(["model.openrouter", "routing.role_router"])
@@ -1259,11 +1272,7 @@ def screening_protocol_create(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "literature.screening_protocol_builder"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
-        if "model.openrouter" not in cfg.plugins:
-            cfg.plugins.extend(["model.openrouter", "routing.role_router", "autonomy.configurable"])
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "literature.screening_protocol_builder", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -1444,16 +1453,7 @@ def screening_run(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "literature.screening_view_builder",
-            "literature.title_abstract_screener",
-            "literature.screening_orchestrator",
-        ]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
-        if "model.openrouter" not in cfg.plugins:
-            cfg.plugins.extend(["model.openrouter", "routing.role_router", "autonomy.configurable"])
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "literature.screening_view_builder", "literature.title_abstract_screener", "literature.screening_orchestrator")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -1835,14 +1835,7 @@ def documents_locate(
                     "documents": {"blob_root": ".research/blobs"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "storage.blobs_filesystem",
-            "documents.locator.metadata",
-            "documents.locator.unpaywall",
-        ]:
-            if req not in cfg_obj.plugins:
-                cfg_obj.plugins.append(req)
+        _ensure_plugins(cfg_obj, "storage.artifacts_sqlite", "storage.blobs_filesystem", "documents.locator.metadata", "documents.locator.unpaywall")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -1922,17 +1915,7 @@ def documents_acquire(
                     "documents": {"blob_root": ".research/blobs"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "storage.blobs_filesystem",
-            "documents.locator.metadata",
-            "documents.locator.unpaywall",
-            "documents.fetcher.http",
-            "documents.extractor.pypdf",
-            "documents.acquisition_orchestrator",
-        ]:
-            if req not in cfg_obj.plugins:
-                cfg_obj.plugins.append(req)
+        _ensure_plugins(cfg_obj, "storage.artifacts_sqlite", "storage.blobs_filesystem", "documents.locator.metadata", "documents.locator.unpaywall", "documents.fetcher.http", "documents.extractor.pypdf", "documents.acquisition_orchestrator")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2177,14 +2160,7 @@ def documents_import(
                     "documents": {"blob_root": ".research/blobs"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "storage.blobs_filesystem",
-            "documents.acquisition_orchestrator",
-            "documents.extractor.pypdf",
-        ]:
-            if req not in cfg_obj.plugins:
-                cfg_obj.plugins.append(req)
+        _ensure_plugins(cfg_obj, "storage.artifacts_sqlite", "storage.blobs_filesystem", "documents.acquisition_orchestrator", "documents.extractor.pypdf")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2320,14 +2296,7 @@ def evidence_run(
                     "documents": {"blob_root": ".research/blobs"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "storage.blobs_filesystem",
-            "literature.evidence_extractor",
-            "literature.evidence_orchestrator",
-        ]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "storage.blobs_filesystem", "literature.evidence_extractor", "literature.evidence_orchestrator", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2376,8 +2345,7 @@ def evidence_profiles_list(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2420,8 +2388,7 @@ def evidence_profiles_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2491,8 +2458,7 @@ def evidence_items_list(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2552,8 +2518,7 @@ def evidence_items_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2613,9 +2578,7 @@ def synthesis_run(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "literature.synthesis"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "literature.synthesis", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2672,8 +2635,7 @@ def synthesis_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2740,8 +2702,7 @@ def synthesis_themes_list(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2792,8 +2753,7 @@ def synthesis_themes_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2861,9 +2821,7 @@ def gaps_run(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "literature.gap_analyzer"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "literature.gap_analyzer", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2928,8 +2886,7 @@ def gaps_list(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -2978,8 +2935,7 @@ def gaps_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3047,8 +3003,7 @@ def gaps_analysis_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3137,9 +3092,7 @@ def research_gap_select(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "research.gap_selection"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.gap_selection", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3198,9 +3151,7 @@ def mechanisms_generate(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "research.mechanism_generator"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.mechanism_generator", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3266,8 +3217,7 @@ def mechanisms_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3340,9 +3290,7 @@ def mechanisms_critique(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "research.mechanism_critic"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.mechanism_critic", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3395,9 +3343,7 @@ def mechanisms_select(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "research.mechanism_critic"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.mechanism_critic", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3457,9 +3403,7 @@ def model_build(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "research.model_builder"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.model_builder", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3521,8 +3465,7 @@ def model_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3602,13 +3545,7 @@ def model_critique(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "research.model_builder",
-            "research.model_specification_critic",
-        ]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.model_builder", "research.model_specification_critic", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3662,13 +3599,7 @@ def model_revise(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "research.model_builder",
-            "research.model_specification_critic",
-        ]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.model_builder", "research.model_specification_critic", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3732,13 +3663,7 @@ def equilibrium_derive(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "research.equilibrium_verifier",
-            "research.equilibrium_deriver",
-        ]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.equilibrium_verifier", "research.equilibrium_deriver", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3826,8 +3751,7 @@ def equilibrium_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3903,9 +3827,7 @@ def equilibrium_verify(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "research.equilibrium_verifier"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.equilibrium_verifier")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -3970,8 +3892,7 @@ def comparative_statics_run(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.comparative_statics")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4031,8 +3952,7 @@ def comparative_statics_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4110,14 +4030,7 @@ def propositions_generate(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in [
-            "storage.artifacts_sqlite",
-            "research.proposition_verifier",
-            "research.proposition_critic",
-            "research.proposition_generator",
-        ]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.proposition_verifier", "research.proposition_critic", "research.proposition_generator", "model.openrouter", "routing.role_router", "autonomy.configurable")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4198,8 +4111,7 @@ def propositions_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4284,9 +4196,7 @@ def propositions_verify(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        for req in ["storage.artifacts_sqlite", "research.proposition_verifier"]:
-            if req not in cfg.plugins:
-                cfg.plugins.append(req)
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.proposition_verifier")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4349,8 +4259,7 @@ def numerical_run(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.numerical_analysis")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4408,8 +4317,7 @@ def numerical_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4489,8 +4397,7 @@ def numerical_results(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4544,8 +4451,7 @@ def numerical_robustness(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4599,8 +4505,7 @@ def numerical_welfare(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4655,8 +4560,7 @@ def results_assemble(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.results_assembler")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4713,8 +4617,7 @@ def results_inspect(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4780,8 +4683,7 @@ def results_critique(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite", "research.results_critic")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4832,8 +4734,7 @@ def findings_list(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4883,8 +4784,7 @@ def contributions_list(
                     "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
                 }
             )
-        if "storage.artifacts_sqlite" not in cfg.plugins:
-            cfg.plugins.append("storage.artifacts_sqlite")
+        _ensure_plugins(cfg, "storage.artifacts_sqlite")
 
         from research_harness.app.bootstrap import build_runtime
 
@@ -4929,8 +4829,10 @@ def _manuscript_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
                 "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
             }
         )
-    if "storage.artifacts_sqlite" not in cfg.plugins:
-        cfg.plugins.append("storage.artifacts_sqlite")
+    # extra_plugins used to be applied only on the default path and dropped
+    # whenever a config file was present, so the research plugin was missing
+    # (H14).
+    _ensure_plugins(cfg, "storage.artifacts_sqlite", *extra_plugins)
     return cfg
 
 
@@ -5162,9 +5064,9 @@ def _publication_config(config: pathlib.Path | None, extra_plugins: list[str]) -
                 "artifacts": {"store": "sqlite", "path": ".research/artifacts.db"},
             }
         )
-    for pid in ("storage.artifacts_sqlite", "storage.blobs_filesystem"):
-        if pid not in cfg.plugins:
-            cfg.plugins.append(pid)
+    # extra_plugins used to be applied only on the default path and dropped
+    # whenever a config file was present (H14).
+    _ensure_plugins(cfg, "storage.artifacts_sqlite", "storage.blobs_filesystem", *extra_plugins)
     return cfg
 
 
@@ -5250,17 +5152,26 @@ def publication_validate(
         "configs/example.yaml"
     ),
 ) -> None:
-    """Validate a FormattedManuscript deterministically (Phase 4C)."""
+    """Validate a FormattedManuscript deterministically (Phase 4C).
+
+    Exits non-zero when validation fails, so it can be used as a CI gate before
+    `publication package` (H15). Siblings `model_build` and
+    `equilibrium_derive` already do this.
+    """
     import asyncio
 
-    async def _run() -> None:
+    async def _run() -> bool:
         cfg = _publication_config(config, ["research.publication_formatter"])
         from research_harness.app.bootstrap import build_runtime
 
         runtime = build_runtime(cfg)
         async with runtime:
             svc = runtime.services.require("publication_formatter.default")
-            leaf, passed = await svc.validate(manuscript)
+            try:
+                leaf, passed = await svc.validate(manuscript)
+            except Exception as e:  # noqa: BLE001
+                console.print(f"[red]✗ validation error: {e}[/red]")
+                return False
             store = runtime.services.require("artifact_store.default")
             from research_harness.research.schemas.publication import FormattedManuscript
 
@@ -5271,8 +5182,10 @@ def publication_validate(
                 console.print(f"[red]✗ FormattedManuscript FAILED validation: {leaf}[/red]")
             for issue in fm.validation_issues:
                 console.print(f"  [{issue.severity}] {issue.check}: {issue.detail[:130]}")
+            return bool(passed)
 
-    asyncio.run(_run())
+    if not asyncio.run(_run()):
+        raise typer.Exit(code=1)
 
 
 @publication_app.command("export")
