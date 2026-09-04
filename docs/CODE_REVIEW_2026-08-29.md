@@ -83,6 +83,7 @@ in the working tree, uncommitted.
 | **H4** failed repetitions dropped, call records lost | **Fixed** (round 7) | `evaluation_model_tournament` |
 | **H5** calibration verdict ignores 6 of 8 checks | **Fixed** (round 8) | `benchmarks/calibration.py` |
 | **M77/M78/M79** found during rounds 7-8 | **Documented** (round 9), not fixed | `selection.py`, `tests/live/`, `calibration.py` |
+| **H25, M80-M86** "does this guard fire?" pass | **Documented** (round 11), not fixed | `evaluation_live_quality`, `selection.py`, 4 evaluators |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -434,6 +435,35 @@ from a fresh one: `novelty-threat-v1` reports 6/7 cases passed on a fresh store
 and 0/7 on a second run in the same store. The emitted metric ids are identical
 either way, so the coverage test is unaffected, but the pass count moving like
 that may indicate benchmark re-runs are not idempotent. Not investigated.
+
+### Round 11 notes (the "does this guard actually fire?" pass)
+
+No code changed. This was a targeted review pass for one defect shape: a check
+that looks like it guards something but cannot fire. It found **8 new
+findings** (**H25**, **M80-M86**), which makes this the highest-yield round of
+the review so far.
+
+Method: enumerate the shapes of the six already-known instances (H2, H4, H5,
+M8, M77, M79), grep for each mechanically, then trace every candidate to
+confirm or refute that the guard's result is consumed. Two candidates were
+refuted after tracing and are recorded as such, because a near-miss costs the
+next person the same investigation.
+
+Three observations about the shape itself:
+
+- **It is the dominant defect class here.** Counting: H2, H4, H5, M8, M77, M79
+  plus the 8 new ones — 14 findings share it. That is more than any other single
+  class in this report.
+- **"Unknown" is where they hide.** Three of the new findings (M77, M80, and
+  the original H2) are a threshold written as `if X is not None and X op
+  threshold`. The test is only meaningful when X is known, and the author's
+  intent for the unknown case is almost never written down. M80 shows the
+  inconsistency directly: in one function, unknown cost and unknown latency
+  block, and unknown structured-output rate passes.
+- **H25 is the one that matters most.** It is H4 again, in the path H4 did not
+  cover, and it feeds `provider_error_frequency` — a live qualification gate
+  that is otherwise fail-closed, so understating it is precisely what lets a
+  flaky model through. It should be fixed next.
 
 ### Verification that the new tests are genuine regression tests
 
@@ -1048,6 +1078,31 @@ because of transient 429s is a **correctness** failure.
 
 ---
 
+### H25 — Live quality: crashed repetitions drop their call records
+`plugins/research/evaluation_live_quality/plugin.py:126-142` — the repetition
+loop catches a failed `run_benchmark`, appends a `report_status="error"` task
+result, and `continue`s — which skips `calls.extend(router.records)` at line
+177, the only place records are collected. `CandidateModelRouter` *does* record
+the failed call before raising (`evaluation_model_tournament/plugin.py:218-227`
+calls `_record(status="error", ...)` immediately before `raise ModelError`), so
+the records exist and are then discarded.
+
+This is the same defect as **H4**, which was fixed in the tournament loop but
+not here. Consequences traced: `aggregate_calls` sees a shortened list, so
+`provider_error_frequency`, `structured_output_success_rate`, `model_error_rate`,
+`failure_counts` and `estimated_cost` are all under-counted, with no counter
+recording the loss (contrast `aggregation_error_count` in the harness).
+`provider_error_frequency` is a live qualification gate
+(`routing/readiness.py:102-106`), and unlike the routing path it is
+**fail-closed on unknown** (`_rate(..., 1.0)`), so understating it is what lets
+a flaky model through: with one crashed repetition out of N, the rate is
+computed only over the survivors and reads 0.0 where the true rate is > 0.
+Note `det_rates` still receives a `0.0` for the crashed repetition, so the
+deterministic gate usually catches it anyway — the clean flip is the
+provider-error gate.
+**Fix:** mirror the H4 fix — extend `calls` on the exception path and count the
+failed attempt.
+
 ## 4. Medium-severity findings
 
 **Correctness / scoring**
@@ -1246,6 +1301,83 @@ because of transient 429s is a **correctness** failure.
   containment check, and `read_text()` without `encoding=`.
 - **M76** `main.py:6252-6256, 6489-6494, 6497-6502` — `_tournament_config`/`_routing_config`/
   `_live_quality_config` accept `extra_plugins` and ignore it; 23 call sites pass it.
+
+**Found during round 11 ("does this guard actually fire?" pass) — not yet fixed**
+
+This pass looked specifically for checks that appear to guard something but
+cannot fire. It reused the shapes of H2, H4, H5, M8, M77 and M79. Every entry
+below was traced to confirm the guard's result is not consumed.
+
+- **M80** `research/routing/selection.py:136-144` — unknown
+  `structured_output_success_rate` **passes**, while unknown values elsewhere in
+  the *same function* block: `estimated_cost is None` ⇒ "cost unknown, cannot
+  satisfy max_estimated_cost" (154-157) and `latency_ms_p50 is None` ⇒ "latency
+  unknown, cannot satisfy latency_limit_ms" (163-166). `require_structured_output`
+  defaults to `True`, so this is an always-on gate that silently no-ops when the
+  rate was never measured — reachable when no call passes a `response_schema`
+  (`tournament/accounting.py:113-116` leaves it `None`). The production
+  qualification path treats unknown as failing (`readiness.py:96-101` maps it to
+  `0.0`); the routing path disagrees. **Fix:** mirror the cost/latency handling.
+- **M81** `plugins/research/evaluator_live_quality_fast/plugin.py:77-80` —
+  `uncertain_handled` is **unreachable**. The branch is entered only when
+  `actual != expected_class` and `expected_class == "uncertain"`, so the inner
+  `if actual == "uncertain"` can never be true. Worse, a *correctly* handled
+  uncertain case takes the first branch (`matched += 1`) and never increments
+  `uncertain_expected`, so `uncertain_rate` (113) degenerates to a step
+  function: `1.0` when no expected-uncertain case was mishandled, `0.0`
+  otherwise — never a proportion, despite being reported as a rate.
+- **M82** `plugins/research/evaluator_model_qualification/plugin.py:439` — the
+  matrix path returns `decision_ok, True, eligibility_ok, True, True, True,
+  unsafe, failures`, hard-coding stability, rejection, role and tiebreak checks
+  to `True`. Two of them are still **reported as measured**:
+  `rejection_classification_accuracy` (105-110) and `role_isolation_accuracy`
+  (111-117) emit `count=1, value=1.0`. For `mq-role-partial-qualification` the
+  report therefore asserts 1.0 (n=1) for checks that never ran. The *verdict* is
+  unaffected (status derives from `failures`), so this is false confidence in
+  metrics rather than a bypass — the same shape as M8.
+- **M83** `plugins/research/evaluator_live_quality_reasoning/plugin.py:553` —
+  `ctx.case.input.get("_completed", True)`. Nothing in the repository ever
+  writes `_completed` (grep across `src`, `tests` and `docs` returns only this
+  read), and `BenchmarkCase.input` is immutable benchmark data, so
+  `task_completion_rate` (600-605, 642) is a constant 1.0 with denominator 1.
+  Declared in `evaluation_coverage.py:596`. Permanently green; nothing gates on
+  it today.
+- **M84** `plugins/literature/screening_orchestrator/plugin.py:423` —
+  `"missing_abstract": 0` is hard-coded, while the real signal is set at
+  `screening_view_builder/plugin.py:249` (`metadata["missing_abstract"] = True`)
+  and never read by the orchestrator. A reported 0 reads as "no paper lacked an
+  abstract" when the flag was simply never aggregated. The workflow docs
+  (`docs/workflows/literature/screening.md:48`) treat missing abstracts as a
+  first-class condition that must not cause auto-exclusion.
+- **M85** Five configured budgets/roles are stored and never read, so the knob
+  does nothing: `results_assembler/plugin.py:192` (`max_llm_calls`, 1
+  occurrence), `proposition_generator/plugin.py:91` (`max_llm_calls`),
+  `mechanism_generator/plugin.py:145` (`max_model_calls`),
+  `gap_analyzer/plugin.py:140` (`max_model_calls`), and
+  `equilibrium_deriver/plugin.py:78` (`revision_role`). The first is a live
+  difference: `results_assembler` loops `range(1 + _MAX_VALIDATION_RETRIES)`
+  (225) with `_MAX_VALIDATION_RETRIES = 2`, i.e. up to **3** model calls with no
+  reference to the configured budget, so setting `max_llm_calls = 1` (the schema
+  allows `ge=1`) still yields 3. For `equilibrium_deriver` the consequence is
+  concrete too: `_llm_candidate_call` always uses `self._model_role` (639), so
+  revisions run under the derivation role and the configured `revision_role` has
+  no effect — the sibling `mechanism_critic` (381) and
+  `model_specification_critic` (248) plugins *do* honour theirs.
+- **M86** `research/tournament/accounting.py:192` — `error_cases` is computed,
+  returned, and never read by any caller (the only caller is
+  `evaluation_model_tournament/plugin.py:403`, which reads
+  `case_error_rate` instead). Unlike the original H2 defect this is only a dead
+  return value: the behaviour is covered because `case_error_rate` derives from
+  the same value and *is* persisted and gated. Listed for completeness.
+
+Two further shapes found and **refuted** after tracing, recorded so they are not
+re-audited: `research/routing/qualification.py:194` is a tautological guard
+(`worst >= threshold` and `mean is not None` are both guaranteed by the early
+return at 187-193) but loses nothing, since `worst <= mean` makes the intended
+check implied — dead code, not a hole. And `equilibrium_verifier` /
+`proposition_verifier` build `passed=False` checks that initially look like the
+H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86`,
+`proposition_verifier/plugin.py:71-88` derive `hard_failed` / `soft_unpassed`).
 
 **Found during rounds 7-8 — documented, not yet fixed**
 
