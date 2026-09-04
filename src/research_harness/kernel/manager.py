@@ -134,9 +134,22 @@ class PluginManager:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def _rebuild_service_providers(self) -> None:
+        """Recompute service -> provider id from the registered plugins.
+
+        stop_all() clears this map so that freshly registered plugins can
+        provide services again; it is rebuilt here so dependency validation and
+        ordering still work when the manager is started a second time.
+        """
+        self._service_providers = {}
+        for pid, plugin in self._plugins.items():
+            for svc in plugin.metadata.provides:
+                self._service_providers[svc] = pid
+
     async def setup_all(self) -> None:
         if self._started:
             raise PluginError("plugins already started")
+        self._rebuild_service_providers()
         order = self.resolve_order()
         initialized: list[str] = []
         try:
@@ -151,12 +164,33 @@ class PluginManager:
                     subscription_cleanups=[],
                 )
                 logger.debug("setting up plugin %s", pid)
-                await plugin.setup(ctx)
+                # Both recorded *before* setup runs.
+                #
+                # The cleanup list is shared with the context and mutated by
+                # subscribe(), so capturing it before setup means a plugin that
+                # subscribes and then raises still has its unsubscribers
+                # tracked. Capturing it afterwards leaked the handler forever,
+                # firing against dead plugin state.
+                #
+                # Likewise, appending to `initialized` before setup means the
+                # rollback below also covers the plugin that failed part-way
+                # through, releasing any services it had already registered.
+                # Previously only fully-set-up plugins were rolled back, so a
+                # plugin that registered a service and then raised leaked it.
                 self._subscription_cleanups[pid] = ctx.subscription_cleanups
                 initialized.append(pid)
+                await plugin.setup(ctx)
                 await self.events.publish(_make_event("plugin.loaded", pid, {"plugin_id": pid}))
         except Exception:
             for pid in reversed(initialized):
+                # stop() first: plugins acquire resources in setup() and release
+                # them in stop() (ArtifactsSqlitePlugin opens its connection in
+                # setup and closes it only in stop). Tearing down without
+                # stopping leaked those resources.
+                try:
+                    await self._plugins[pid].stop()
+                except Exception:
+                    logger.exception("error stopping plugin %s during setup rollback", pid)
                 try:
                     await self._plugins[pid].teardown()
                 except Exception:
@@ -169,6 +203,10 @@ class PluginManager:
         self._ordered_ids = order
 
     async def start_all(self) -> None:
+        # Idempotent: without this guard a second call started every plugin
+        # again, duplicating whatever resources start() acquires.
+        if self._started:
+            return
         if not self._ordered_ids:
             await self.setup_all()
         started: list[str] = []
@@ -211,6 +249,11 @@ class PluginManager:
                     unsubscribe()
                 except Exception:
                     logger.exception("error unsubscribing plugin %s", pid)
+        # Released so services can be provided again: the map is otherwise only
+        # populated by register(), whose duplicate check then rejected any new
+        # plugin offering a service a stopped plugin used to provide, making the
+        # manager unusable after one cycle. Rebuilt by setup_all().
+        self._service_providers = {}
         self._started = False
         self._ordered_ids = []
 

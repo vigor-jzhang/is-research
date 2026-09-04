@@ -218,3 +218,147 @@ async def test_setup_failure_rolls_back_services_and_subscriptions():
         await manager.start_all()
     assert not manager.services.has("svc.first")
     assert manager.events.handler_count("probe") == 0
+
+
+# ---------------------------------------------------------------------------
+# H16 / H17 / H18 — plugin lifecycle
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_setup_rollback_calls_stop_before_teardown():
+    """H16: rollback must stop plugins, not just tear them down.
+
+    Plugins acquire resources in setup() and release them in stop(), so
+    teardown-only rollback leaked them (the SQLite plugin opens its connection
+    in setup and closes it only in stop).
+    """
+    events = EventBus()
+    manager = PluginManager(events=events)
+    record: list[str] = []
+
+    class Failing(Plugin):
+        @property
+        def metadata(self) -> PluginMetadata:
+            return PluginMetadata(id="z_failing", version="0.1.0", plugin_type="test")
+
+        async def setup(self, ctx):
+            raise RuntimeError("setup failed")
+
+    manager.register(make_plugin("a_ok", provides=["svc.a"], record=record))
+    manager.register(Failing())
+    with pytest.raises(RuntimeError, match="setup failed"):
+        await manager.start_all()
+
+    assert "stop:a_ok" in record, f"rollback never stopped the plugin: {record}"
+    assert record.index("stop:a_ok") < record.index("teardown:a_ok")
+
+
+@pytest.mark.asyncio
+async def test_setup_that_subscribes_then_raises_cleans_up():
+    """H17: a plugin that subscribes and then fails must not leak the handler.
+
+    The cleanup list was captured only after setup returned, so a plugin that
+    subscribed and then raised left its handler registered forever, firing
+    against dead plugin state.
+    """
+    events = EventBus()
+    manager = PluginManager(events=events)
+    received: list[str] = []
+
+    class SubscribeThenFail(Plugin):
+        @property
+        def metadata(self) -> PluginMetadata:
+            return PluginMetadata(id="p", version="0.1.0", plugin_type="test")
+
+        async def setup(self, ctx):
+            ctx.subscribe("probe", lambda _: received.append("called"))
+            raise RuntimeError("setup failed after subscribing")
+
+    manager.register(SubscribeThenFail())
+    with pytest.raises(RuntimeError, match="failed after subscribing"):
+        await manager.start_all()
+
+    assert manager.events.handler_count("probe") == 0, "leaked subscription from failed setup"
+
+
+@pytest.mark.asyncio
+async def test_start_all_is_idempotent():
+    """H18: a second start_all() must not start every plugin again."""
+    events = EventBus()
+    manager = PluginManager(events=events)
+    record: list[str] = []
+    manager.register(make_plugin("a", provides=["svc.a"], record=record))
+
+    await manager.start_all()
+    await manager.start_all()
+
+    assert record.count("start:a") == 1, record
+
+
+@pytest.mark.asyncio
+async def test_manager_can_be_reused_after_stop_all():
+    """H18: stop_all() must release service providers.
+
+    The provider map was only populated by register(), so after a stop any new
+    plugin offering a previously-provided service was rejected, and the manager
+    could not be used for a second cycle.
+    """
+    events = EventBus()
+    manager = PluginManager(events=events)
+    manager.register(make_plugin("a", provides=["svc.shared"]))
+    await manager.start_all()
+    await manager.stop_all()
+
+    # A different plugin may now provide the same service.
+    manager.register(make_plugin("b", provides=["svc.shared"]))
+
+
+@pytest.mark.asyncio
+async def test_setup_all_after_stop_all_still_resolves_dependencies():
+    """Rebuilding providers must not break dependency validation.
+
+    Clearing the provider map in stop_all() is what allows re-registration;
+    setup_all() rebuilds it so ordering and validation still work.
+    """
+    events = EventBus()
+    manager = PluginManager(events=events)
+    record: list[str] = []
+    manager.register(make_plugin("a", provides=["svc.a"], record=record))
+    manager.register(make_plugin("b", requires=["svc.a"], record=record))
+    await manager.start_all()
+    await manager.stop_all()
+
+    record.clear()
+    await manager.start_all()
+
+    assert record.index("setup:a") < record.index("setup:b"), record
+
+
+@pytest.mark.asyncio
+async def test_setup_that_registers_a_service_then_raises_cleans_up():
+    """A partially-completed setup must not leave its services registered.
+
+    The rollback loop only covered plugins that finished setup, so a plugin
+    that registered a service and then raised leaked it into the registry --
+    where a later plugin providing the same service would then collide.
+    """
+    events = EventBus()
+    manager = PluginManager(events=events)
+
+    class RegisterThenFail(Plugin):
+        @property
+        def metadata(self) -> PluginMetadata:
+            return PluginMetadata(
+                id="p", version="0.1.0", plugin_type="test", provides=["svc.leaked"]
+            )
+
+        async def setup(self, ctx):
+            ctx.register("svc.leaked", object())
+            raise RuntimeError("setup failed after registering")
+
+    manager.register(RegisterThenFail())
+    with pytest.raises(RuntimeError, match="failed after registering"):
+        await manager.start_all()
+
+    assert not manager.services.has("svc.leaked"), "service leaked from failed setup"

@@ -87,6 +87,7 @@ in the working tree, uncommitted.
 | **H25** live-quality dropped call records | **Fixed** (round 12) | `evaluation_live_quality/plugin.py` |
 | **M80** unknown structured-output rate passes | **Fixed** (round 13) | `routing/selection.py` |
 | **M77, M79, M81, M82, M86** guard-pass cluster | **Fixed** (round 14) | `selection.py`, `qualification.py`, 3 evaluators |
+| **H16, H17, H18** plugin lifecycle | **Fixed** (round 15) | `kernel/manager.py` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -568,6 +569,38 @@ completion data should come from, or removal of the metric), M84
 (five inert config knobs — fixing them means either wiring budgets into call
 loops or removing config fields, which is a breaking config change). Each
 deserves its own round rather than being squeezed in here.
+
+### Round 15 notes (H16, H17, H18 — plugin lifecycle)
+
+Three findings, all in `kernel/manager.py`, chosen as the most contained High
+cluster: each was already verified in the report, and none needs a semantics
+decision.
+
+- **H16** — the setup rollback now calls `stop()` before `teardown()`. Plugins
+  acquire resources in `setup()` and release them in `stop()`
+  (`ArtifactsSqlitePlugin` opens its connection in setup and closes it only in
+  stop), so teardown-only rollback leaked them.
+- **H17** — the subscription cleanup list is now captured *before* `setup()`
+  runs. The list object is shared with the context and mutated by `subscribe()`,
+  so capturing it after setup meant a plugin that subscribed and then raised
+  left its handler registered forever, firing against dead plugin state.
+- **H18** — `start_all()` is now idempotent (it had no guard, so a second call
+  started every plugin again), and `stop_all()` clears `_service_providers` so
+  the manager can be reused. Because `setup_all()`'s dependency validation and
+  ordering read that map, `setup_all()` now rebuilds it from the registered
+  plugins via `_rebuild_service_providers()`.
+
+**A further defect found while fixing H17.** Moving the cleanup capture earlier
+was not sufficient: the rollback loop iterates `initialized`, which only
+contained plugins whose `setup()` had *returned*. A plugin that registered a
+service or subscribed and then raised was therefore never rolled back at all,
+so it leaked both. `initialized.append(pid)` now happens before `setup()` runs,
+so a partially-completed setup is cleaned up too. This is a real leak that the
+original H17 description did not mention, and it is pinned by a test.
+
+Note the pre-existing `test_setup_failure_rolls_back_services_and_subscriptions`
+passed before this round because its failing plugin registered nothing — it
+exercised rollback of a *successful* plugin, not of a partially-initialised one.
 
 ### Verification that the new tests are genuine regression tests
 
