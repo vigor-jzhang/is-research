@@ -90,6 +90,7 @@ in the working tree, uncommitted.
 | **H16, H17, H18** plugin lifecycle | **Fixed** (round 15) | `kernel/manager.py` |
 | **H13, H14, H15** CLI plugin/exit-code | **Fixed** (round 16) | `cli/main.py` |
 | **H19-H24** literature + provider robustness | **Fixed** (round 17) | 8 plugin files + `research/prompt_safety.py` |
+| **H6-H12** scientific correctness | **Fixed** (round 18) | `proposition_verifier`, `comparative_statics`, `numerical_analysis`, `equilibrium_deriver` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -694,6 +695,72 @@ regression test.
 failure as `no_location`; it now *also* increments `locator_errors`, but the
 acquisition status itself is unchanged. Changing that status is a semantics
 decision about how a rate-limited acquisition should be classified.
+
+### Round 18 notes (H6-H12 — scientific correctness)
+
+The last High block. Seven findings, in the mathematical core.
+
+- **H6** — the verifier swallowed any failure loading the equilibrium candidate
+  and verified against an empty substitution map, so `q1 = q2` was checked as a
+  symbolic identity and could come back `verified`. It now persists an explicit
+  `failed` verification naming the reason. Contained rather than raised: the
+  generator calls `verify()` in a loop without a try/except, so raising would
+  abort the whole batch on one unloadable candidate.
+- **H7** — an `ambiguous` static plus any non-empty condition string was
+  recorded as a passing check, with a detail line asserting consistency that
+  nothing verified. Conditions are now parsed as SymPy relations and the sign is
+  queried under `sympy.assuming`; a condition that *contradicts* the claim now
+  fails instead of conditionally verifying. **An undeterminable result is `None`
+  and must never be read as success.**
+- **H8** — sign inference was dead code. Declared domains are now translated
+  into SymPy assumptions (`R_+` → `Symbol(positive=True)`), and the numerator
+  and denominator are signed separately: pooling their `Mul` factors loses a
+  denominator like `-2*x**2 - 2`, which is an `Add` that `Mul.make_args` returns
+  whole, flipping the sign. Verified directly: `1/(-2*(x**2+1))` reported
+  positive when its value at x=3 is −0.05.
+- **H9** — two changes. `_update_analysis` now derives the analysis status from
+  the **selected** candidate's verification (previously the best verification
+  ever produced, which overclaimed) and maps `pending` to `failed`. Statics and
+  numerics both refuse to run unless the selected candidate is verified.
+  **A first attempt at this was wrong**: gating selection instead broke
+  `eq-incorrect-llm-candidate`, because selecting the failed candidate is how a
+  *failed* analysis is represented, and the evaluator reads the selected
+  candidate's verification status. That change was reverted.
+- **H10** — robustness counted every result carrying the parameter, and since
+  the baseline sweep contains every parameter, one feasible baseline marked
+  every parameter `supported`. It now counts only the parameter's own sweep
+  (`x_parameter`) and requires a ratio (default 50%).
+- **H11** — non-finite outcomes are now infeasible, and `_domain_ok` fails
+  closed: an unparseable or unknown domain string used to fall through to
+  "allowed".
+- **H12** — the simultaneous branch appended *every* solution, duplicating
+  decision variables inside a single candidate; the sequential branch took
+  `sols[0]`, which is arbitrary. Both now use one `_select_solution` that
+  discards non-real and non-finite solutions and orders the rest by structural
+  form, so selection is deterministic. Constraints remain unenforced (no KKT /
+  corner analysis) — that part of H12 is **not** addressed.
+
+**Two bugs I introduced and caught during this round**, both worth recording:
+
+1. Inserting the H9 gate helper at class-level indentation *inside* an async
+   method dedented the file and split the method, producing
+   `'await' outside async function` across 30 tests. Placement must be
+   validated by re-parsing after every edit.
+2. The H7 condition parser used `parse_sympy`, which rejects comparison
+   operators by design. Every condition failed to parse, the assumption set was
+   always empty, and the check could never contradict anything — silently
+   restoring the exact defect H7 describes. It now uses
+   `safe_sympify(..., allow_comparison=True)`. This is the same "guard that
+   cannot fire" shape, in code written to fix that shape.
+
+**Test fixtures updated, not weakened.** Five `EquilibriumCandidate(...)`
+constructions in `tests/unit/test_numerical_analysis.py` and
+`test_propositions.py` did not set `verification_status`; with the H9 gate they
+must now declare the verified equilibrium they represent. One test asserted the
+old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
+which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
+test needed a genuinely ambiguous static, so one parameter's domain was changed
+to `R` (unsigned) — preserving its intent rather than its assertion.
 
 ### Verification that the new tests are genuine regression tests
 

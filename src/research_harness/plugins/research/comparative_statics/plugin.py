@@ -41,6 +41,44 @@ class ComparativeStaticsService:
         self._max_statics = max_statics
         self._model_role = model_role
 
+    # H9: statics/numerics must not run on an equilibrium that was never
+    # verified. The CLI help promises "of a verified equilibrium", but both
+    # services took analysis.selected_candidate_id without inspecting it.
+    _VERIFIED_STATUSES = frozenset({"verified", "partially_verified"})
+
+    async def _require_verified_equilibrium(
+        self, analysis: Any, candidate_id: str, candidate: Any
+    ) -> None:
+        """Raise unless the selected candidate is verified.
+
+        Two sources, because both occur in practice: the candidate carries its
+        own ``verification_status`` (benchmark fixtures set this without
+        producing a verification artifact), and a separate
+        ``EquilibriumVerification`` artifact exists when the deriver actually
+        ran. The artifact wins when present, since it supersedes.
+        """
+        from research_harness.research.schemas.equilibrium import EquilibriumVerification
+
+        def _value(v: Any) -> str | None:
+            if v is None:
+                return None
+            return getattr(v, "value", str(v))
+
+        status = _value(getattr(candidate, "verification_status", None))
+        for vid in list(getattr(analysis, "verification_ids", None) or []):
+            try:
+                v = (await self._store.get(vid)).parse_payload(EquilibriumVerification)
+            except Exception:  # noqa: BLE001
+                continue
+            if getattr(v, "candidate_id", None) == candidate_id:
+                status = _value(v.status)
+                break
+        if status not in self._VERIFIED_STATUSES:
+            raise ValueError(
+                f"equilibrium candidate {candidate_id} is not verified "
+                f"(status={status!r}); refusing to run on an unverified equilibrium"
+            )
+
     @property
     def service_id(self) -> str:
         return "research.comparative_statics"
@@ -69,6 +107,8 @@ class ComparativeStaticsService:
 
         a_env = await self._store.get(equilibrium_analysis_id)
         analysis = a_env.parse_payload(EquilibriumAnalysis)
+
+
         candidate_id = analysis.selected_candidate_id
         if candidate_id is None:
             raise ValueError(
@@ -76,8 +116,11 @@ class ComparativeStaticsService:
             )
         c_env = await self._store.get(candidate_id)
         candidate = c_env.parse_payload(EquilibriumCandidate)
+        await self._require_verified_equilibrium(analysis, candidate_id, candidate)
         m_env = await self._store.get(candidate.model_id)
         model = m_env.parse_payload(FormalAnalyticalModel)
+
+        import sympy
 
         started = datetime.now(UTC)
         exec_record = ComparativeStaticsExecution(
@@ -91,8 +134,11 @@ class ComparativeStaticsService:
             started_at=started,
         )
 
-        table = {v.symbol: v for v in model.variables}
-        table.update({p.symbol: p for p in model.parameters})
+        # H8: declared domains become SymPy assumptions. Without them
+        # `sympy.ask(Q.positive(a))` is None for every parameter, so the
+        # sign inference below could never fire and nearly every static came
+        # back "ambiguous".
+        table = self._symbols_with_domains(model, sympy)
         candidate_exprs: dict[str, Any] = {}
         for e in candidate.expressions:
             try:
@@ -102,12 +148,11 @@ class ComparativeStaticsService:
 
         param_syms = [p.symbol for p in model.parameters]
         static_ids: list[str] = []
-        import sympy
 
         for outcome, expr in candidate_exprs.items():
             for param in param_syms:
                 try:
-                    deriv = sympy.simplify(sympy.diff(expr, sympy.Symbol(param)))
+                    deriv = sympy.simplify(sympy.diff(expr, table[param]))
                 except Exception as exc:  # noqa: BLE001
                     exec_record.failures.append(
                         {"error": f"derivative d{outcome}/d{param} failed: {exc}"}
@@ -203,6 +248,81 @@ class ComparativeStaticsService:
         )
         return exec_env.artifact_id
 
+    def _symbols_with_domains(self, model: Any, sympy: Any) -> dict[str, Any]:
+        """Build a symbol table whose symbols carry the declared domain assumptions.
+
+        H8: `sympy.ask(Q.positive(a))` only succeeds if `a` was created with
+        `positive=True`. The declared domain (`R_+`, `R_-`, `R`, ...) was never
+        translated into assumptions, so the sign inference below was dead code.
+        """
+        table: dict[str, Any] = {}
+        for obj in list(getattr(model, "variables", None) or []) + list(
+            getattr(model, "parameters", None) or []
+        ):
+            symbol = str(getattr(obj, "symbol", "") or "")
+            if not symbol:
+                continue
+            domain = str(getattr(obj, "domain", "R") or "R").strip()
+            if domain in ("R_+", "R+", "> 0"):
+                table[symbol] = sympy.Symbol(symbol, positive=True)
+            elif domain in ("R_-", "R-", "< 0"):
+                table[symbol] = sympy.Symbol(symbol, negative=True)
+            else:
+                # Default to real: sign queries are meaningless over complexes,
+                # and an unknown domain must not silently imply positivity.
+                table[symbol] = sympy.Symbol(symbol, real=True)
+        return table
+
+    def _factor_sign(self, expr: Any, sympy: Any) -> int | None:
+        """Sign of a product: +1/-1/0, or None when it cannot be determined.
+
+        Handles provably-negative factors explicitly. The previous code only
+        recognised *positive* symbolic factors, so a negative factor simply
+        fell through to "ambiguous".
+        """
+        if not expr.free_symbols:
+            if expr.is_number:
+                if expr > 0:
+                    return 1
+                if expr < 0:
+                    return -1
+                return 0
+            return None
+        sign = 1
+        for f in sympy.Mul.make_args(expr):
+            if not f.free_symbols:
+                if f.is_number:
+                    if f > 0:
+                        continue
+                    if f < 0:
+                        sign = -sign
+                        continue
+                    return 0
+                continue
+            if sympy.ask(sympy.Q.positive(f)) is True:
+                continue
+            if sympy.ask(sympy.Q.negative(f)) is True:
+                sign = -sign
+                continue
+            return None
+        return sign
+
+    def _sign_of_expression(self, expr: Any, sympy: Any) -> int | None:
+        """Sign of a numerator or denominator, including the Add case.
+
+        `Mul.make_args` on an Add (e.g. `-2*x**2 - 2`) returns the Add whole, so
+        a constant sign hidden inside it is invisible to factor analysis. Ask
+        about the whole expression as a fallback.
+        """
+        sign = self._factor_sign(expr, sympy)
+        if sign is not None:
+            return sign
+        if sympy.ask(sympy.Q.positive(expr)) is True:
+            return 1
+        if sympy.ask(sympy.Q.negative(expr)) is True:
+            return -1
+        return None
+
     def _sign_of(self, deriv: Any, param: str, sympy: Any) -> tuple[StaticSign, list[str]]:
         """Decide the sign deterministically; ambiguous with conditions otherwise."""
         if deriv == 0:
@@ -219,18 +339,20 @@ class ComparativeStaticsService:
         # is the sign of the constant part.
         try:
             num, den = sympy.fraction(sympy.together(deriv))
-            factors = list(sympy.Mul.make_args(num)) + list(sympy.Mul.make_args(den))
-            const_factors = [f for f in factors if not f.free_symbols]
-            pos_factors = [
-                f for f in factors if f.free_symbols and sympy.ask(sympy.Q.positive(f)) is True
-            ]
-            if len(const_factors) + len(pos_factors) == len(factors) and const_factors:
-                const_part = sympy.prod(const_factors)
-                if const_part.is_number:
-                    if const_part > 0:
-                        return StaticSign.positive, []
-                    if const_part < 0:
-                        return StaticSign.negative, []
+            # H8: the previous code pooled numerator and denominator factors
+            # into one list. A denominator like `-2*x**2 - 2` is an Add, so
+            # `Mul.make_args` returns it whole and its negative sign was lost,
+            # flipping the reported sign (e.g. 1/(-2*(x**2+1)) was reported
+            # positive). Sign(num/den) == Sign(num) * Sign(den), so evaluate
+            # each side separately instead of pooling.
+            num_sign = self._sign_of_expression(num, sympy)
+            den_sign = self._sign_of_expression(den, sympy)
+            if num_sign and den_sign is not None:
+                overall = num_sign * den_sign
+                if overall > 0:
+                    return StaticSign.positive, []
+                if overall < 0:
+                    return StaticSign.negative, []
         except Exception:  # noqa: BLE001
             pass
         # Sign depends on parameter values -> ambiguous, conditions recorded

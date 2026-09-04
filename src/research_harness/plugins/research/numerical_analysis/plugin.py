@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -53,12 +54,55 @@ class NumericalAnalysisService:
         model_role: str = "reasoning",
         max_points: int = 10000,
         artifact_point_threshold: int = _ARTIFACT_POINT_THRESHOLD,
+        robustness_min_ratio: float = 0.5,
     ) -> None:
         self._store = artifact_store
         self._blobs = blob_store
         self._model_role = model_role
         self._max_points = max_points
         self._artifact_threshold = artifact_point_threshold
+        # H10: share of a parameter's own sweep that must remain feasible for
+        # the equilibrium to count as supported. A single point is not
+        # evidence of a range.
+        self._robustness_min_ratio = robustness_min_ratio
+
+    # H9: statics/numerics must not run on an equilibrium that was never
+    # verified. The CLI help promises "of a verified equilibrium", but both
+    # services took analysis.selected_candidate_id without inspecting it.
+    _VERIFIED_STATUSES = frozenset({"verified", "partially_verified"})
+
+    async def _require_verified_equilibrium(
+        self, analysis: Any, candidate_id: str, candidate: Any
+    ) -> None:
+        """Raise unless the selected candidate is verified.
+
+        Two sources, because both occur in practice: the candidate carries its
+        own ``verification_status`` (benchmark fixtures set this without
+        producing a verification artifact), and a separate
+        ``EquilibriumVerification`` artifact exists when the deriver actually
+        ran. The artifact wins when present, since it supersedes.
+        """
+        from research_harness.research.schemas.equilibrium import EquilibriumVerification
+
+        def _value(v: Any) -> str | None:
+            if v is None:
+                return None
+            return getattr(v, "value", str(v))
+
+        status = _value(getattr(candidate, "verification_status", None))
+        for vid in list(getattr(analysis, "verification_ids", None) or []):
+            try:
+                v = (await self._store.get(vid)).parse_payload(EquilibriumVerification)
+            except Exception:  # noqa: BLE001
+                continue
+            if getattr(v, "candidate_id", None) == candidate_id:
+                status = _value(v.status)
+                break
+        if status not in self._VERIFIED_STATUSES:
+            raise ValueError(
+                f"equilibrium candidate {candidate_id} is not verified "
+                f"(status={status!r}); refusing to run on an unverified equilibrium"
+            )
 
     @property
     def service_id(self) -> str:
@@ -88,6 +132,8 @@ class NumericalAnalysisService:
 
         a_env = await self._store.get(equilibrium_analysis_id)
         analysis = a_env.parse_payload(EquilibriumAnalysis)
+
+
         candidate_id = analysis.selected_candidate_id
         if candidate_id is None:
             raise ValueError(
@@ -95,6 +141,7 @@ class NumericalAnalysisService:
             )
         c_env = await self._store.get(candidate_id)
         candidate = c_env.parse_payload(EquilibriumCandidate)
+        await self._require_verified_equilibrium(analysis, candidate_id, candidate)
         m_env = await self._store.get(candidate.model_id)
         model = m_env.parse_payload(FormalAnalyticalModel)
 
@@ -459,6 +506,17 @@ class NumericalAnalysisService:
                 return self._infeasible(
                     model_id, candidate_id, sweep_env, point, f"outcome {var} not evaluable: {e}"
                 )
+            # H11: round(nan, 9) == nan, so a non-finite outcome slipped
+            # through as feasible and then poisoned welfare sums and
+            # robustness. Treat it as infeasible with an explicit reason.
+            if not math.isfinite(val):
+                return self._infeasible(
+                    model_id,
+                    candidate_id,
+                    sweep_env,
+                    point,
+                    f"outcome {var} is not finite ({val})",
+                )
             outcomes[var] = round(val, 9)
             dom = outcome_domains.get(var)
             if dom is not None:
@@ -532,14 +590,21 @@ class NumericalAnalysisService:
                     return True, ""
                 return False, f"requires value in [{lo_f}, {hi_f}]"
             except Exception:  # noqa: BLE001
-                return True, ""
+                # H11: an unparseable domain used to be treated as "no
+                # constraint". Fail closed instead -- we cannot check a rule we
+                # cannot read.
+                return False, f"unparseable interval domain {domain!r}"
         if d.startswith("> "):
             try:
                 k = float(d[2:])
                 return (True, "") if value > k else (False, f"requires value > {k}")
             except Exception:  # noqa: BLE001
-                return True, ""
-        return True, ""
+                return False, f"unparseable bound domain {domain!r}"
+        if d == "R":
+            # Any finite real; non-finite values are rejected by the caller.
+            return True, ""
+        # H11: an unknown domain string used to fall through to "allowed".
+        return False, f"unknown domain {domain!r}"
 
     def _eval_condition(self, cond: str, subs: dict[str, Any]) -> bool | None:
         """Evaluate a condition like '2*b != 0' or 'soc < 0' at a point."""
@@ -590,24 +655,40 @@ class NumericalAnalysisService:
 
         # 1. Equilibrium-validity range per parameter
         for pname in sorted(params):
+            # H10: count only the points belonging to this parameter's own
+            # sweep. Previously every result carrying the parameter was
+            # counted, and since the baseline sweep holds every parameter at
+            # once, a single feasible baseline marked every parameter
+            # "supported" even when the entire sweep was infeasible.
+            total_points = 0
             feasible_count = 0
             for item in numerical_results:
                 r = item if isinstance(item, NumericalResult) else (await self._store.get(item)).parse_payload(NumericalResult)
-                if r.parameter_values.get(pname) is not None and r.feasible:
+                if r.x_parameter != pname:
+                    continue
+                total_points += 1
+                if r.feasible:
                     feasible_count += 1
+            ratio = feasible_count / total_points if total_points else 0.0
+            if total_points == 0:
+                outcome = RobustnessOutcome.not_testable
+            elif ratio >= self._robustness_min_ratio:
+                outcome = RobustnessOutcome.supported
+            else:
+                outcome = RobustnessOutcome.violated
             check = RobustnessCheck(
                 model_id=model_id,
                 equilibrium_candidate_id=candidate_id,
                 experiment_id=exec_id,
                 check_type=RobustnessCheckType.parameter_range,
                 description=f"equilibrium remains well-defined across the {pname} sweep",
-                outcome=(
-                    RobustnessOutcome.supported
-                    if feasible_count >= 1
-                    else RobustnessOutcome.not_testable
-                ),
+                outcome=outcome,
                 admissible_points=feasible_count,
-                conclusion=f"{feasible_count} feasible point(s) across the {pname} sweep",
+                conclusion=(
+                    f"{feasible_count}/{total_points} feasible point(s) across the "
+                    f"{pname} sweep ({ratio:.0%}, minimum "
+                    f"{self._robustness_min_ratio:.0%})"
+                ),
             )
             c_env = ArtifactEnvelope.create(
                 payload=check,

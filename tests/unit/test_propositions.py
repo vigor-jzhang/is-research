@@ -19,6 +19,7 @@ from research_harness.research.schemas.equilibrium import (
     EquilibriumAnalysisStatus,
     EquilibriumCandidate,
     EquilibriumExpression,
+    VerificationStatus,
 )
 from research_harness.research.schemas.model import (
     Expression,
@@ -140,6 +141,7 @@ async def _cournot_scenario(store, with_b: bool = False) -> dict[str, str]:
         decision_variables=["q1", "q2"],
         solution_method="simultaneous",
         proposed_by="sympy",
+        verification_status=VerificationStatus.verified,
     )
     c_env = ArtifactEnvelope.create(
         payload=cand, artifact_type="equilibrium_candidate", producer="test"
@@ -240,7 +242,11 @@ async def test_positive_negative_zero_statics(tmp_path: pathlib.Path):
 
 @pytest.mark.asyncio
 async def test_ambiguous_sign_with_conditions(tmp_path: pathlib.Path):
-    """p* = (ab + c)/(2b): dp/db = -c/(2b^2) -> sign depends on c."""
+    """p* = (ab + c)/(2b): dp/db = -c/(2b^2), negative once a, b, c are in R_+.
+
+    Before H8 the declared domains were never turned into SymPy assumptions, so
+    this sign could not be proven and came back `ambiguous` with conditions.
+    """
     store = SQLiteArtifactStore(path=tmp_path / "art.db")
     model = FormalAnalyticalModel(
         selected_mechanism_id="mech1",
@@ -294,6 +300,7 @@ async def test_ambiguous_sign_with_conditions(tmp_path: pathlib.Path):
         decision_variables=["p"],
         solution_method="simultaneous",
         proposed_by="sympy",
+        verification_status=VerificationStatus.verified,
     )
     c_env = ArtifactEnvelope.create(
         payload=cand, artifact_type="equilibrium_candidate", producer="test"
@@ -313,8 +320,9 @@ async def test_ambiguous_sign_with_conditions(tmp_path: pathlib.Path):
 
     exec_id, cs_id = await _run_statics(store, a_env.artifact_id)
     dp_b = await _static_of(store, cs_id, "p", "b")
-    assert dp_b.sign == StaticSign.ambiguous
-    assert dp_b.conditions  # conditions recorded; sign not inferred
+    assert dp_b.sign == StaticSign.negative
+    # Provable from the declared positive domains, so no conditions recorded.
+    assert not dp_b.conditions
 
     # idempotent rerun
     exec2, cs2 = await _run_statics(store, a_env.artifact_id)
@@ -429,7 +437,7 @@ async def test_proposition_missing_condition_rejected(tmp_path: pathlib.Path):
         ],
         parameters=[
             ModelParameter(symbol="a", name="a", meaning="a", domain="R_+"),
-            ModelParameter(symbol="c", name="c", meaning="c", domain="R_+"),
+            ModelParameter(symbol="c", name="c", meaning="c", domain="R"),
             ModelParameter(symbol="b", name="b", meaning="b", domain="R_+"),
         ],
         assumptions=[],
@@ -460,6 +468,7 @@ async def test_proposition_missing_condition_rejected(tmp_path: pathlib.Path):
         decision_variables=["p"],
         solution_method="simultaneous",
         proposed_by="sympy",
+        verification_status=VerificationStatus.verified,
     )
     c_env = ArtifactEnvelope.create(
         payload=cand, artifact_type="equilibrium_candidate", producer="test"

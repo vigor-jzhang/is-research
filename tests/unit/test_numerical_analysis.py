@@ -19,6 +19,7 @@ from research_harness.research.schemas.equilibrium import (
     EquilibriumAnalysisStatus,
     EquilibriumCandidate,
     EquilibriumExpression,
+    VerificationStatus,
 )
 from research_harness.research.schemas.model import (
     Expression,
@@ -118,6 +119,7 @@ async def _cournot_scenario(store) -> dict[str, str]:
         decision_variables=["q1", "q2"],
         solution_method="simultaneous",
         proposed_by="sympy",
+        verification_status=VerificationStatus.verified,
     )
     c_env = ArtifactEnvelope.create(
         payload=cand, artifact_type="equilibrium_candidate", producer="test"
@@ -196,6 +198,7 @@ async def _monopoly_with_b_scenario(store) -> dict[str, str]:
         decision_variables=["p"],
         solution_method="simultaneous",
         proposed_by="sympy",
+        verification_status=VerificationStatus.verified,
     )
     c_env = ArtifactEnvelope.create(
         payload=cand, artifact_type="equilibrium_candidate", producer="test"

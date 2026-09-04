@@ -52,7 +52,10 @@ class PropositionVerifierService:
         p_env = await self._store.get(proposition_id)
         prop = p_env.parse_payload(Proposition)
         candidate_map: dict[str, Any] = {}
+        candidate_error: str | None = None
         try:
+            if not prop.equilibrium_candidate_id:
+                raise ValueError("proposition references no equilibrium candidate")
             cand_env = await self._store.get(prop.equilibrium_candidate_id)
             cand = cand_env.parse_payload(
                 __import__(
@@ -64,8 +67,24 @@ class PropositionVerifierService:
                 candidate_map[e.variable] = safe_sympify(
                     e.expression.expression, auto_symbols=True
                 )
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            # H6: this used to leave candidate_map = {} and verify anyway. With
+            # no substitutions, an equality claim like q1 = q2 is checked as a
+            # *symbolic* identity -- if it simplifies to 0 the proposition is
+            # reported as verified, on the strength of a candidate we could not
+            # even load. Record the failure instead of verifying vacuously.
+            candidate_error = (
+                f"equilibrium candidate {prop.equilibrium_candidate_id!r} could not be "
+                f"loaded: {e}"
+            )
+            logger.error("proposition %s: %s", proposition_id, candidate_error)
+
+        if candidate_error is not None:
+            return await self._store_failed_verification(
+                proposition_id=proposition_id,
+                model_id=prop.model_id,
+                reason=candidate_error,
+            )
         checks, conditions, conditional = await self._run_checks(prop, candidate_map)
 
         hard_failed = any(
@@ -114,6 +133,109 @@ class PropositionVerifierService:
     # ------------------------------------------------------------------
     # Deterministic checks
     # ------------------------------------------------------------------
+
+    async def _store_failed_verification(
+        self, *, proposition_id: str, model_id: str, reason: str
+    ) -> str:
+        """Persist a `failed` verification that explains why it could not run.
+
+        Used when the proposition cannot be checked at all (H6). Contained
+        rather than raised so one unloadable candidate does not abort the whole
+        generation batch, but it is never reported as verified.
+        """
+        check = PropositionCheck(
+            check_type=PropositionCheckType.equilibrium_consistency,
+            passed=False,
+            detail=reason,
+        )
+        verification = PropositionVerification(
+            proposition_id=proposition_id,
+            model_id=model_id,
+            status=PropositionVerificationStatus.failed,
+            checks=[check],
+            conditions_required=[],
+            verification_method="symbolic",
+            metadata={"not_verifiable_reason": reason},
+        )
+        v_env = ArtifactEnvelope.create(
+            payload=verification,
+            artifact_type="proposition_verification",
+            producer="research.proposition_verifier",
+        )
+        await self._store.put(v_env)
+        await self._store.add_provenance(
+            ProvenanceLink(
+                relation=ProvenanceRelation.derived_from,
+                source_artifact_id=proposition_id,
+                target_artifact_id=v_env.artifact_id,
+                producer="research.proposition_verifier",
+            )
+        )
+        return v_env.artifact_id
+
+    def _sign_implied_by_conditions(
+        self,
+        derivative_expression: str,
+        conditions: list[str],
+        table: dict[str, Any],
+        expected: str,
+    ) -> tuple[bool | None, str]:
+        """Ask whether the declared conditions actually imply the claimed sign.
+
+        H7: an `ambiguous` static plus any non-empty condition string used to be
+        recorded as a passing check, with a detail line asserting the sign was
+        "consistent with the declared conditions" -- an assertion nothing
+        verified. This asks SymPy under those assumptions.
+
+        Returns (True | False | None, explanation). None means "could not be
+        determined", which is a legitimate outcome for SymPy's assumption
+        system and must not be treated as success.
+        """
+        import sympy
+
+        try:
+            expr = parse_sympy(derivative_expression, table)
+        except Exception as e:  # noqa: BLE001
+            return None, f"derivative not parseable: {e}"
+
+        assumptions = []
+        for cond in conditions:
+            try:
+                # Conditions are relations ("a > 0", "2*b != 0"), which
+                # `parse_sympy` rejects by design -- comparisons are only
+                # permitted via safe_sympify's allow_comparison. Without this
+                # the assumption set is always empty and the query below can
+                # never contradict anything, silently restoring the original
+                # H7 behaviour.
+                rel = safe_sympify(cond, table, allow_comparison=True)
+            except Exception as e:  # noqa: BLE001
+                return None, f"condition {cond!r} not parseable: {e}"
+            if not isinstance(rel, sympy.Rel):
+                return None, f"condition {cond!r} is not a relation"
+            assumptions.append(rel)
+
+        if not assumptions:
+            return None, "no usable conditions"
+
+        query = {
+            "positive": sympy.Q.positive(expr),
+            "negative": sympy.Q.negative(expr),
+            "zero": sympy.Q.zero(expr),
+        }.get(expected)
+        if query is None:
+            return None, f"unsupported expected sign {expected!r}"
+
+        try:
+            with sympy.assuming(*assumptions):
+                result = sympy.ask(query)
+        except Exception as e:  # noqa: BLE001
+            return None, f"symbolic query failed: {e}"
+        if result is None:
+            return None, "sign could not be determined under the declared conditions"
+        return bool(result), (
+            f"declared conditions {'imply' if result else 'contradict'} "
+            f"d(outcome)/d(parameter) is {expected}"
+        )
 
     async def _run_checks(
         self, prop: Proposition, candidate_map: dict[str, Any] | None = None
@@ -231,6 +353,7 @@ class PropositionVerifierService:
         checks: list[PropositionCheck],
         conditions: list[str],
         sympy: Any,
+        candidate_map: dict[str, Any] | None = None,
     ) -> tuple[list[PropositionCheck], list[str], bool]:
         matching = [
             s
@@ -277,14 +400,41 @@ class PropositionVerifierService:
                 )
                 return checks, conditions, False
             conditions.extend(prop.conditions)
+            # Symbol table: declared symbols map to themselves, and the
+            # equilibrium candidate's variables are substituted so the
+            # derivative is expressed in the model's parameters.
+            table = {s: s for s in (static.derivative_expression.symbols_used or [])}
+            for var, expr in (candidate_map or {}).items():
+                table[var] = expr
+            implied, explanation = self._sign_implied_by_conditions(
+                static.derivative_expression.expression,
+                list(prop.conditions),
+                table,
+                expected,
+            )
+            if implied is False:
+                # The declared conditions rule the claim out -- this is a failed
+                # proposition, not a conditional one.
+                checks.append(
+                    PropositionCheck(
+                        check_type=PropositionCheckType.derivative_sign,
+                        passed=False,
+                        detail=(
+                            f"static d{prop.outcome_variable}/d{prop.parameter} is "
+                            f"ambiguous and the declared conditions contradict the "
+                            f"claim: {explanation}"
+                        ),
+                        symbolic_detail=static.derivative_expression.expression,
+                    )
+                )
+                return checks, conditions, False
             checks.append(
                 PropositionCheck(
                     check_type=PropositionCheckType.derivative_sign,
                     passed=True,
                     detail=(
                         f"static d{prop.outcome_variable}/d{prop.parameter} is "
-                        f"ambiguous; sign {expected} consistent with the declared "
-                        f"conditions (not globally verifiable)"
+                        f"ambiguous; {explanation}"
                     ),
                     symbolic_detail=static.derivative_expression.expression,
                 )

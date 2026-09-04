@@ -477,6 +477,47 @@ class EquilibriumDeriverService:
     # Symbolic candidate derivation
     # ------------------------------------------------------------------
 
+    def _select_solution(
+        self, sols: list[dict[Any, Any]], dvs: list[str], sympy: Any
+    ) -> dict[str, Any] | None:
+        """Pick one solution deterministically, discarding unusable ones.
+
+        H12: the simultaneous branch appended *every* solution for every
+        decision variable, so a system with four solutions produced duplicate
+        entries for the same variable inside a single candidate (and the
+        verifier's candidate_map kept only the last). The sequential branch took
+        ``sols[0]``, which is arbitrary -- SymPy's ordering is an implementation
+        detail, not a selection rule.
+
+        Filtering is deliberately conservative: reject only what cannot be an
+        economic equilibrium (non-real, or non-finite like zoo/nan/oo). Sign and
+        domain checks belong to verification, not selection.
+        """
+        cleaned: list[dict[str, Any]] = []
+        for sol in sols:
+            entry: dict[str, Any] = {}
+            usable = True
+            for dv in dvs:
+                e = sol.get(sympy.Symbol(dv))
+                if e is None:
+                    usable = False
+                    break
+                e = sympy.simplify(e)
+                if e.has(sympy.I) or e.has(sympy.zoo) or e.has(sympy.nan) or e.has(sympy.oo):
+                    usable = False
+                    break
+                entry[dv] = e
+            if usable and entry:
+                cleaned.append(entry)
+        if not cleaned:
+            return None
+        # Deterministic: order by the structural form of the expressions, so the
+        # same system always yields the same candidate.
+        cleaned.sort(
+            key=lambda chosen: tuple(str(sympy.srepr(chosen[dv])) for dv in dvs)
+        )
+        return cleaned[0]
+
     def _derive_candidate_sympy(
         self,
         model: FormalAnalyticalModel,
@@ -501,12 +542,18 @@ class EquilibriumDeriverService:
             sols = sympy.solve(system, dvs, dict=True)
             if not sols:
                 raise ValueError("simultaneous FOC system has no closed-form solution")
+            chosen = self._select_solution(sols, dvs, sympy)
+            if chosen is None:
+                raise ValueError(
+                    "simultaneous FOC system produced no usable (real, finite) solution"
+                )
+            # H12: one solution per decision variable. Previously every solution
+            # was appended, duplicating variables within a single candidate.
             out = []
-            for sol in sols:
-                for dv in dvs:
-                    e = sol.get(sympy.Symbol(dv))
-                    if e is not None:
-                        out.append((dv, sympy.simplify(e), self._conditions_of(e)))
+            for dv in dvs:
+                e = chosen.get(dv)
+                if e is not None:
+                    out.append((dv, e, self._conditions_of(e)))
             return out, SolutionMethod.simultaneous.value
 
         # sequential: backward induction by stage groups (last stage first)
@@ -526,9 +573,13 @@ class EquilibriumDeriverService:
                 raise ValueError(
                     f"backward induction fails at stage {stage}: FOC system unsolvable"
                 )
-            sol = sols[0]
+            sol = self._select_solution(sols, dvs, sympy)
+            if sol is None:
+                raise ValueError(
+                    f"backward induction at stage {stage}: no usable (real, finite) solution"
+                )
             for dv in dvs:
-                e = sol.get(sympy.Symbol(dv))
+                e = sol.get(dv)
                 if e is not None:
                     recorded[dv] = e
                     subs[dv] = e
@@ -759,15 +810,28 @@ class EquilibriumDeriverService:
         prev = (await self._store.get(analysis_id)).parse_payload(EA)
         status = EquilibriumAnalysisStatus.failed
         if selected_candidate_id is not None:
-            best = VerificationStatus.pending
-            for vid in verification_ids:
-                v = (await self._store.get(vid)).parse_payload(EquilibriumVerification)
-                best = self._better(best, v.status)
-            status = (
-                EquilibriumAnalysisStatus.derived
-                if best == VerificationStatus.verified
-                else EquilibriumAnalysisStatus.partially_derived
-            )
+            # Status reflects the SELECTED candidate's verification, not the
+            # best verification ever produced: a run whose best candidate was
+            # verified but whose selected candidate failed is not a derivation.
+            vstatus = VerificationStatus.pending
+            try:
+                idx = list(candidate_ids).index(selected_candidate_id)
+            except ValueError:
+                idx = -1
+            if 0 <= idx < len(verification_ids):
+                v = (await self._store.get(verification_ids[idx])).parse_payload(
+                    EquilibriumVerification
+                )
+                vstatus = v.status
+            # H9: "pending" means the candidate was never verified, which is
+            # not evidence of correctness. It used to read as
+            # partially_derived, i.e. as if some check had passed.
+            status = {
+                VerificationStatus.verified: EquilibriumAnalysisStatus.derived,
+                VerificationStatus.partially_verified: (
+                    EquilibriumAnalysisStatus.partially_derived
+                ),
+            }.get(vstatus, EquilibriumAnalysisStatus.failed)
         updated = prev.model_copy(
             update={
                 "candidate_ids": list(candidate_ids),
