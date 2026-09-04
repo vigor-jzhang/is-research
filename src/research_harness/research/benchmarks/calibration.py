@@ -112,6 +112,15 @@ def _placeholder_targets(payload: Any) -> list[str]:
     return [s for s in _strings(payload) if s.startswith("{") and s.endswith("}")]
 
 
+def _join(entries: list[tuple[str, str]]) -> str:
+    """Render (case_id, message) pairs as the check details have always read.
+
+    The failed-check lists hold structured pairs so each can also become a
+    finding and a confirmed defect; details text is unchanged by that.
+    """
+    return "; ".join(f"{cid}: {message}" for cid, message in entries)
+
+
 def _fixture_schema(artifact_type: str) -> Any:
     """Artifact schema used to inject critic fixtures (matches the workflow)."""
     from research_harness.research.schemas.gap import ResearchGap
@@ -206,6 +215,8 @@ def audit_live_quality_benchmark(benchmark_id: str) -> BenchmarkCalibrationAudit
         for c in cases
         if not (c.reference or {}).get("task")
     ]
+    for cid, message in missing_ref:
+        _fail("valid_reference", message, case_id=cid, kind="benchmark_reference_defect")
     checks.append(
         CalibrationCheck(
             name="valid_reference",
@@ -300,7 +311,7 @@ def audit_live_quality_benchmark(benchmark_id: str) -> BenchmarkCalibrationAudit
     )
 
     # 4. no fixture leakage (reference answer never literally present in fixtures)
-    leaked: list[str] = []
+    leaked: list[tuple[str, str]] = []
     for c in cases:
         if not c.input.get("fixtures"):
             continue
@@ -310,17 +321,19 @@ def audit_live_quality_benchmark(benchmark_id: str) -> BenchmarkCalibrationAudit
         fixture_text = " ".join(_strings(c.input.get("fixtures"))).lower()
         for cat in injected_categories:
             if cat.lower() in fixture_text:
-                leaked.append(f"{c.id}: defect category {cat!r} leaked into fixtures")
+                leaked.append((c.id, f"defect category {cat!r} leaked into fixtures"))
+    for cid, message in leaked:
+        _fail("no_fixture_leakage", message, case_id=cid, kind="benchmark_reference_defect")
     checks.append(
         CalibrationCheck(
             name="no_fixture_leakage",
             passed=not leaked,
-            details="; ".join(leaked) if leaked else "fixtures never contain the reference answers",
+            details=_join(leaked) if leaked else "fixtures never contain the reference answers",
         )
     )
 
     # 5. valid grounding ids/pages
-    grounding_bad: list[str] = []
+    grounding_bad: list[tuple[str, str]] = []
     for c in cases:
         fixtures = c.input.get("fixtures") or {}
         plan_keys = {
@@ -333,86 +346,105 @@ def audit_live_quality_benchmark(benchmark_id: str) -> BenchmarkCalibrationAudit
                 for target in _placeholder_targets(payload):
                     key = target[1:-1]
                     if key not in plan_keys:
-                        grounding_bad.append(f"{c.id}: unresolved fixture placeholder {target!r}")
+                        grounding_bad.append((c.id, f"unresolved fixture placeholder {target!r}"))
         if c.id == "lq-evidence-extraction":
             doc_pages = c.input.get("documents", [{}])[0].get("pages") or []
             page_count = len(doc_pages)
             for p in doc_pages:
                 if int(p.get("page") or 0) < 1 or int(p.get("page") or 0) > max(page_count, 1):
                     grounding_bad.append(
-                        "lq-evidence-extraction: locator page out of document range"
+                        (c.id, "locator page out of document range")
                     )
+    for cid, message in grounding_bad:
+        _fail("grounding_ids_valid", message, case_id=cid, kind="benchmark_reference_defect")
     checks.append(
         CalibrationCheck(
             name="grounding_ids_valid",
             passed=not grounding_bad,
-            details="; ".join(grounding_bad) if grounding_bad else "grounding ids/pages resolve",
+            details=_join(grounding_bad) if grounding_bad else "grounding ids/pages resolve",
         )
     )
 
     # 6. deterministic evaluator correctness (evaluator registered + config match)
-    eval_bad: list[str] = []
+    eval_bad: list[tuple[str, str]] = []
     config_evals = list(definition.config.get("evaluators") or [])
     if not config_evals:
-        eval_bad.append(f"{benchmark_id}: benchmark declares no evaluators")
+        eval_bad.append(("*", "benchmark declares no evaluators"))
     for eid in config_evals:
         if eid not in _LIVE_QUALITY_EVALUATORS:
-            eval_bad.append(f"{benchmark_id}: unknown evaluator {eid!r}")
+            eval_bad.append(("*", f"unknown evaluator {eid!r}"))
     expected_evaluator = {
         "live-quality-reasoning-v1": "evaluator.live_quality_reasoning",
         "live-quality-critic-v1": "evaluator.live_quality_critic",
         "live-quality-fast-v1": "evaluator.live_quality_fast",
     }.get(benchmark_id)
     if expected_evaluator and expected_evaluator not in config_evals:
-        eval_bad.append(f"{benchmark_id}: expected evaluator {expected_evaluator!r} not configured")
+        eval_bad.append(("*", f"expected evaluator {expected_evaluator!r} not configured"))
     for c in cases:
         ref_eval = (c.reference or {}).get("evaluator")
         if ref_eval and ref_eval not in _LIVE_QUALITY_EVALUATORS:
-            eval_bad.append(f"{c.id}: reference evaluator {ref_eval!r} unknown")
+            eval_bad.append((c.id, f"reference evaluator {ref_eval!r} unknown"))
+    for cid, message in eval_bad:
+        # Benchmark-level evaluator defects are recorded against every case:
+        # a broken evaluator configuration invalidates all of them, and
+        # confirmed_defect_map is matched by exact case_id, so a "*" entry
+        # would exclude nothing.
+        targets = [c.id for c in cases] if cid == "*" else [cid]
+        for case_id in targets:
+            _fail("evaluator_correctness", message, case_id=case_id, kind="evaluator_defect")
     checks.append(
         CalibrationCheck(
             name="evaluator_correctness",
             passed=not eval_bad,
-            details="; ".join(eval_bad)
+            details=_join(eval_bad)
             if eval_bad
             else "evaluators registered and dimension-aligned",
         )
     )
 
     # 7. realistic context size
-    size_bad: list[str] = []
+    size_bad: list[tuple[str, str]] = []
     for c in cases:
         text = " ".join(_strings(c.input))
         words = len(text.split())
         if words > 40_000:
-            size_bad.append(f"{c.id}: {words} words exceeds a realistic context budget")
+            size_bad.append((c.id, f"{words} words exceeds a realistic context budget"))
+    for cid, message in size_bad:
+        _fail("realistic_context_size", message, case_id=cid, kind="benchmark_reference_defect")
     checks.append(
         CalibrationCheck(
             name="realistic_context_size",
             passed=not size_bad,
-            details="; ".join(size_bad) if size_bad else "context sizes are realistic",
+            details=_join(size_bad) if size_bad else "context sizes are realistic",
         )
     )
 
     # 8. no provider-specific assumptions
-    provider_bad: list[str] = []
+    provider_bad: list[tuple[str, str]] = []
     for c in cases:
         text = " ".join(_strings(c.input) + _strings(c.reference or {})).lower()
         for marker in ("openrouter", ":free", "gpt-", "claude", "deepseek-", "nemotron"):
             if marker in text:
-                provider_bad.append(f"{c.id}: provider-specific assumption {marker!r}")
+                provider_bad.append((c.id, f"provider-specific assumption {marker!r}"))
+    for cid, message in provider_bad:
+        _fail("no_provider_assumptions", message, case_id=cid, kind="benchmark_reference_defect")
     checks.append(
         CalibrationCheck(
             name="no_provider_assumptions",
             passed=not provider_bad,
-            details="; ".join(provider_bad)
+            details=_join(provider_bad)
             if provider_bad
             else "inputs/references are provider-agnostic",
         )
     )
 
+    # Derived from the checks, not only from the findings: a check that sets
+    # passed=False without recording a finding is still a failed audit, and
+    # this stays correct if a future check forgets to call _fail.
     verdict = "ok"
-    if any(f.severity == CalibrationSeverity.defect for f in findings):
+    if any(not c.passed for c in checks) or any(
+        f.severity == CalibrationSeverity.defect for f in findings
+    ):
         verdict = "repair_needed"
 
     return BenchmarkCalibrationAudit(

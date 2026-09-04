@@ -81,6 +81,7 @@ in the working tree, uncommitted.
 | Coverage matrix vs evaluator output | **Partly fixed** (round 6) | `evaluation_coverage.py` + test |
 | **H2** errored cases excluded from the pass-rate gate | **Fixed** (round 7) | `tournament/accounting.py`, `routing/selection.py` |
 | **H4** failed repetitions dropped, call records lost | **Fixed** (round 7) | `evaluation_model_tournament` |
+| **H5** calibration verdict ignores 6 of 8 checks | **Fixed** (round 8) | `benchmarks/calibration.py` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -214,7 +215,7 @@ artifacts exist in local run state) before being applied:
   so a flaky model is scored on its lucky run and looks *more* reliable.
   **Fixed (round 7).**
 - **H5** — the calibration audit verdict ignores 6 of 8 checks, so those defect classes
-  are never excluded from qualification. **Still open.**
+  are never excluded from qualification. **Fixed (round 8).**
 
 Also noted but not fixed: **stale local run state**. `.research/artifacts.db` (gitignored,
 ~30 MB) contains artifacts whose computed values the round 1–3 fixes change the meaning
@@ -329,6 +330,40 @@ qualification semantics, so they were held until the run-state decision in §1.2
   can be retuned without code changes. Note the existing
   `DEFAULT_MAX_MODEL_ERROR_RATE = 0.5` is far more lenient; the two are
   measuring different things and are not required to agree.
+
+### Round 8 notes (H5)
+
+All eight calibration checks now record findings, and the verdict is derived
+from the checks rather than only from the findings. The latter matters beyond
+this fix: a check that sets `passed=False` without calling `_fail` is still a
+failed audit, and deriving the verdict from the checks stays correct if a
+future check forgets.
+
+- **Failed-check lists became structured.** They held joined message strings
+  with the case id embedded as a text prefix. Since each entry also has to
+  become a finding *and* a `ConfirmedDefect` keyed by case id, those lists are
+  now `(case_id, message)` pairs. Check `details` text is unchanged — `_join`
+  renders the pairs exactly as the old f-strings did.
+- **Two defect kinds, not one.** `evaluator_correctness` is attributed as
+  `evaluator_defect`; the other five as `benchmark_reference_defect`. Both are
+  excluded from qualification per the `FailureAttributionKind` docstring, so
+  this is about accurate attribution rather than about whether they are
+  excluded.
+- **Benchmark-level evaluator defects are keyed to every case.** A broken
+  evaluator configuration invalidates the whole benchmark, but
+  `confirmed_defect_map` is matched by *exact* case id, so recording it against
+  a placeholder would exclude nothing. The audit therefore emits one
+  `ConfirmedDefect` per case. This is a deliberate exception: it makes
+  benchmark-level defects actually take effect.
+- **Nothing changes for the current benchmarks.** All three built-in
+  live-quality benchmarks pass every check both before and after, so no
+  existing verdict, exit code, or qualification result moves. The fix is latent
+  until a real defect appears — verified by re-running the audit before and
+  after the change.
+- **Still open (pre-existing, out of scope here):** the unknown-benchmark path
+  records its defect as `case_id="*"`, which matches no real case id and so
+  excludes nothing. There are no known cases to key it to, so making it work
+  needs the consumer (`attribute_failures`) to treat `"*"` as a wildcard.
 
 ### Verification that the new tests are genuine regression tests
 
@@ -1303,7 +1338,7 @@ The review found several classes of defect the suite structurally cannot catch:
 | **C3** ranking inversion | `test_tournament_ranking.py` never compares two **eligible** entries with different pass rates |
 | **C6** DNS vs injected transport | Unit tests use `https://example.com`, which **resolves**; only the benchmark uses non-resolvable hosts |
 | **H1** hash-order nondeterminism | No test re-runs aggregation under different `PYTHONHASHSEED` |
-| **H5** calibration verdict | No test drives the 6 non-`_fail()` checks to failure and asserts the verdict |
+| ~~**H5** calibration verdict~~ | **Covered (round 8)** — `tests/unit/test_calibration_audit_defects.py` drives 5 of the 6 checks to failure |
 | **M9/M10** evaluators emitting no metrics | No test asserts every deterministic evaluator emits the metrics `evaluation_coverage.py` declares |
 | **M11** stale coverage matrix | Metric tuples are hand-maintained and never validated against evaluator output |
 | **C8** `skipped` → `passed` | No evaluator in the suite ever returns `skipped` |
