@@ -166,6 +166,61 @@ def test_aggregate_run_results_pass_rates():
     assert out["cost_per_successful_case"] == 0.1 / 14
 
 
+def test_case_error_rate_survives_a_perfect_deterministic_pass_rate():
+    """H2: 1 passed / 0 failed / 99 errored must not look like a perfect model.
+
+    deterministic_pass_rate deliberately measures quality among *completed*
+    cases, so it stays 1.0 here. case_error_rate is the separate signal that
+    makes the model unqualified; before this it was computed by the caller but
+    never exposed, so errored cases had no effect on any gate.
+    """
+    refs = [
+        BenchmarkRunRef(
+            benchmark_id="b",
+            benchmark_version=1,
+            repetition=1,
+            run_id="r1",
+            report_id="p1",
+            report_status="failed",
+            cases_total=100,
+            cases_passed=1,
+            cases_failed=0,
+            cases_error=99,
+        ),
+    ]
+    out = aggregate_run_results(refs, {})
+    assert out["deterministic_pass_rate"] == 1.0
+    assert out["case_error_rate"] == 0.99
+    assert out["case_pass_rate"] == 0.01
+
+
+def test_failed_repetitions_count_as_attempts():
+    """H4: a crashed repetition must not vanish from the denominator.
+
+    Two of three attempts crashed. Scoring only the survivor would report a
+    benchmark_pass_rate of 1.0 for a candidate that completed one run in three.
+    """
+    refs = [
+        BenchmarkRunRef(
+            benchmark_id="b",
+            benchmark_version=1,
+            repetition=1,
+            run_id="r1",
+            report_id="p1",
+            report_status="passed",
+            cases_total=10,
+            cases_passed=9,
+            cases_failed=1,
+            cases_error=0,
+        ),
+    ]
+    out = aggregate_run_results(refs, {}, failed_repetitions=2)
+    assert out["benchmark_pass_rate"] == 1 / 3
+    assert out["repetition_failure_rate"] == 2 / 3
+    # The surviving run's case rates are unaffected.
+    assert out["deterministic_pass_rate"] == 0.9
+
+
 def test_effective_pricing_plan_wins():
     from research_harness.research.tournament.accounting import effective_pricing
 

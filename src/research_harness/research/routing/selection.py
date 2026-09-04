@@ -31,6 +31,10 @@ from research_harness.research.schemas.tournament import RoleLeaderboard
 DEFAULT_REQUIRED_PASS_RATE = 0.85
 DEFAULT_MIN_STRUCTURED_RATE = 0.5
 DEFAULT_MAX_MODEL_ERROR_RATE = 0.5
+# Errored cases are excluded from deterministic_pass_rate by design, so this is
+# the only gate that stops a model which fails to complete most cases from
+# qualifying on the strength of the few it did finish.
+DEFAULT_MAX_CASE_ERROR_RATE = 0.10
 
 
 def build_assessments(
@@ -55,6 +59,8 @@ def build_assessments(
                 deterministic_pass_rate=entry.deterministic_pass_rate,
                 benchmark_pass_rate=entry.benchmark_pass_rate,
                 case_pass_rate=entry.case_pass_rate,
+                case_error_rate=entry.case_error_rate,
+                repetition_failure_rate=entry.repetition_failure_rate,
                 structured_output_success_rate=entry.structured_output_success_rate,
                 model_error_rate=entry.model_error_rate,
                 retry_rate=entry.retry_rate,
@@ -89,6 +95,11 @@ def filter_eligible(
         if request.max_model_error_rate is None
         else request.max_model_error_rate
     )
+    max_case_error = (
+        DEFAULT_MAX_CASE_ERROR_RATE
+        if request.max_case_error_rate is None
+        else request.max_case_error_rate
+    )
 
     eligible: list[RoutingCandidateAssessment] = []
     rejected: list[RoutingCandidateAssessment] = []
@@ -109,6 +120,14 @@ def filter_eligible(
                 reason = (
                     f"eligibility: deterministic_pass_rate "
                     f"{a.deterministic_pass_rate:.3f} < required {required_rate:.3f}"
+                )
+            elif a.case_error_rate is not None and a.case_error_rate > max_case_error:
+                # Without this, 1 passed / 99 errored scores 1.0 and qualifies.
+                # Unknown (None) is not treated as passing: it only occurs when
+                # there are no cases at all, which the branch above rejects.
+                reason = (
+                    f"eligibility: case_error_rate {a.case_error_rate:.3f} > "
+                    f"max {max_case_error:.3f}"
                 )
             elif a.eligibility != "eligible":
                 reason = "eligibility: candidate marked ineligible in leaderboard evidence"

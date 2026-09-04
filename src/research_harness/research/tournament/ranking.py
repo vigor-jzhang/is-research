@@ -93,6 +93,8 @@ def build_entries(results: list[TournamentModelResult], threshold: float) -> lis
                 deterministic_pass_rate=r.deterministic_pass_rate,
                 benchmark_pass_rate=r.benchmark_pass_rate,
                 case_pass_rate=r.case_pass_rate,
+                case_error_rate=r.case_error_rate,
+                repetition_failure_rate=r.repetition_failure_rate,
                 structured_output_success_rate=r.structured_output_success_rate,
                 model_error_rate=r.model_error_rate,
                 retry_rate=r.retry_rate,

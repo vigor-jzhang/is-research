@@ -79,6 +79,8 @@ in the working tree, uncommitted.
 | **M13** store read failures shrink denominators | **Fixed** (round 5) | `evaluation_harness/plugin.py` |
 | **M8** `acq-duplicate-blob` vacuous | **Investigated** (round 6) — production correct, coverage added | `fetcher_http`, `benchmarks` |
 | Coverage matrix vs evaluator output | **Partly fixed** (round 6) | `evaluation_coverage.py` + test |
+| **H2** errored cases excluded from the pass-rate gate | **Fixed** (round 7) | `tournament/accounting.py`, `routing/selection.py` |
+| **H4** failed repetitions dropped, call records lost | **Fixed** (round 7) | `evaluation_model_tournament` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -207,11 +209,12 @@ at the consequences (67 `role_leaderboard` artifacts and 15 `qualification_campa
 artifacts exist in local run state) before being applied:
 
 - **H2** — errored cases excluded from `deterministic_pass_rate`, the eligibility gate.
-  A model that errors on 99% of cases currently scores 1.0.
+  A model that errors on 99% of cases currently scores 1.0. **Fixed (round 7).**
 - **H4** — failed tournament repetitions dropped, and their call records never counted,
   so a flaky model is scored on its lucky run and looks *more* reliable.
+  **Fixed (round 7).**
 - **H5** — the calibration audit verdict ignores 6 of 8 checks, so those defect classes
-  are never excluded from qualification.
+  are never excluded from qualification. **Still open.**
 
 Also noted but not fixed: **stale local run state**. `.research/artifacts.db` (gitignored,
 ~30 MB) contains artifacts whose computed values the round 1–3 fixes change the meaning
@@ -294,6 +297,38 @@ record, which is why archiving beats leaving the artifacts in place.
   not run each benchmark and compare declared metrics against emitted ones, which is
   what would catch the next M11-class row. That check belongs in an integration test,
   since running all 28 benchmarks is too slow for the unit suite.
+
+### Round 7 notes (H2 + H4)
+
+Both are the same defect: *failures disappear from denominators*. Both change
+qualification semantics, so they were held until the run-state decision in §1.2.
+
+- **H2 — separate error gate, not a rewritten rate.** `deterministic_pass_rate`
+  still means "quality among cases the model completed"; errored cases remain
+  excluded from it. What changed is that `case_error_rate` is now computed and
+  propagated (aggregation → `TournamentModelResult` → `LeaderboardEntry` →
+  `RoutingCandidateAssessment`) and gated in `filter_eligible` with
+  `DEFAULT_MAX_CASE_ERROR_RATE = 0.10`, overridable per request. A model that
+  errors on 99 of 100 cases still reads 1.0 on the pass rate and is now
+  rejected for the error rate. The alternative — folding errors into the
+  denominator — was rejected because it conflates "answered wrongly" with
+  "could not answer", and the two want independently tunable thresholds.
+- **Why a new gate rather than reusing the existing one.** `filter_eligible`
+  already had a `max_model_error_rate` gate, but it is a **call-level** metric
+  (provider failures) whereas H2 is about **case-level** errors; a case can
+  error without any model call failing. That gate also skips entirely when its
+  value is `None`, so an unmeasured error rate currently passes.
+- **H4 — crashed repetitions counted, not synthesised.** The fix extends
+  `calls` on the exception path and increments `failed_repetitions`, which
+  enters `total_benchmarks`. It deliberately does *not* create a synthetic
+  `BenchmarkRunRef`: advisory scoring dereferences `ref.run_id` via
+  `store.get`, so a ref with no persisted run would raise. Counting attempts
+  separately achieves the same denominator correction without a fake artifact.
+- **Threshold choice.** 0.10 is a judgement call, not a derivation. It is
+  exposed as `RoutingRequest.max_case_error_rate` and a module default, so it
+  can be retuned without code changes. Note the existing
+  `DEFAULT_MAX_MODEL_ERROR_RATE = 0.5` is far more lenient; the two are
+  measuring different things and are not required to agree.
 
 ### Verification that the new tests are genuine regression tests
 

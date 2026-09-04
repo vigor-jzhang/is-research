@@ -315,3 +315,52 @@ def test_explicit_zero_reliability_threshold_is_enforced():
     assert eligible == []
     assert rejected[0].candidate_id == "has-errors"
     assert "model_error_rate" in (rejected[0].rejection_reason or "")
+
+
+def test_model_that_errors_on_nearly_every_case_is_rejected():
+    """H2: a 1.0 deterministic_pass_rate is not enough on its own.
+
+    The candidate passed the only case it managed to complete and errored on
+    the other 99. deterministic_pass_rate excludes errored cases by design, so
+    it reads 1.0 -- before this gate the candidate qualified as perfect.
+    """
+    board = _board(
+        [
+            _entry(
+                "mostly_errored",
+                deterministic_pass_rate=1.0,
+                case_pass_rate=0.01,
+                case_error_rate=0.99,
+            ),
+        ]
+    )
+    eligible, rejected = filter_eligible(build_assessments(board), _request())
+    assert not eligible
+    assert len(rejected) == 1
+    assert "case_error_rate" in (rejected[0].rejection_reason or "")
+
+
+def test_low_case_error_rate_still_qualifies():
+    """The new gate must not reject healthy candidates by default."""
+    board = _board(
+        [
+            _entry(
+                "healthy",
+                deterministic_pass_rate=0.95,
+                case_pass_rate=0.94,
+                case_error_rate=0.02,
+            ),
+        ]
+    )
+    eligible, rejected = filter_eligible(build_assessments(board), _request())
+    assert len(eligible) == 1
+    assert not rejected
+
+
+def test_case_error_rate_threshold_is_configurable():
+    """Callers can tighten or loosen the gate."""
+    board = _board([_entry("m", deterministic_pass_rate=1.0, case_error_rate=0.20)])
+    strict = filter_eligible(build_assessments(board), _request(max_case_error_rate=0.05))
+    assert not strict[0]
+    lenient = filter_eligible(build_assessments(board), _request(max_case_error_rate=0.50))
+    assert len(lenient[0]) == 1

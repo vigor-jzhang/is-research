@@ -337,6 +337,11 @@ class ModelTournamentService:
         refs: list[BenchmarkRunRef] = []
         calls: list[ModelCallRecord] = []
         failures: list[str] = []
+        # Attempts that crashed before producing a report. Counted separately
+        # rather than as synthetic BenchmarkRunRefs: refs are dereferenced
+        # later (advisory scoring fetches ref.run_id), so a ref with no
+        # persisted run would raise.
+        failed_repetitions = 0
         for bid in plan.benchmark_ids:
             evaluator_ids = await self._resolve_evaluator_ids(bid, plan)
             for rep in range(1, plan.repetitions + 1):
@@ -363,6 +368,12 @@ class ModelTournamentService:
                     )
                     failures.append(message)
                     logger.warning("%s", message)
+                    # The attempt still happened: keep its call records so the
+                    # candidate is charged for it, and count it as an attempt
+                    # so a flaky model cannot be scored only on the runs that
+                    # happened to succeed.
+                    calls.extend(router.records)
+                    failed_repetitions += 1
                     continue
                 report = (await self._store.get(report_id)).parse_payload(EvaluationReport)
                 refs.append(
@@ -389,7 +400,7 @@ class ModelTournamentService:
                     )
 
         call_metrics = aggregate_calls(calls)
-        run_metrics = aggregate_run_results(refs, call_metrics)
+        run_metrics = aggregate_run_results(refs, call_metrics, failed_repetitions)
         advisory = await self._advisory_score(refs, plan.advisory_evaluators)
 
         failure_counts = {k: int(v) for k, v in call_metrics.get("failure_counts", {}).items()}
@@ -404,6 +415,8 @@ class ModelTournamentService:
                 deterministic_pass_rate=run_metrics.get("deterministic_pass_rate"),
                 benchmark_pass_rate=run_metrics.get("benchmark_pass_rate"),
                 case_pass_rate=run_metrics.get("case_pass_rate"),
+                case_error_rate=run_metrics.get("case_error_rate"),
+                repetition_failure_rate=run_metrics.get("repetition_failure_rate"),
                 structured_output_success_rate=call_metrics.get("structured_output_success_rate"),
                 model_error_rate=call_metrics.get("model_error_rate"),
                 retry_rate=call_metrics.get("retry_rate"),

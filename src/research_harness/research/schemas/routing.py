@@ -61,6 +61,16 @@ class RoutingRequest(BaseModel):
     require_fallback: bool = Field(default=True)
     min_structured_output_success_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     max_model_error_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_case_error_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Maximum share of evaluation cases that may error. Errored cases are "
+            "excluded from deterministic_pass_rate, so without this a model that "
+            "errors on nearly every case can still score 1.0 on the few it finishes."
+        ),
+    )
     min_repetitions: int = Field(
         default=1, ge=1, description="Minimum leaderboard repetitions of evidence"
     )
@@ -90,6 +100,8 @@ class RoutingCandidateAssessment(BaseModel):
     deterministic_pass_rate: float | None = None
     benchmark_pass_rate: float | None = None
     case_pass_rate: float | None = None
+    case_error_rate: float | None = None
+    repetition_failure_rate: float | None = None
     structured_output_success_rate: float | None = None
     model_error_rate: float | None = None
     retry_rate: float | None = None

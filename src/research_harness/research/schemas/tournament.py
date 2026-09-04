@@ -134,6 +134,12 @@ class TournamentModelResult(BaseModel):
     deterministic_pass_rate: float | None = None
     benchmark_pass_rate: float | None = None
     case_pass_rate: float | None = None
+    # Share of cases that errored. Kept separate from deterministic_pass_rate,
+    # which deliberately measures quality among completed cases only: a model
+    # must clear both to qualify.
+    case_error_rate: float | None = None
+    # Share of repetitions that crashed before producing a report.
+    repetition_failure_rate: float | None = None
     structured_output_success_rate: float | None = None
     model_error_rate: float | None = None
     retry_rate: float | None = None
@@ -232,6 +238,8 @@ class LeaderboardEntry(BaseModel):
     deterministic_pass_rate: float | None = None
     benchmark_pass_rate: float | None = None
     case_pass_rate: float | None = None
+    case_error_rate: float | None = None
+    repetition_failure_rate: float | None = None
     structured_output_success_rate: float | None = None
     model_error_rate: float | None = None
     retry_rate: float | None = None

@@ -140,20 +140,36 @@ def aggregate_calls(calls: list[ModelCallRecord]) -> dict[str, Any]:
 def aggregate_run_results(
     runs: list[BenchmarkRunRef],
     calls_metrics: dict[str, Any],
+    failed_repetitions: int = 0,
 ) -> dict[str, Any]:
-    """Aggregate EvaluationRun-level outcomes into pass rates."""
+    """Aggregate EvaluationRun-level outcomes into pass rates.
+
+    ``failed_repetitions`` counts attempts that crashed before producing a
+    report. They are included in ``total_benchmarks`` so a candidate is scored
+    on every attempt rather than only on the attempts that happened to
+    complete.
+    """
     total_cases = sum(int(r.cases_total or 0) for r in runs)
     passed_cases = sum(int(r.cases_passed or 0) for r in runs)
     failed_cases = sum(int(r.cases_failed or 0) for r in runs)
     error_cases = sum(int(r.cases_error or 0) for r in runs)
     passed_benchmarks = sum(1 for r in runs if r.report_status == "passed")
-    total_benchmarks = len(runs)
+    # Attempts, not completions: a crashed repetition must not disappear.
+    total_benchmarks = len(runs) + int(failed_repetitions or 0)
 
     case_pass_rate = passed_cases / total_cases if total_cases else None
+    # Deliberately excludes errored cases: this measures quality among cases
+    # the model actually completed. Errored cases are gated separately via
+    # ``case_error_rate``, so a model that errors on most cases cannot qualify
+    # on the strength of the few it finished.
     deterministic_pass_rate = (
         passed_cases / (passed_cases + failed_cases) if (passed_cases + failed_cases) else None
     )
     benchmark_pass_rate = passed_benchmarks / total_benchmarks if total_benchmarks else None
+    case_error_rate = error_cases / total_cases if total_cases else None
+    repetition_failure_rate = (
+        int(failed_repetitions or 0) / total_benchmarks if total_benchmarks else None
+    )
 
     estimated_cost = calls_metrics.get("estimated_cost")
     cost_per_successful_case = (
@@ -169,6 +185,8 @@ def aggregate_run_results(
         "case_pass_rate": case_pass_rate,
         "deterministic_pass_rate": deterministic_pass_rate,
         "benchmark_pass_rate": benchmark_pass_rate,
+        "case_error_rate": case_error_rate,
+        "repetition_failure_rate": repetition_failure_rate,
         "cost_per_successful_case": cost_per_successful_case,
         "cost_per_successful_benchmark": cost_per_successful_benchmark,
         "error_cases": error_cases,
