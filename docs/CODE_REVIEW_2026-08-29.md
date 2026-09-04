@@ -85,6 +85,7 @@ in the working tree, uncommitted.
 | **M77/M78/M79** found during rounds 7-8 | **Documented** (round 9), not fixed | `selection.py`, `tests/live/`, `calibration.py` |
 | **H25, M80-M86** "does this guard fire?" pass | **Documented** (round 11), not fixed | `evaluation_live_quality`, `selection.py`, 4 evaluators |
 | **H25** live-quality dropped call records | **Fixed** (round 12) | `evaluation_live_quality/plugin.py` |
+| **M80** unknown structured-output rate passes | **Fixed** (round 13) | `routing/selection.py` |
 | The remaining H/M/L backlog | **Not started** | — |
 
 **Post-fix verification (after round 5):**
@@ -494,6 +495,38 @@ counter. Only the records were being lost here.
   (`provider_error_frequency`, `failure_counts`) rather than the list itself.
   The tournament result does expose `calls`, which is why H4's test could
   assert on it directly.
+
+### Round 13 notes (M80)
+
+Unknown `structured_output_success_rate` now blocks instead of passing. This
+was a semantics decision, not a derivation, so the reasoning is recorded:
+
+- **Consistency with the production qualification path.** `readiness.py:96-101`
+  maps `None` to `0.0` via `_rate(..., 0.0)`, which fails
+  `min_structured_output_success_rate`. Left as-is, routing could select a model
+  that qualification rejects.
+- **Consistency within the function.** Unknown cost (154-157) and unknown
+  latency (163-166) already block. Structured output was the odd one out.
+- **The gate is always on.** `require_structured_output` defaults to `True`, so
+  this is not an optional constraint the caller declined — that is the
+  `max_estimated_cost`/`latency_limit_ms` case, where `None` correctly means
+  "no constraint requested".
+
+**The blast radius was measured before changing it.** Blocking on unknown is
+only safe if the rate is normally populated: if every candidate in a leaderboard
+had `None`, all would become ineligible and routing would return no candidate
+at all. Five tournament configurations were run offline (synthesis, mechanism,
+gap analysis, screening, and a three-benchmark mix) and all produced
+`structured_output_success_rate = 1.0`. The rate is `None` only when no call in
+the tournament carried a `response_schema`, which requires a benchmark set that
+never exercises a schema-using workflow (`model_builder`, `equilibrium_deriver`,
+`proposition_generator`, `gap_selection`, the critics).
+
+**Residual risk, stated plainly:** a leaderboard built from such a benchmark set
+would now yield no eligible candidate rather than routing on unverified
+evidence. That is a visible failure (no route chosen) rather than a silent one,
+but it is a behaviour change for that case. `require_structured_output=False`
+remains the documented opt-out, and is covered by a test.
 
 ### Verification that the new tests are genuine regression tests
 
@@ -1338,7 +1371,7 @@ This pass looked specifically for checks that appear to guard something but
 cannot fire. It reused the shapes of H2, H4, H5, M8, M77 and M79. Every entry
 below was traced to confirm the guard's result is not consumed.
 
-- **M80** `research/routing/selection.py:136-144` — unknown
+- **M80** `research/routing/selection.py:136-144` — **Fixed (round 13).** unknown
   `structured_output_success_rate` **passes**, while unknown values elsewhere in
   the *same function* block: `estimated_cost is None` ⇒ "cost unknown, cannot
   satisfy max_estimated_cost" (154-157) and `latency_ms_p50 is None` ⇒ "latency

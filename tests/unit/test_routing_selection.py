@@ -364,3 +364,53 @@ def test_case_error_rate_threshold_is_configurable():
     assert not strict[0]
     lenient = filter_eligible(build_assessments(board), _request(max_case_error_rate=0.50))
     assert len(lenient[0]) == 1
+
+
+def test_unknown_structured_output_rate_is_rejected():
+    """M80: an unmeasured structured-output rate must not pass an active gate.
+
+    require_structured_output defaults to True, so this gate is always on, and
+    the old code skipped it entirely when the rate was None. Otherwise an
+    unmeasured model passes, disagreeing with the production qualification path
+    (readiness.py maps None to 0.0, which fails) and with how unknown cost and
+    unknown latency are handled in this same function.
+    """
+    board = _board(
+        [
+            _entry("unmeasured", deterministic_pass_rate=0.95, structured_output_success_rate=None),
+        ]
+    )
+    eligible, rejected = filter_eligible(build_assessments(board), _request())
+    assert not eligible
+    assert len(rejected) == 1
+    assert "structured_output_success_rate" in (rejected[0].rejection_reason or "")
+
+
+def test_measured_structured_output_rate_still_qualifies():
+    """The gate must not reject candidates whose rate was measured."""
+    board = _board(
+        [
+            _entry("measured", deterministic_pass_rate=0.95, structured_output_success_rate=1.0),
+        ]
+    )
+    eligible, rejected = filter_eligible(build_assessments(board), _request())
+    assert len(eligible) == 1
+    assert not rejected
+
+
+def test_unknown_rate_allowed_when_structured_output_not_required():
+    """require_structured_output=False is the documented opt-out."""
+    board = _board(
+        [
+            _entry(
+                "unmeasured",
+                deterministic_pass_rate=0.95,
+                structured_output_success_rate=None,
+            ),
+        ]
+    )
+    eligible, rejected = filter_eligible(
+        build_assessments(board), _request(require_structured_output=False)
+    )
+    assert len(eligible) == 1
+    assert not rejected

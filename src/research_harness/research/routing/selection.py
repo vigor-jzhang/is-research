@@ -134,10 +134,21 @@ def filter_eligible(
 
         # 3. reliability
         if reason is None and request.require_structured_output:
-            if (
-                a.structured_output_success_rate is not None
-                and a.structured_output_success_rate < min_structured
-            ):
+            if a.structured_output_success_rate is None:
+                # Unknown is not "good enough": structured output was never
+                # exercised, so there is no evidence the model can produce it.
+                # Previously this branch was skipped entirely, so an unmeasured
+                # model passed an always-on gate (require_structured_output
+                # defaults to True). Matches how unknown cost and unknown
+                # latency are handled below, and how the production
+                # qualification path treats it (readiness.py maps None to 0.0,
+                # which fails its minimum) -- otherwise routing could select a
+                # model that qualification rejects.
+                reason = (
+                    "reliability: structured_output_success_rate unknown, "
+                    "cannot verify structured output"
+                )
+            elif a.structured_output_success_rate < min_structured:
                 reason = (
                     f"reliability: structured_output_success_rate "
                     f"{a.structured_output_success_rate:.3f} < {min_structured:.3f}"
