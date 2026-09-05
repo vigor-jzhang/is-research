@@ -78,13 +78,25 @@ _PATTERNS: list[tuple[str, str, str]] = [
 ]
 
 # Contexts where "first"/"new" are technical, not novelty claims.
+#
+# L12: "time" used to be in this list, which blacklisted the canonical priority
+# phrase "for the first time" -- the very phrase the absolute_priority and
+# result_novelty patterns below exist to catch. A match always sits inside its
+# own blacklist window, so those two patterns could never fire and the
+# highest-risk novelty signal was systematically invisible. The technical uses
+# ("first-time buyers") are hyphenated adjectival compounds, and they cannot
+# match any pattern here: every pattern requires the full "for the first time"
+# phrasing. Do not re-add "time".
 _BLACKLIST = re.compile(
-    r"\bfirst[- ](order|stage|step|period|best|mover|player|derivative|moment|round|time|stage|difference)\b"
+    r"\bfirst[- ](order|stage|step|period|best|mover|player|derivative|moment|round|stage|difference)\b"
     r"|\bfirst[- ](stage|order)\s+condition\b"
     r"|\bfirst\s+and\s+second\b"
     r"|\bnew[- ](york|jersey|zealand|england|dehli)\b",
     flags=re.IGNORECASE,
 )
+
+# Ordering used when overlapping spans must resolve to one classification.
+_RISK_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 _RISK_BY_TYPE: dict[str, ClaimRiskLevel] = {
     "absolute_priority": ClaimRiskLevel.critical,
@@ -134,14 +146,15 @@ def detect_high_risk(text: str) -> list[tuple[str, str, int, int]]:
     merged: list[tuple[str, str, int, int]] = []
     for f in findings:
         if merged and f[2] < merged[-1][3]:
-            # overlapping: keep the higher-risk classification
+            # Overlapping: keep the HIGHER-risk classification. The previous
+            # form kept the earlier span's type and risk unconditionally, so a
+            # critical span followed by an overlapping medium one was reported
+            # as medium -- the opposite of what this comment claimed.
             prev = merged[-1]
-            merged[-1] = (
-                prev[0],
-                prev[1],
-                prev[2],
-                max(prev[3], f[3]),
-            )
+            if _RISK_RANK.get(f[1], 0) > _RISK_RANK.get(prev[1], 0):
+                merged[-1] = (f[0], f[1], prev[2], max(prev[3], f[3]))
+            else:
+                merged[-1] = (prev[0], prev[1], prev[2], max(prev[3], f[3]))
         else:
             merged.append(f)
     return merged

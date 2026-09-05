@@ -775,8 +775,9 @@ async def _run_report_with(
     relationships: dict[str, str],
     critic: dict[str, str] | None = None,
     title: str = "Demand-Driven Platform Quantity Dynamics",
+    sections: list[tuple[str, str, str]] | None = None,
 ) -> tuple[str, str]:
-    m_id, pkg_id, _draft = await _manuscript_env(store, title=title)
+    m_id, pkg_id, _draft = await _manuscript_env(store, title=title, sections=sections)
     sources = {"semantic_scholar": FakeSource("semantic_scholar", catchall=papers)}
     svc._lookup = _lookup(sources)
 
@@ -810,7 +811,9 @@ async def test_report_blocked_critical_threat(store: SQLiteArtifactStore, svc):
         svc,
         [threatening],
         {threatening.title: "direct_prior_art"},
-        critic={"verdict": "disputes", "reasoning": "I disagree."},
+        # L13: a CONCURRING critic leaves the threat standing. The dispute
+        # direction is covered by test_critic_dispute_leaves_threat_unverified.
+        critic={"verdict": "concurs", "reasoning": "The overlap is exact."},
     )
     report = (await store.get(report_id)).parse_payload(NoveltyValidationReport)
     assert report.overall_status == NoveltyReportStatus.blocked
@@ -822,6 +825,73 @@ async def test_report_blocked_critical_threat(store: SQLiteArtifactStore, svc):
     assert gate.package_status == "ready"
     assert gate.novelty_status == NoveltyReportStatus.blocked
     assert gate.blocking_claim_ids == report.critical_threats
+
+
+async def test_critic_dispute_leaves_threat_unverified(store: SQLiteArtifactStore, svc):
+    """L13: a disputed threat must not stand.
+
+    The critic pass is the only independent check on the first pass, and its
+    verdict used to have no consumer: a `disputes` verdict changed nothing and
+    the claim was still reported as blocked on an assessment the critic called
+    wrong. It is now downgraded to insufficient evidence, which still refuses
+    to certify the package (only `clear` + complete coverage is `ready`).
+    """
+    threatening = _paper(
+        "Platform Competition under Demand Uncertainty",
+        2019,
+        "10.1000/t1",
+        "We model competition between platforms choosing quantities.",
+    )
+    report_id, gate_id = await _run_report_with(
+        store,
+        svc,
+        [threatening],
+        {threatening.title: "direct_prior_art"},
+        critic={"verdict": "disputes", "reasoning": "I disagree."},
+    )
+    report = (await store.get(report_id)).parse_payload(NoveltyValidationReport)
+    assert report.overall_status == NoveltyReportStatus.unverified
+    assert report.critical_threats == [], "a disputed threat is not an established one"
+    # the disagreement is still recorded, not erased
+    assert len(report.critic_assessment_ids) == 1
+    gate = (await store.get(gate_id)).parse_payload(SubmissionReadinessGate)
+    assert gate.status == ReadinessStatus.unverified
+    assert gate.blocking_claim_ids == []
+
+
+async def test_metadata_only_candidate_is_unverified_not_clear(
+    store: SQLiteArtifactStore, svc
+):
+    """L14: "not threatened" must not rest on bibliographic metadata alone.
+
+    A candidate with a title, a year and a venue but no abstract was assessed
+    `distinct`, which cleared the claim. Distinctness is no more verifiable
+    from metadata than overlap is, so the judgment is now withheld.
+    """
+    # A MEDIUM-risk claim: the coverage gate only demands candidate evidence
+    # for critical/high claims, so it is medium and low claims that used to be
+    # cleared on metadata alone.
+    no_abstract = _paper("Metadata Only Study", 2018, "10.1000/t5")
+    report_id, gate_id = await _run_report_with(
+        store,
+        svc,
+        [no_abstract],
+        {no_abstract.title: "distinct"},
+        sections=[
+            (
+                "introduction",
+                "Introduction",
+                "This paper is the first to examine demand-driven platform dynamics.",
+            ),
+            ("conclusion", "Conclusion", "Demand dynamics matter for platforms."),
+        ],
+    )
+    report = (await store.get(report_id)).parse_payload(NoveltyValidationReport)
+    assert report.overall_status == NoveltyReportStatus.unverified, (
+        "a metadata-only candidate cannot support a not-threatened conclusion"
+    )
+    gate = (await store.get(gate_id)).parse_payload(SubmissionReadinessGate)
+    assert gate.status == ReadinessStatus.unverified
 
 
 async def test_report_revise_for_partial_overlap(store: SQLiteArtifactStore, svc):

@@ -93,7 +93,9 @@ in the working tree, uncommitted.
 | **H6-H12** scientific correctness | **Fixed** (round 18) | `proposition_verifier`, `comparative_statics`, `numerical_analysis`, `equilibrium_deriver` |
 | **M17, M19, M20, M22, M24, M26, M27, M29** routing numbers | **Fixed** (round 19) | `routing/qualification.py`, `readiness.py`, `preflight.py`, `tournament/accounting.py`, `task_aware.py`, `policy_router`, `evaluation_live_quality` |
 | **M65-M71, M74, M75, L39** CLI reporting + exit codes | **Fixed** (round 20) | `cli/main.py` |
-| The remaining M/L backlog | **Triaged** (round 19) — 84 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **L12, L13, L14** novelty detector | **Fixed** (round 21) | `novelty_validator/detection.py`, `novelty_validator/plugin.py` |
+| **L38** evidence gathering | **Partially fixed** (round 21) | `novelty_validator/plugin.py` |
+| The remaining M/L backlog | **Triaged** (round 19) — 81 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -763,6 +765,74 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 21 notes (L12, L13, L14, L38 — the novelty detector)
+
+Batch 3 of the §9 triage. Three semantically real defects and one performance
+item, all in the novelty validator.
+
+- **L12** — two bugs in the same twenty lines, and they interacted. `_BLACKLIST`
+  contained `first[- ]time`, and because every match is searched inside its own
+  blacklist window, the two patterns that exist solely to catch "for the first
+  time" were unreachable: the canonical `absolute_priority/critical` phrasing
+  was systematically invisible. The technical uses it was meant to suppress
+  ("first-order", "first-stage", and the hyphenated "first-time buyers") are
+  either already distinct entries or cannot match any pattern, all of which
+  require the full "for the first time" phrasing — so `time` is simply gone,
+  with a comment saying not to re-add it. Separately, the overlap merge kept
+  the **earlier** span's type and risk while its comment claimed to keep the
+  higher one, so a critical span overlapping a weaker one was reported as the
+  weaker. Both fixed.
+- **L13** — the independent critic pass produced a verdict that nothing read. A
+  candidate could be assessed `direct_prior_art`, an independent reviewer could
+  say "disputes" (the prompt defines it as "the first pass is wrong"), and the
+  claim was still reported as blocked on an assessment we had been told was
+  wrong. The verdict now has a consumer, and the downgrade is deliberately
+  **one-directional**: a disputed *threat* becomes `insufficient_evidence`,
+  because the threat is no longer established; a disputed *non-threat* is never
+  promoted to a threat, because a dispute is not evidence and this module never
+  manufactures a threat from weak evidence — the same rule as the title-only
+  guard. Both call sites (assessment and revalidation) go through one helper.
+- **L14** — the evidence guard was asymmetric. Title-only evidence blocked
+  every judgment, but `indexed_metadata` blocked only the *threatening*
+  relationships, so a candidate with nothing but a title, a year and a venue
+  could be judged `distinct` and the claim then concluded "not threatened
+  within search scope". Confirmed end to end: with old code a medium-risk claim
+  backed by a metadata-only candidate reported **`clear`** and the gate came
+  back `ready`. The coverage gate at 2105 only demands candidate evidence for
+  critical/high claims, which is exactly why the finding names medium and low
+  risk. The guard is now symmetric with `title_only`: bibliographic metadata
+  supports no semantic judgment in either direction, so the claim reports
+  `unverified`.
+- **L38** — **partially fixed, still open.** `_gather_evidence` issued one
+  `store.get()` per evidence item per candidate, then scanned the item table a
+  second time in step 2b. Both loops now share a single listing and resolve
+  each item's source from the envelope payload dict, so the per-item round-trips
+  are gone and step 2b filters before touching the store. What remains is the
+  scan itself: it is still O(evidence items) per candidate, because there is no
+  reverse index. **The obvious fix — walking provenance from the identity — does
+  not work here**, because the benchmark fixtures in
+  `research/benchmarks/workflows.py` create FullTextDocuments and EvidenceItems
+  with `put()` and no provenance links at all. The real fix is a store-level
+  index (by `source_artifact_id`, or provenance maintained by the fixtures);
+  until then the scan stays, so L38 remains on the backlog.
+
+**A test that encoded the defect had to change.**
+`test_report_blocked_critical_threat` passed a **disputing** critic and asserted
+the report was still `blocked` — it pinned exactly the behaviour L13 calls a
+defect. It now uses a **concurring** critic (a threat still blocks), and the
+dispute direction is covered by a new `test_critic_dispute_leaves_threat_unverified`.
+The change is safe in outcome terms: `unverified` maps to
+`ReadinessStatus.unverified`, and only `clear` + complete coverage maps to
+`ready`, so a disputed threat still refuses to certify the package — it merely
+stops asserting "this is prior art" on contested evidence.
+
+**Test note.** Of the 11 added tests, 8 fail before the change; the 3 that pass
+both ways guard against over-correction (the technical blacklist and the
+hyphenated "first-time" compound must stay suppressed, and a concurring critic
+must not alter an assessment). L12 and L13 are covered by pure unit tests;
+L14's end-to-end effect needs the report pipeline and lives in
+`tests/unit/test_novelty.py`, which already has the fixtures.
 
 ### Round 20 notes (M65-M75, L39 — CLI reporting and exit codes)
 
@@ -1860,12 +1930,12 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
   first batch; `:676` condition check is substring-based, so `"not (b > 0)"` satisfies
   `"b > 0"`.
 - **L11** `results_assembler:740-743` — normalization can empty a claim after validation.
-- **L12** `novelty_validator/detection.py:81-87` — **verified:** `"for the first time"` is
+- **L12** **Fixed (round 21).** `novelty_validator/detection.py:81-87` — **verified:** `"for the first time"` is
   blacklisted, so the canonical `absolute_priority/critical` phrase is never detected; the
   merge keeps the **earlier** span's risk despite the comment saying "keep the higher".
-- **L13** `novelty_validator:1733-1794` — the independent critic pass has **no consumer
+- **L13** **Fixed (round 21).** `novelty_validator:1733-1794` — the independent critic pass has **no consumer
   anywhere**; a `disputes` verdict cannot affect any outcome.
-- **L14** `novelty_validator:971-984, 2105-2113` — "not threatened" can be concluded from
+- **L14** **Fixed (round 21).** `novelty_validator:971-984, 2105-2113` — "not threatened" can be concluded from
   bibliographic metadata alone for medium/low-risk claims.
 - **L15** `numerical_analysis:242-244, 286-368` — baseline defaults ignore declared domains
   (a `[0,1]` probability gets 1.0); `_points_of:381-403` raises `IndexError` for a 1-D grid;
@@ -1916,7 +1986,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 - **L36** `bootstrap.py:318` — `runtime_meta={"config_path": None}` hardcoded.
 - **L37** `config/schema.py:450` — an empty `plugins` list yields a runtime that silently does
   nothing; `start_all()` then re-runs `setup_all()` and returns success.
-- **L38** `novelty_validator:1882, 1930` — O(N×M) full-store scans in `_gather_evidence`.
+- **L38** **Partially fixed (round 21).** `novelty_validator:1882, 1930` — O(N×M) full-store scans in `_gather_evidence`.
 - **L39** **Fixed (round 20).** `cli/main.py:3764-3770` — only `not_solvable` exits non-zero; `failed` and
   `partially_derived` print a green ✓ and exit 0.
 
@@ -2058,8 +2128,8 @@ The review found several classes of defect the suite structurally cannot catch:
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
 | Medium (M1-M86) | 86 | 39 | **47** |
-| Low (L1-L39) | 39 | 2 | **37** |
-| **Total** | **158** | **74** | **84** |
+| Low (L1-L39) | 39 | 5 | **34** |
+| **Total** | **158** | **77** | **81** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
@@ -2069,7 +2139,8 @@ derived finding-by-finding from §4/§5 against the progress table in §1.1.
   M75, M77, M79, M80, M81, M82, M86**.
 - Open Medium: **M18, M21, M23, M25, M28, M30-M64, M72, M73, M76, M78, M83, M84,
   M85**.
-- Closed Low: **L20** (round 18's H9), **L39** (round 20).
+- Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
+  (round 21). **L38 is partially fixed** and stays open — see the round-21 notes.
 
 ### 9.1 Legend
 
@@ -2083,7 +2154,7 @@ derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
 Effort means **fix + regression test + full-suite verification**, not just the edit.
 
-### 9.2 Small bucket — 42 findings (~21 h)
+### 9.2 Small bucket — 40 findings (~20 h)
 
 **Routing / qualification — wrong numbers that steer decisions: done (round 19).**
 
@@ -2124,7 +2195,7 @@ items still open are the structure cluster in §9.3 (M72, M73, M76, L33).
 
 **Round-11 pass (1):** M84 — `missing_abstract` hard-coded `0` instead of aggregating the real flag.
 
-**Low (24, all S):** L2, L3, L4, L5, L6, L8, L9, L11, L12, L16, L17, L19, L22, L24, L25, L27, L28, L30, L31, L32, L34, L35, L36, L37.
+**Low (22, all S):** L2, L3, L4, L5, L6, L8, L9, L11, L16, L17, L19, L22, L24, L25, L27, L28, L30, L31, L32, L34, L35, L36, L37.
 
 Notable among these because they are *verified* wrong, not merely untidy:
 **L12** — `"for the first time"` is blacklisted, so the canonical `absolute_priority/critical`
@@ -2142,7 +2213,7 @@ novelty phrase is **never detected** (and the span merge keeps the earlier risk)
 | Bootstrap / config | M53, M54, M56, M59, M61, M62 | M54 is a parser rewrite that also stops the loader walking 4 parents for secrets; **M56 ⚠** adds `extra: forbid` to 10 contract schemas and can break existing callers; M59 needs a transaction; M61 is secret-scrubbing breadth. |
 | CLI structure | M72, M73, M76, L33 | M72 and M73 span 8 options and 12+ error paths in a 7 400-line file; M76 is `extra_plugins` ignored by 3 more builders (23 call sites) — same shape as H14. |
 | Round-11 leftovers | M83, M85 | M83: decide whether to *emit* `_completed` or drop the metric. M85: honour or remove 5 stored-but-unread knobs (the `results_assembler` one is a live 3-calls-vs-budget-1 difference). |
-| Novelty | L13, L14, L38 | L13: wire the unconsumed critic pass or delete it. L14: stop concluding "not threatened" from metadata alone. L38 needs measurement. |
+| Novelty | L38 (partial) | L13: wire the unconsumed critic pass or delete it. L14: stop concluding "not threatened" from metadata alone. L38 needs measurement. |
 | Scientific core | L7, L15, L18, L21 | Follow-ons to H6-H12. L18 (SOC ignores cross-partials) and L21 (actor in two stages) are real math defects, not hygiene. |
 | Determinism / misc | L1, L10, L23, L26, L29, L33 | L1 needs a deterministic-id scheme; **L23 ⚠** touches `manager.py`, rewritten in round 15; L26 is shared mutable criteria (pairs with M28). |
 
@@ -2177,7 +2248,7 @@ span `main.py`).
 |---|---|---|---|
 | 1 | ~~Routing — wrong numbers~~ | ~~M17, M19, M20, M22, M24, M26, M27, M29~~ | **done (round 19)** |
 | 2 | ~~CLI reporting + exit codes~~ | ~~M65-M71, M74, M75, L39~~ | **done (round 20)** |
-| 3 | Novelty detector | L12, L14, L13, L38 | 2 S, 2 M |
+| 3 | ~~Novelty detector~~ | ~~L12, L13, L14~~ done; **L38 partial** | **done (round 21)** |
 | 4 | Literature correctness | M32, M33, M34, M38, M40, M41, M42, M46, M49 | 9 S |
 | 5 | Scientific-core follow-on | L15, L16, L18, L19, L21 | 4 S, 1 M |
 | 6 | Routing semantics | M18, M21, M23, M25, M28, M30, M31, L26 | 8 M |
@@ -2188,10 +2259,10 @@ span `main.py`).
 | 11 | CLI structure | M72, M73, M76, L33 | 4 M |
 | 12 | Large, one round each | M48, then M78 | 2 L |
 
-Batches 3-5 are ~16 findings for roughly 11 h and clear most of the *verified
+Batches 4-5 are ~12 findings for roughly 6 h and clear most of the *verified
 wrong* findings. The long tail is hygiene.
 
-**Rough total: ~117 h** (batches 1-2, ~9 h, are done). That is the honest number, and it is why the next
+**Rough total: ~112 h** (batches 1-3, ~14 h, are done). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Candidates for closing as accepted (from the S bucket)

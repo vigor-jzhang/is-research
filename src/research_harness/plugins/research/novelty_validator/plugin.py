@@ -111,6 +111,11 @@ _STRONG_RELATIONSHIPS = {
     CandidateRelationship.strong_overlap,
 }
 
+# Every relationship that counts as a threat to the claim.
+_THREATENING_RELATIONSHIPS = _STRONG_RELATIONSHIPS | {
+    CandidateRelationship.partial_overlap,
+}
+
 _MANUSCRIPT_SECTIONS_FOR_MODEL = [
     "introduction",
     "research_gap",
@@ -974,13 +979,19 @@ class NoveltyValidationService:
                             "title-only evidence: contents of the paper were not "
                             "verified; no strong semantic judgment is possible"
                         )
-                    elif basis == EvidenceBasis.indexed_metadata and relationship in (
-                        _STRONG_RELATIONSHIPS | {CandidateRelationship.partial_overlap}
-                    ):
+                    elif basis == EvidenceBasis.indexed_metadata:
+                        # L14: the guard used to block only *threatening*
+                        # relationships, so a metadata-only candidate could be
+                        # judged `distinct` and the claim then concluded "not
+                        # threatened within search scope" from a title, a year
+                        # and a venue. Distinctness is no more verifiable from
+                        # bibliographic metadata than overlap is, so this is
+                        # symmetric with title_only: no semantic judgment at all.
                         relationship = CandidateRelationship.insufficient_evidence
                         assessment_text = (
                             "indexed metadata only (no abstract or full text): "
-                            "overlap could not be verified from evidence"
+                            "neither overlap nor distinctness could be verified "
+                            "from evidence"
                         )
                 except Exception as e:  # noqa: BLE001
                     logger.warning("candidate assessment failed (%s): %s", identity_id, e)
@@ -1009,11 +1020,12 @@ class NoveltyValidationService:
             if not offline and (
                 claim.risk == ClaimRiskLevel.critical or relationship in _STRONG_RELATIONSHIPS
             ):
-                critic_ids = [
-                    await self._critic_pass(
-                        claim, identity_id, cand_id, basis, evidence_text, assessment
-                    )
-                ]
+                critic_id, verdict = await self._critic_pass(
+                    claim, identity_id, cand_id, basis, evidence_text, assessment
+                )
+                critic_ids = [critic_id]
+                # L13: the critic's verdict now has a consumer.
+                assessment = self._apply_critic_dispute(assessment, verdict)
             if critic_ids:
                 assessment = assessment.model_copy(update={"critic_assessment_ids": critic_ids})
 
@@ -1730,6 +1742,39 @@ class NoveltyValidationService:
                 return True
         return False
 
+    def _apply_critic_dispute(
+        self,
+        assessment: NoveltyCandidateAssessment,
+        verdict: CriticVerdict,
+    ) -> NoveltyCandidateAssessment:
+        """L13: a disputed threat must not stand.
+
+        The critic pass is the only independent check on the first pass, and its
+        verdict had no consumer anywhere: a `disputes` verdict changed no
+        outcome. Downgrading is deliberately one-directional. A critic saying
+        "this threatens the claim" was wrong means the threat is not
+        established, so the assessment may not count as a threat. A critic
+        saying "this does not threaten" was wrong is NOT promoted to a threat:
+        a dispute is not evidence, and this module never manufactures a threat
+        from weak evidence (the same rule as the title-only guard).
+        """
+        if verdict != CriticVerdict.disputes:
+            return assessment
+        if assessment.relationship not in _THREATENING_RELATIONSHIPS:
+            return assessment
+        return assessment.model_copy(
+            update={
+                "relationship": CandidateRelationship.insufficient_evidence,
+                "assessment_text": (
+                    f"independent critic disputed the first-pass assessment "
+                    f"({assessment.relationship.value}); the threat is not "
+                    f"established from the available evidence. "
+                    f"Original: {assessment.assessment_text}"
+                ),
+                "metadata": {**assessment.metadata, "critic_disputed": True},
+            }
+        )
+
     async def _critic_pass(
         self,
         claim: NoveltyClaim,
@@ -1738,7 +1783,7 @@ class NoveltyValidationService:
         basis: EvidenceBasis,
         evidence_text: str,
         first_pass: NoveltyCandidateAssessment,
-    ) -> str:
+    ) -> tuple[str, CriticVerdict]:
         verdict = CriticVerdict.uncertain
         reasoning = "critic pass failed; treated as uncertain"
         try:
@@ -1791,7 +1836,7 @@ class NoveltyValidationService:
         )
         critic_id = await self._put(critic, "novelty_critic_assessment")
         await self._link(identity_id, critic_id)
-        return critic_id
+        return critic_id, verdict
 
     async def _assess_one(
         self,
@@ -1869,6 +1914,19 @@ class NoveltyValidationService:
             "assessment": parsed.assessment,
         }
 
+    async def _identity_full_text_doc_ids(self, paper_identity_id: str) -> set[str]:
+        """Ids of the FullTextDocuments belonging to `paper_identity_id`.
+
+        L38: resolves the identity's documents from a single listing so that
+        evidence items can be matched to their source from the envelope payload
+        instead of one store.get() per item per candidate.
+        """
+        doc_ids: set[str] = set()
+        for env in await self._store.list(artifact_type="full_text_document"):
+            if (env.payload or {}).get("paper_identity_id") == paper_identity_id:
+                doc_ids.add(env.artifact_id)
+        return doc_ids
+
     async def _gather_evidence(
         self, paper_identity_id: str
     ) -> tuple[EvidenceBasis, str, list[str]]:
@@ -1877,21 +1935,25 @@ class NoveltyValidationService:
         identity = (await self._store.get(paper_identity_id)).parse_payload(PaperIdentity)
         evidence_ids: list[str] = []
 
+        # L38: the evidence items are listed once and each one's source is read
+        # from the envelope payload dict. The old form issued a store.get() for
+        # every evidence item -- once per candidate -- and then scanned the whole
+        # table a second time in step 2b.
+        evidence_envs = await self._store.list(artifact_type="evidence_item")
+
         # 1. full-text evidence items already in the repository
+        doc_ids = await self._identity_full_text_doc_ids(paper_identity_id)
         statements: list[str] = []
-        for env in await self._store.list(artifact_type="evidence_item"):
+        for env in evidence_envs:
+            src = (env.payload or {}).get("source_artifact_id")
+            if not src or src not in doc_ids:
+                continue
             try:
                 item = env.parse_payload(EvidenceItem)
-                doc_env = await self._store.get(item.source_artifact_id)
-                if doc_env.artifact_type != "full_text_document":
-                    continue
-                doc = doc_env.parse_payload(FullTextDocument)
             except Exception:  # noqa: BLE001
                 continue
-            if doc.paper_identity_id != paper_identity_id:
-                continue
             statements.append(item.statement)
-            evidence_ids.append(item.source_artifact_id)
+            evidence_ids.append(str(src))
         if statements:
             return (
                 EvidenceBasis.full_text,
@@ -1927,11 +1989,13 @@ class NoveltyValidationService:
 
         # 2b. enrichment-acquired abstracts (EvidenceItems imported by the
         # provider_get_abstract strategy, matched deterministically by DOI)
-        for env in await self._store.list(artifact_type="evidence_item"):
+        for env in evidence_envs:
+            # Filter on the payload before any store round-trip: only the few
+            # enrichment items reach get() now (L38).
+            if not ((env.payload or {}).get("metadata") or {}).get("novelty_enrichment"):
+                continue
             try:
                 item = env.parse_payload(EvidenceItem)
-                if not item.metadata.get("novelty_enrichment"):
-                    continue
                 rec_env = await self._store.get(item.source_artifact_id)
                 if rec_env.artifact_type != "paper_record":
                     continue
@@ -2321,11 +2385,12 @@ class NoveltyValidationService:
         if not offline and (
             claim.risk == ClaimRiskLevel.critical or relationship in _STRONG_RELATIONSHIPS
         ):
-            critic_ids = [
-                await self._critic_pass(
-                    claim, old.paper_identity_id, new_id, basis, evidence_text, new_assessment
-                )
-            ]
+            critic_id, verdict = await self._critic_pass(
+                claim, old.paper_identity_id, new_id, basis, evidence_text, new_assessment
+            )
+            critic_ids = [critic_id]
+            # L13: the critic's verdict now has a consumer.
+            new_assessment = self._apply_critic_dispute(new_assessment, verdict)
         if critic_ids:
             new_assessment = new_assessment.model_copy(update={"critic_assessment_ids": critic_ids})
         env = ArtifactEnvelope.create(
