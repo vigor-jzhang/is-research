@@ -99,7 +99,11 @@ in the working tree, uncommitted.
 | **M46** redirect bound | **Refuted** (round 22) — see round-22 notes | — |
 | **L15, L16, L18, L19** scientific-core follow-on | **Fixed** (round 23) | `numerical_analysis`, `equilibrium_verifier`, `equilibrium_deriver` |
 | **L21** actor in two stages | **Blocked** (round 23) — needs a timing schema change | — |
-| The remaining M/L backlog | **Triaged** (round 19) — 68 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **L1, L2, L4, L6, L36** | **Closed as accepted** (round 24) — see §9.7 | — |
+| **L3, L9, L11, L17, L22, L24, L25, L27, L28, L30-L32, L35** Low sweep | **Fixed** (round 25) | 11 files |
+| **L8, L29, L34** Low sweep | **Partially fixed** (round 25) | `proposition_generator`, `tournament/accounting`, `evaluation_harness` |
+| **M18, M21, M23, M25, M28, M30, M31** routing semantics | **Fixed** (round 26) | `routing/selection`, `routing/qualification`, `routing/readiness`, `routing/task_aware`, `policy_router`, `schemas/routing`, `research/timeutil` |
+| The remaining M/L backlog | **Triaged** (round 19) — 43 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -769,6 +773,134 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 26 notes (M18, M21, M23, M25, M28, M30, M31 — routing semantics)
+
+Batch 6. Seven Medium findings in the routing and qualification semantics.
+
+- **M18** — eligibility was a side effect of `build_role_summary`, which set
+  `primary_eligible` / `fallback_eligible` on the candidate objects it was
+  handed. `build_qualification_matrix` computes primary/fallback itself but
+  never set eligibility, so its rows carried the constructor defaults — every
+  candidate `primary_eligible=False`, including the one it had just named
+  primary. Both callers now go through a shared `_apply_eligibility`.
+  **I first fixed this wrongly.** I read the docstring ("Eligibility is stricter
+  than qualification") and changed the *ranking* to exclude unstable
+  candidates. That broke the `mq-unstable-rejected` benchmark, which
+  deliberately distinguishes `primary` (the ranked best) from
+  `primary_eligible` (the activation gate) — a candidate can be named primary
+  and still be ineligible to be activated. Reverted, and the second half of the
+  finding was fixed instead.
+- **M21** — `select()` returns `(None, None)` when `use_fallback=True` and only
+  one candidate is eligible, because there is no distinct fallback; but
+  `decide_status` still reported `fallback` with "fallback model selected",
+  naming no model. It now reports `no_eligible_model` with an accurate reason.
+- **M23** — the unsupported-claim diagnostic used `not any(term in source)`,
+  which only fired when *every* substantive term was absent. For ordinary prose
+  one word almost always appears somewhere, so the bucket was effectively always
+  0. A claim now counts as unsupported when *most* of its terms are absent.
+- **M25** — task aggregation used `max(repetitions)`, so a task backed by one
+  5-repetition case and one 1-repetition case claimed 5. Now `min` — the weakest
+  case bounds the confidence. Separately, variance over a single sample reported
+  0.0, i.e. "perfectly stable" from one data point; it is now `None`.
+- **M28** — the router restated its own thresholds instead of deriving them,
+  and they were far looser than the criteria that produce the evidence routing
+  consumes: 0.50 structured-output vs 0.85-0.90, and 0.85 pass rate vs 0.90 for
+  the `fast` role. Both are now derived from `criteria_for_role`. **The error
+  dimension was deliberately not aligned.** The finding compares the router's
+  `max_model_error_rate` (0.5) against the criteria's `max_provider_error_rate`
+  (0.05), but these are different measurements: the router gates on
+  `model_error_rate` (share of calls that errored) while the criteria gate on
+  `provider_error_frequency`, which is not exposed on
+  `RoutingCandidateAssessment` at all. Matching the numbers without matching the
+  metric would be false precision, so it is recorded rather than changed.
+- **M30** — two permissive defaults. `min_repetitions` defaulted to 1 while the
+  criteria require 3, so routing accepted leaderboards qualification would call
+  insufficient. And an unset `evidence_types` accepted *any* evidence type,
+  including `fixture_evidence` — while `RoleLeaderboard.evidence_type` documents
+  that "Production routing requires live_quality_evidence". Both tightened.
+- **M31** — every age/staleness path subtracted a payload datetime that Pydantic
+  had not timezone-normalised, so a naive timestamp raised `TypeError`; and a
+  future timestamp produced a negative age that passed every freshness gate.
+  Added `research/timeutil.py` (`aware_utc`, `age_seconds`) and routed all four
+  sites through it, with an unreadable timestamp treated as stale rather than
+  fresh.
+
+**Test note.** Of the 18 added tests, 8 fail before the change; the other 10 are
+guards (a supported claim is not flagged, an explicit request threshold still
+overrides the role default, two eligible candidates still report `fallback`,
+and so on). Two tests had to be sharpened mid-round because they passed against
+the old code and proved nothing: the M23 example had *no* term overlap, so the
+old `not any(...)` fired too; and the M30 evidence test included a live board
+alongside the fixture one, so the decision succeeded either way.
+
+**Fixture changes (not defect-pinning).** `M30` required updating synthetic
+leaderboards that had been silently relying on the permissive defaults: the
+`_routing_leaderboard` benchmark helper (now `evidence_type=live_quality_evidence`,
+`repetitions=3`) and two boards in `test_phase7c_model_routing.py`. These fixtures
+model production routing, so they now model evidence that production routing
+accepts. The one benchmark case that deliberately tests insufficient repetitions
+still passes `repetitions=1` explicitly.
+
+### Round 25 notes (the Low sweep)
+
+One batch covering the cheap real defects in the Low tier, after the round-24
+review established that only five of twenty-nine Low findings were closable.
+
+**Fixed (13).** L3 (a later evaluator's `dimension_scores` silently overwrote an
+earlier one's — now warned); L9 (`threshold` was advertised to the model as a
+claim type but has no verifier implementation, so such a proposition could only
+ever fail — removed from the advertised enum); L11 (stripping sweeping novelty
+language could empty a claim, and could leave degenerate residue — "the first
+study" became "the"; the result must now still carry a substantive word); L17
+(the welfare note claimed "no fabricated welfare formulas" while the artifact
+shipped `total_welfare`, a utilitarian sum — the note now says what it is); L22
+(spec caps are applied before validation, so an over-long spec validated as if
+it had always been that size and silently lost actors and variables — the
+truncation is now recorded and logged); L24 (the version regex's trailing `.*`
+accepted `1.2.3; DROP TABLE`); L25 (`__bool__` returned True while `__len__` was
+0 — nothing in `src/` relied on it: callers test `is None`); L27 (criteria for
+the wrong role were silently relabelled, judging one role on another's
+thresholds — now raises); L28 (the structured probe nested a retrying call
+inside a retrying loop, making the attempt count `(retries+1)**2` rather than
+`retries+1`; the dead `so_latency` assignment was removed); L30 (eight rate
+fields had no `ge`/`le`, so a rate of 5.0 validated and beat every threshold);
+L31 (`ModelPreflight.timeout_seconds` defaulted to 0.0, a live timeout, and a
+campaign defaulted `completed_at` to "now", reporting a zero duration);
+L32 (`.get("documents", [{}])` only falls back when the key is *missing*, so
+`"documents": []` raised `IndexError` and aborted the whole audit); L35
+(`UnicodeDecodeError` is a `ValueError`, not an `OSError`, so a mis-encoded
+config or `.env` escaped as a raw traceback).
+
+**Partially fixed (3).** L8 — `_latest_verification` returned the FIRST match
+and `store.list` is `created_at ASC`, so it acted on the OLDEST verdict (the
+same defect as M65). Fixed. The other half, `Proposition.status` never being
+updated from `candidate`, is left: it needs the proposition artifact rewritten
+after verification, which is a behavioural change worth its own round — and it
+is why L16(a)'s status filter rarely fires today. L29 — the percentile docstring
+claimed "nearest-rank" while the code interpolated, and `q` was never
+range-checked; both fixed. Wiring in the dead `effective_pricing` is left
+because it changes computed costs. L34 — an unset pricing table no longer falls
+back to a fabricated 0.0 rate, but the run still reports `cost_usd=0.0`, because
+recording "cost was never configured" needs a schema change. A warning is logged
+instead.
+
+**Deferred from this batch (7).** L5 (`evidence_artifact_ids` degenerates to
+"all produced artifacts" — narrowing it needs to know how the consumer uses the
+evidence graph); L7 (`symbols_used` hardcoded `[]`; the triage flagged it
+"verify first" and it is likely M-sized); L10 (findings persisted twice on
+retry); L23 (optional dependencies participate in cycle detection, so a valid
+configuration refuses to boot — verified, but it touches `manager.py`, rewritten
+in round 15); L26 (frozen dataclass with mutable fields, plus criteria instances
+shared across runs); L33 (six CLI nits worth doing as one CLI round); L38
+(partially fixed in round 22; the remaining work is a store-level index).
+
+**Test note.** Of the 22 added tests, 21 fail before the change; the one that
+passes both ways is a guard that normalization still strips when something
+substantive remains. One test had to be corrected mid-round: the L28 test
+initially passed against the old code because the reachability probe is a single
+call, so an always-failing provider returned before reaching the code that
+changed. It now fails only on the schema-carrying request.
 
 ### Round 23 notes (L15, L16, L18, L19, L21 — scientific-core follow-on)
 
@@ -1776,7 +1908,7 @@ failed attempt.
 **Routing / qualification**
 - **M17** **Fixed (round 19).** `qualification.py:187-192` — `stability_status` does not apply the
   confirmed-defect exclusion that `qualify_model:107-110` uses ⇒ `qualified` but `unstable`.
-- **M18** `qualification.py:259-277, 311-320` — primary/fallback ranked from `qualified`
+- **M18** **Fixed (round 26).** `qualification.py:259-277, 311-320` — primary/fallback ranked from `qualified`
   only, stability ignored, contradicting the docstring; eligibility is a side effect of a
   *different* function (`build_role_summary`), so standalone calls yield all-`False` rows.
 - **M19** **Fixed (round 19).** `preflight.py:261-299` — the structured-output probe does not run errors through
@@ -1784,28 +1916,28 @@ failed attempt.
   module's stated contract and poisoning `build_remaining_task_coverage`.
 - **M20** **Fixed (round 19).** `preflight.py:375-400` — context sizing **sums every case** instead of taking the
   max. Measured on `live-quality-reasoning-v1`: sum 1210 chars, per-case max 401 (3× overstated).
-- **M21** `selection.py:172-181, 196-205` — `use_fallback=True` with one eligible candidate
+- **M21** **Fixed (round 26).** `selection.py:172-181, 196-205` — `use_fallback=True` with one eligible candidate
   yields `(None, None)` yet `status=fallback`, "fallback model selected" naming no model.
 - **M22** **Fixed (round 19).** `qualification.py:713-723` — preflight status keyed by `candidate_id` only,
   ignoring role, so the newest preflight from any role is applied to all three.
-- **M23** `qualification.py:423-426` — "unsupported claim" test uses `any(...)` with
+- **M23** **Fixed (round 26).** `qualification.py:423-426` — "unsupported claim" test uses `any(...)` with
   substring matching on 5+-letter words ⇒ effectively always 0.
 - **M24** **Fixed (round 19).** `accounting.py:92-100` — partial token sums when some calls report `None`
   (**verified:** one `None` + one 1000 ⇒ reports exactly 1000).
-- **M25** `qualification.py:439-459` — task aggregation takes `max(repetitions)`, hiding
+- **M25** **Fixed (round 26).** `qualification.py:439-459` — task aggregation takes `max(repetitions)`, hiding
   partial coverage; `pvariance` on a 1-element list yields "perfectly stable" 0.0.
 - **M26** **Fixed (round 19).** `qualification.py:610` — `live_quality_run_id=None` hardcoded, so
   `qualification_result_ids` is always `[]`.
 - **M27** **Fixed (round 19).** `task_aware.py:132-135` — quality delta uses `or 0.0` for an unknown baseline ⇒
   fabricated +0.95 improvement (latency/cost correctly use `is not None`).
-- **M28** `selection.py:31-33` vs `readiness.py:22-48` — router gates far looser than
+- **M28** **Fixed (round 26).** `selection.py:31-33` vs `readiness.py:22-48` — router gates far looser than
   qualification criteria (structured-output 0.50 vs 0.90; error rate 0.50 vs 0.05).
 - **M29** **Fixed (round 19).** `policy_router/plugin.py:176-192` — `_capability_ok` swallows all exceptions,
   failing closed with a misleading "capability" reason that can empty a whole role.
-- **M30** `policy_router/plugin.py:197-235` — gates default permissive: `evidence_types`
+- **M30** **Fixed (round 26).** `policy_router/plugin.py:197-235` — gates default permissive: `evidence_types`
   unset accepts `fixture_evidence`; `min_repetitions=1` vs criteria's 3; and
   `metadata["repetitions"]` is the *planned* count.
-- **M31** Naive-datetime `TypeError` hazard in every age/staleness path
+- **M31** **Fixed (round 26).** Naive-datetime `TypeError` hazard in every age/staleness path
   (`readiness.py:82-89`, `qualification.py:495-502`, `policy_router:226-227`,
   `task_aware.py:88-92`). Payload datetimes get none of the tz-normalisation the envelope
   layer applies (`artifacts_sqlite:400-404`). A future timestamp also yields a negative age
@@ -2034,31 +2166,31 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 
 ## 5. Low-severity / hygiene
 
-- **L1** `evaluation_harness:108, 140` — `EvaluatorResult.id` / `EvaluationCaseResult.id`
+- **L1** **Closed — accepted (round 24; see §9.7).** `evaluation_harness:108, 140` — `EvaluatorResult.id` / `EvaluationCaseResult.id`
   default to `uuid4()`, so identical runs are byte-different and `content_hash` dedup /
   attestation of evaluation results is impossible (despite `evaluation_readiness:184-188`
   claiming "stable reruns").
-- **L2** `evaluation_harness:844-851` — `evaluator_error_count` hardcodes `count=1`.
-- **L3** `evaluation_harness:718-720` — `dimension_scores` collide across evaluators with no
+- **L2** **Closed — accepted (round 24; see §9.7).** `evaluation_harness:844-851` — `evaluator_error_count` hardcodes `count=1`.
+- **L3** **Fixed (round 25).** `evaluation_harness:718-720` — `dimension_scores` collide across evaluators with no
   warning (last wins).
-- **L4** `evaluator_evidence:220` — dead `documents_missed = documents_missed` self-assignment;
+- **L4** **Closed — accepted (round 24; see §9.7).** `evaluator_evidence:220` — dead `documents_missed = documents_missed` self-assignment;
   `:328-329` duplicates `:309-312` under two labels; the metric named
   `documents_with_required_evidence_missed` counts statements, not documents.
 - **L5** `evaluator_pipeline_integrity:414-416` — `evidence_artifact_ids` degenerates to "all
   produced artifacts", diluting the evidence graph.
-- **L6** `evaluator_document_acquisition:175` — convoluted `{k for k in ... if expected_fallback and key == k}`;
+- **L6** **Closed — accepted (round 24; see §9.7).** `evaluator_document_acquisition:175` — convoluted `{k for k in ... if expected_fallback and key == k}`;
   `:216` compares ISO strings as sort keys while envelope `created_at` is a `datetime`.
 - **L7** `proposition_generator:178-182` — `symbols_used` hardcoded `[]`, so the verifier
   parses with an empty/local-str table: `pi*E` → `E*pi`, `beta - gamma` → SymPy functions,
   `I*2` → imaginary unit.
-- **L8** `proposition_generator:185` — `Proposition.status` never updated from `candidate`;
+- **L8** **Partially fixed (round 25).** `proposition_generator:185` — `Proposition.status` never updated from `candidate`;
   `_latest_verification` (226-234) returns the **first** match, not the newest.
-- **L9** `proposition_verifier:218-224` — `threshold` claim type is advertised to the LLM but
+- **L9** **Fixed (round 25).** `proposition_verifier:218-224` — `threshold` claim type is advertised to the LLM but
   can never verify.
 - **L10** `results_assembler:225-237` — on retry, findings are persisted twice, orphaning the
   first batch; `:676` condition check is substring-based, so `"not (b > 0)"` satisfies
   `"b > 0"`.
-- **L11** `results_assembler:740-743` — normalization can empty a claim after validation.
+- **L11** **Fixed (round 25).** `results_assembler:740-743` — normalization can empty a claim after validation.
 - **L12** **Fixed (round 21).** `novelty_validator/detection.py:81-87` — **verified:** `"for the first time"` is
   blacklisted, so the canonical `absolute_priority/critical` phrase is never detected; the
   merge keeps the **earlier** span's risk despite the comment saying "keep the higher".
@@ -2071,7 +2203,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
   summary says "N feasible results" but counts infeasible ones.
 - **L16** **Fixed (round 23).** `numerical_analysis:618-642` — proposition robustness includes **failed**
   propositions; sign compared at 12 digits with no tolerance (`1e-13` ⇒ spurious "violated").
-- **L17** `numerical_analysis:790` — `total_welfare` is an unjustified utilitarian sum, only
+- **L17** **Fixed (round 25).** `numerical_analysis:790` — `total_welfare` is an unjustified utilitarian sum, only
   computed at baseline, failing silently into `notes`.
 - **L18** **Fixed (round 23).** `equilibrium_verifier:214-254` — SOC checks diagonal second derivatives only (no
   Hessian/cross-partials) and emits an unsatisfiable `0 < 0` condition when `soc == 0`.
@@ -2080,27 +2212,27 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 - **L20** `equilibrium_deriver:761-770` vs `372-377` — analysis says `partially_derived`
   where the execution says `failed` for `pending`.
 - **L21** **Blocked (round 23).** `symbolic.py:28-33` — an actor in two stages is bound to the first.
-- **L22** `model_builder:365-393` — truncates before validating.
+- **L22** **Fixed (round 25).** `model_builder:365-393` — truncates before validating.
 - **L23** `kernel/manager.py:88-92` — optional dependencies participate in cycle detection,
   so a legitimate A→requires B, B→optional A configuration refuses to boot (**verified**).
-- **L24** `kernel/plugin.py:23` — version regex `^\d+\.\d+\.\d+.*$` accepts
+- **L24** **Fixed (round 25).** `kernel/plugin.py:23` — version regex `^\d+\.\d+\.\d+.*$` accepts
   `1.2.3; DROP TABLE`.
-- **L25** `kernel/services.py:75-77` — `__bool__` always `True` while `__len__` is 0.
+- **L25** **Fixed (round 25).** `kernel/services.py:75-77` — `__bool__` always `True` while `__len__` is 0.
 - **L26** `policies.py:50-59` — `@dataclass(frozen=True)` with mutable `list`/`dict` fields;
   `readiness.py:22-48` shares mutable criteria instances across runs.
-- **L27** `qualification.py:371-373, 597-599` — passing criteria for the wrong role silently
+- **L27** **Fixed (round 25).** `qualification.py:371-373, 597-599` — passing criteria for the wrong role silently
   rewrites the role label instead of raising.
-- **L28** `preflight.py:260` — dead `so_latency` assignment; the outer retry loop multiplies
+- **L28** **Fixed (round 25).** `preflight.py:260` — dead `so_latency` assignment; the outer retry loop multiplies
   attempts to `(retries+1)²`.
-- **L29** `accounting.py:28-38` — docstring says "nearest-rank percentile", code interpolates;
+- **L29** **Partially fixed (round 25).** `accounting.py:28-38` — docstring says "nearest-rank percentile", code interpolates;
   `q` is not range-checked. `accounting.py:174-198` — `effective_pricing` is dead code, so
   cost stays `None` for candidates without plan-level pricing.
-- **L30** `schemas/tournament.py:134-149` — all six rate fields lack `ge=0, le=1`; a rate of
+- **L30** **Fixed (round 25).** `schemas/tournament.py:134-149` — all six rate fields lack `ge=0, le=1`; a rate of
   `5.0` validates and beats every threshold. `ModelCallRecord.status` is a free-form `str`
   compared against `"success"`/`"error"`.
-- **L31** `schemas/qualification.py:84-86` — `ModelPreflight.timeout_seconds` defaults to
+- **L31** **Fixed (round 25).** `schemas/qualification.py:84-86` — `ModelPreflight.timeout_seconds` defaults to
   `0.0`; `:315-316` — campaign `started_at`/`completed_at` both default to now (zero duration).
-- **L32** `calibration.py:193-198` — unknown-benchmark branch records `case_id="*"`, which can
+- **L32** **Fixed (round 25).** `calibration.py:193-198` — unknown-benchmark branch records `case_id="*"`, which can
   never match, so the defect is never excluded; `:338` — `IndexError` on
   `{"documents": []}`.
 - **L33** `cli/main.py:313-317` — `--prompt` silently discarded when `--prompt-file` is given;
@@ -2108,11 +2240,11 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
   the registry; `:545` — silent 4000-char truncation; `:1643+` — `__import__()` string hacks
   where a normal import would do; `:1638-1650` — dead `or` branch that can raise
   `ValidationError`; `:7396-7405` — Rich markup counted in a `{mark:16s}` pad.
-- **L34** `config/schema.py:440-443` — cost defaults to `{0.0, 0.0}`, so live reports read
+- **L34** **Partially fixed (round 25).** `config/schema.py:440-443` — cost defaults to `{0.0, 0.0}`, so live reports read
   $0.00 unless configured.
-- **L35** `config/loader.py:19-24`, `dotenv.py:53-55` — catch `OSError` only, so
+- **L35** **Fixed (round 25).** `config/loader.py:19-24`, `dotenv.py:53-55` — catch `OSError` only, so
   `UnicodeDecodeError` escapes raw.
-- **L36** `bootstrap.py:318` — `runtime_meta={"config_path": None}` hardcoded.
+- **L36** **Closed — accepted (round 24; see §9.7).** `bootstrap.py:318` — `runtime_meta={"config_path": None}` hardcoded.
 - **L37** `config/schema.py:450` — an empty `plugins` list yields a runtime that silently does
   nothing; `start_all()` then re-runs `setup_all()` and returns success.
 - **L38** **Partially fixed (round 21).** `novelty_validator:1882, 1930` — O(N×M) full-store scans in `_gather_evidence`.
@@ -2256,21 +2388,23 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 47 | **39** |
-| Low (L1-L39) | 39 | 10 | **29** |
-| **Total** | **158** | **90** | **68** |
+| Medium (M1-M86) | 86 | 54 | **32** |
+| Low (L1-L39) | 39 | 28 | **11** |
+| **Total** | **158** | **115** | **43** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17, M19, M20, M22, M24, M26, M27, M29, M32-M34, M38,
-  M40-M42, M46, M49, M65-M71, M74, M75, M77, M79, M80, M81, M82, M86** (M46 was
-  refuted, not fixed).
+- Closed Medium: **M1-M16, M17-M22, M23-M25, M26-M34, M38, M40-M42, M46, M49,
+  M65-M71, M74, M75, M77, M79-M82, M86** (M46 was refuted, not fixed; M84 and
+  M85 remain open).
 - Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
   M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
-  (round 21), **L15, L16, L18, L19** (round 23). **L21 is blocked**, not fixed. **L38 is partially fixed** and stays open — see the round-21 notes.
+  (round 21), **L15, L16, L18, L19** (round 23), **L3, L9, L11, L17, L22, L24,
+  L25, L27, L28, L30-L32, L35** (round 25), **L1, L2, L4, L6, L36 accepted**
+  (round 24). **L21 is blocked**; **L8, L29, L34, L38 are partially fixed**. **L38 is partially fixed** and stays open — see the round-21 notes.
 
 ### 9.1 Legend
 
@@ -2284,7 +2418,10 @@ derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
 Effort means **fix + regression test + full-suite verification**, not just the edit.
 
-### 9.2 Small bucket — 27 findings (~13 h)
+### 9.2 Remaining small items
+
+*Grouped by cluster for planning. The per-bucket counts are indicative — the
+authoritative tally is §9.0, which is derived finding by finding.*
 
 **Routing / qualification — wrong numbers that steer decisions: done (round 19).**
 
@@ -2316,7 +2453,8 @@ items still open are the structure cluster in §9.3 (M72, M73, M76, L33).
 
 **Round-11 pass (1):** M84 — `missing_abstract` hard-coded `0` instead of aggregating the real flag.
 
-**Low (18, all S):** L2, L3, L4, L5, L6, L8, L9, L11, L17, L22, L24, L25, L27, L28, L30, L31, L32, L34, L35, L36, L37.
+**Low, remaining (4):** L5 (`evidence_artifact_ids` over-inclusion), L8 (status half),
+L29 (`effective_pricing` wiring), L37 (empty `plugins` list silently no-ops).
 
 Notable among these because they are *verified* wrong, not merely untidy:
 **L12** — `"for the first time"` is blacklisted, so the canonical `absolute_priority/critical`
@@ -2324,19 +2462,21 @@ novelty phrase is **never detected** (and the span merge keeps the earlier risk)
 **L39** — `failed` and `partially_derived` print a green ✓ and exit 0, the same shape as H15.
 **L27** — passing criteria for the wrong role silently rewrites the role label.
 
-### 9.3 Medium bucket — 40 findings (~80 h)
+### 9.3 Remaining medium items
+
+*Grouped by cluster for planning; the authoritative count is §9.0.*
 
 | Cluster | IDs | Why it is M, not S |
 |---|---|---|
-| Routing semantics | M18, M21, M23, M25, M28, M30, M31 | Each needs a decision about intended semantics (stability vs qualification; per-role vs per-candidate; planned vs actual repetitions). M31 spans 4 modules and wants `AwareDatetime`. |
+| Routing semantics | — | **Done (round 26).** M18, M21, M23, M25, M28, M30, M31. |
 | Literature semantics | M35, M36, M37, M39, M43 | M35 is a merge-algorithm change; M36/M37 need run-scoping (the M8 pattern); M39 must distinguish store failure from screening outcome. |
 | Literature performance | M44, M45, M47, M50 | M44 is O(n³) store round-trips plus a 20 GB-read-before-size-check; M45 needs `to_thread` + caps; **M47 ⚠** and **M50 ⚠** touch C6's SSRF/DNS pinning. |
 | Bootstrap / config | M53, M54, M56, M59, M61, M62 | M54 is a parser rewrite that also stops the loader walking 4 parents for secrets; **M56 ⚠** adds `extra: forbid` to 10 contract schemas and can break existing callers; M59 needs a transaction; M61 is secret-scrubbing breadth. |
 | CLI structure | M72, M73, M76, L33 | M72 and M73 span 8 options and 12+ error paths in a 7 400-line file; M76 is `extra_plugins` ignored by 3 more builders (23 call sites) — same shape as H14. |
 | Round-11 leftovers | M83, M85 | M83: decide whether to *emit* `_completed` or drop the metric. M85: honour or remove 5 stored-but-unread knobs (the `results_assembler` one is a live 3-calls-vs-budget-1 difference). |
-| Novelty | L38 (partial) | L13: wire the unconsumed critic pass or delete it. L14: stop concluding "not threatened" from metadata alone. L38 needs measurement. |
+| Novelty | L38 (partial) | L13 and L14 are fixed (round 21). L38 is partially fixed (round 22): the per-item store round-trips are gone, but the scan itself remains until there is a store-level index. |
 | Scientific core | L7 | Follow-on to H6-H12 (symbolic table plumbing). |
-| Determinism / misc | L1, L10, L23, L26, L29, L33 | L1 needs a deterministic-id scheme; **L23 ⚠** touches `manager.py`, rewritten in round 15; L26 is shared mutable criteria (pairs with M28). |
+| Determinism / misc | L10, L23, L26, L29, L33 | L1 closed as accepted (round 24); **L23 ⚠** touches `manager.py`, rewritten in round 15; L26 is shared mutable criteria (pairs with M28). |
 
 ### 9.4 Large bucket — 2 findings (~16 h)
 
@@ -2383,21 +2523,89 @@ span `main.py`).
 All five triage batches are now done. What is left is the semantic M-bucket
 (§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total: ~105 h** (all five batches, ~21 h, are done). That is the honest number, and it is why the next
+**Rough total now ~91 h**, of which ~35 h is done (five batches + Low sweep + routing semantics). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
-### 9.7 Candidates for closing as accepted (from the S bucket)
+### 9.7 Accepted closures (round 24)
 
-These carry no behavioural consequence that anyone has observed; the cost of
-fixing plus testing exceeds the value. Recommend recording them as accepted and
-deleting from the backlog, subject to your call:
+The Low tier was reviewed finding by finding to decide what is a defect and
+what is a preference. **Only five of twenty-nine were closed.** The estimate
+recorded in §9.6 ("perhaps two-thirds") was wrong: the Low tier is mostly cheap
+real defects, not hygiene. The five closures below were each checked against the
+code before being accepted — three were confirmed not to be defects at all, and
+two (L17, and the code half of L1) were *not* closed despite being proposed
+earlier in this document.
 
-- **L2** `evaluator_error_count` hardcodes `count=1` — harmless *if* it is
-  always 1 by construction; verify that first.
-- **L6** convoluted set comprehension and ISO-vs-`datetime` sort keys — readability only.
-- **L36** `runtime_meta={"config_path": None}` hardcoded — cosmetic metadata.
-- **L17** `total_welfare` — an unjustified utilitarian sum. Better documented as
-  a known limitation than fixed; the metric itself is questionable.
+- **L2 — `evaluator_error_count` hardcodes `count=1`.** **Not a defect.** The
+  metric is a single aggregate: `value` carries the total number of evaluator
+  errors and `count=1` is the number of observations behind it, matching
+  `case_pass_rate` in the same block. Changing it would make `count` mean
+  something different here than everywhere else, for no behavioural gain.
+- **L4 — dead `documents_missed = documents_missed`; duplicated block; a metric
+  named `documents_..._missed` counts statements.** The first two are cosmetic
+  and harmless. The third is real but the fix is renaming a metric id, which is
+  a breaking change across evaluators and benchmark fixtures. Accepted: the
+  imprecise name is documented, not repaired.
+- **L6 — convoluted comprehension; ISO strings as sort keys.** ISO-8601
+  timestamps sort lexicographically in chronological order, so the sort is
+  correct. The comprehension at `:175` is ugly but behaviourally equivalent.
+  Accepted as readability only.
+- **L36 — `runtime_meta={"config_path": None}` hardcoded.** **Not a defect.**
+  `AppConfig` carries no source-path field, so `build_runtime` has no path to
+  set, and nothing in `src/` reads `runtime_meta["config_path"]` — the only
+  match for that key is the line itself. There is nothing to set and no
+  consumer.
+- **L1 — uuid4 ids defeat `content_hash` dedup and attestation.** The *code*
+  change is closed as accepted: deriving evaluation result ids deterministically
+  is a design change, since ids feed provenance and dedup throughout. The real
+  defect is the contradictory claim at `evaluation_readiness:184-188`
+  ("stable reruns"), which is a one-line documentation fix. **That fix is still
+  owed** and is carried as a note rather than a finding.
+
+**Two that were proposed for closure and were not closed:**
+
+- **L17 (utilitarian `total_welfare`).** §9.7 originally proposed closing this
+  as a modelling choice. Re-reading the code changed that: the artifact records
+  `total_welfare=sum(actor payoffs)` *and* a note claiming "no fabricated
+  welfare formulas". A utilitarian sum **is** a welfare formula, so the caveat
+  contradicts the artifact. That is a one-line defect (correct the note or
+  rename the field), so L17 stays open.
+- **L1** — see above; the documentation half is retained.
+
+### 9.8 What is left, and the recommended order
+
+After round 26 the backlog is **43 open**: 32 Medium and 11 Low.
+
+1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
+   resolved in one batch: thirteen fixed outright, three partially. Most really
+   were one-liners (schema constraints, a tighter regex, wrong defaults, a dead
+   assignment, a first-vs-newest lookup). Three did not survive contact and are
+   recorded as partial rather than forced: L8's status-update half, L29's
+   `effective_pricing` wiring, and L34's metadata half, which needs a schema
+   change — neither `EvaluationReport` nor `EvaluationRun` has a `metadata`
+   field and `cost_usd` is a plain `float`.
+2. ~~Routing semantics (batch 6).~~ **Done in round 26.** All seven. The M28
+   question — which wins when the router's thresholds and the qualification
+   criteria disagree — was answered by the codebase's own stated posture:
+   routing consumes evidence the qualification pass produces, on the same two
+   metrics, so qualification wins and the router's numbers are now derived from
+   the role criteria rather than restated alongside them. The error dimension
+   was deliberately NOT aligned (see the round-26 notes).
+3. **Two known structural items, each worth its own round.** (a)
+   *Fixture/production divergence* — M8 (production correct, benchmark
+   unreachable), L38 (fast path blocked because benchmark fixtures write
+   artifacts with no provenance links), L21 (schema cannot express what is
+   decided in a stage), and the total absence of CliRunner tests (which is why
+   CLI defects such as M66 — `str in list[Link]`, always false — survived).
+   These share one root cause: the fixtures model a simpler system than
+   production builds, which both hides bugs and blocks fixes. (b)
+   *`game_consistent_payoffs`* in `research/symbolic.py` keys payoffs by
+   `actor_id`, so the verifier has the same defect as L19 in a place L19 does
+   not name; it is the backward-induction core rewritten for C4.
+4. **The two large items** — M48 (global rate limiter, concurrency cap and
+   `_pinned_backend` locking) and M78 (live-suite isolation). Neither can be
+   verified without network access or an API key.
+
 
 ---
 
