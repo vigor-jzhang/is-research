@@ -306,6 +306,13 @@ class ScreeningOrchestratorService:
                             except Exception:
                                 pass
                         decision = await self._autonomy.request_approval(approval_req)
+                        # M38: a review that was NOT approved means the model's
+                        # disposition was not accepted. ApprovalDecision carries
+                        # only `approved` and `reason` — no alternative value —
+                        # so the only safe final disposition is uncertain, which
+                        # keeps the item visible for a human instead of silently
+                        # keeping the model's call.
+                        final_decision = dec.decision.value if decision.approved else "uncertain"
                         # Create ScreeningReview artifact
                         # Map approval decision to final disposition
                         # For now, if approved, keep original; if not, use overridden? But autonomy in high mode auto-approves with original?
@@ -317,7 +324,7 @@ class ScreeningOrchestratorService:
                             screening_decision_id=decision_id,
                             review_reason=review_reason or "review",
                             original_decision=dec.decision.value,
-                            final_decision=dec.decision.value,  # no override in high autonomy
+                            final_decision=final_decision,
                             reviewer_type=ReviewerType.autonomy_policy,
                             approval_decision_id=decision.request_id,
                             notes=decision.reason,
@@ -357,12 +364,10 @@ class ScreeningOrchestratorService:
                     except Exception as e:
                         logger.warning("Review failed for %s: %s", pi_id, e)
 
-                # Determine final disposition for counts (if review exists, final is review's final)
-                # For now without override, final == dec.decision
-                # Check if there's a review for this decision
-                final_for_counts = dec.decision.value
-                # Look for review just created
-                # If review exists, it would have final same as original, so no change
+                # M38: the disposition counts follow the review's final
+                # disposition, not the model's original one. `final_decision` is
+                # set above and updated when a review runs and is not approved.
+                final_for_counts = final_decision
                 if final_for_counts == "include":
                     included.append(pi_id)
                 elif final_for_counts == "exclude":

@@ -95,7 +95,9 @@ in the working tree, uncommitted.
 | **M65-M71, M74, M75, L39** CLI reporting + exit codes | **Fixed** (round 20) | `cli/main.py` |
 | **L12, L13, L14** novelty detector | **Fixed** (round 21) | `novelty_validator/detection.py`, `novelty_validator/plugin.py` |
 | **L38** evidence gathering | **Partially fixed** (round 21) | `novelty_validator/plugin.py` |
-| The remaining M/L backlog | **Triaged** (round 19) — 81 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **M32-M34, M38, M40-M42, M49** literature/documents correctness | **Fixed** (round 22) | `synthesis`, `crossref`, `semantic_scholar`, `identity_resolver`, `screening_orchestrator`, `title_abstract_screener`, `locator_unpaywall` |
+| **M46** redirect bound | **Refuted** (round 22) — see round-22 notes | — |
+| The remaining M/L backlog | **Triaged** (round 19) — 72 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -765,6 +767,73 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 22 notes (M32-M42, M46, M49 — literature and documents)
+
+Batch 4 of the §9 triage. Nine findings; eight fixed, one refuted.
+
+- **M32** — the synthesis statement validator checked the paper mapping for
+  supporting evidence ids but not for conflicting ones, so an unmapped
+  conflicting id raised `KeyError` from the `sorted()` six lines later. The
+  difference matters: the call site catches `ValueError`, so the mapped-path
+  failure was handled and the unmapped one escaped **after** the statements had
+  already been persisted, orphaning artifacts and forcing a re-billed re-run.
+- **M33** — identifiers were interpolated raw into URL paths in both literature
+  clients. Both now percent-encode the path segment, keeping `/` (structural for
+  Crossref's `works/{doi}` route and for the `DOI:` prefix). **`is_valid_doi()`
+  was considered and deliberately not used for rejection**: `_DOI_RE` requires a
+  4-9 digit registrant, so it rejects short DOIs the rest of this repository
+  treats as valid — its own fixtures use `10.123/test`. Adding the check broke
+  two existing tests. Encoding removes the injection risk on its own; validation
+  would only have turned fetchable identifiers into hard errors. The Semantic
+  Scholar path also now normalizes *every* DOI spelling: previously only `doi:`
+  and `10.` prefixes were recognised, so `https://doi.org/10.1000/x` was passed
+  through verbatim as the paper id and produced a nonsense path.
+- **M34** — one merged identity emitted the same DOI twice. `PaperRecord`
+  normalizes its own `doi` field, but **not** the values in
+  `external_identifiers`, so a member carrying `https://doi.org/10.123/A`
+  alongside a member carrying `10.123/a` produced two canonical DOIs for one
+  paper — which downstream consumers read as two different papers. Both sources
+  are now normalized and keyed identically (`scheme:value`) so they collapse.
+  The loop variable `key` (a frozenset of member ids) is also no longer rebound
+  to a string inside the loop.
+- **M38** — disposition counts followed the model's decision, never the review.
+  `ApprovalDecision` carries only `approved` and `reason`, no alternative
+  disposition, so the only derivable override is: a review that was **not
+  approved** means the model's disposition was not accepted, and the final
+  disposition becomes `uncertain` — visible to a human rather than silently
+  keeping the model's call. This is a judgement call worth reviewing.
+- **M40** — `confidence` was used raw despite the response schema declaring
+  0..1, so an out-of-range value could defeat the review gate that filters on
+  it. Now clamped.
+- **M41** — the code logged "forcing exclude" and then did nothing, so a model
+  could match an exclusion criterion and still include the paper. Matched
+  exclusion criteria are protocol facts, not model judgments, so the exclusion
+  is now enforced. No existing test set exclusion criteria with a non-exclude
+  decision, so nothing depended on the log-only behaviour.
+- **M42** — reusing existing locations sorted them by artifact UUID, destroying
+  the provider priority order they were created in (which `store.list` returns
+  faithfully, being `created_at ASC`). The orchestrator could therefore prefer a
+  repository copy over the publisher PDF — and the sort bought no determinism,
+  because the store order was already deterministic.
+- **M49** — `Retry-After` was honoured without bound in both clients, so a
+  single `Retry-After: 86400` meant a 24-hour sleep per attempt, four times
+  over. Clamped to 30 s (matching the OpenRouter backoff cap from H20); the
+  retry loop still gives up and raises.
+
+**M46 is refuted, not fixed.** The finding states that `max_redirects=5` permits
+6 hops. Measured directly with a redirect-forever transport: it makes **6
+requests and follows 5 redirects**, which is the standard httpx/requests
+semantic — the finding counts the initial request as a hop. It is also not safe
+to "fix": the `while redirect_count <= self._max_redirects` condition is
+load-bearing. Changing it to `<` makes the loop exit before the final request,
+so `too_many_redirects` is never raised and a 302 gets streamed as a successful
+download. A guard test now pins the actual bound so the semantics cannot drift.
+
+**Test note.** Of the 12 added tests, 9 fail before the change. The 3 that pass
+both ways are deliberate guards: mapped evidence ids still build a statement
+(M32), an unmatched exclusion leaves the decision alone (M41), and the redirect
+bound stays at 5 redirects over 6 requests (M46).
 
 ### Round 21 notes (L12, L13, L14, L38 — the novelty detector)
 
@@ -1683,12 +1752,12 @@ failed attempt.
   that passes the freshness gate. Use `AwareDatetime` and clamp `age = max(0, ...)`.
 
 **Literature / documents**
-- **M32** `synthesis/plugin.py:597-598` — `KeyError` escapes validation (conflicting IDs
+- **M32** **Fixed (round 22).** `synthesis/plugin.py:597-598` — `KeyError` escapes validation (conflicting IDs
   checked only in `ev_by_id`, not `paper_by_evidence`); call site catches only `ValueError`.
   Crashes after statements were persisted ⇒ orphaned artifacts, re-billed re-runs.
-- **M33** `crossref/client.py:258`, `semantic_scholar/client.py:248` — identifiers
+- **M33** **Fixed (round 22).** `crossref/client.py:258`, `semantic_scholar/client.py:248` — identifiers
   interpolated into URLs without encoding; `is_valid_doi()` exists but is never called.
-- **M34** `identity_resolver:283-292` — canonical identifiers store raw un-normalized DOIs,
+- **M34** **Fixed (round 22).** `identity_resolver:283-292` — canonical identifiers store raw un-normalized DOIs,
   so one merged identity emits two canonical DOIs; also rebinds the loop variable `key`
   from `frozenset` to `str` (live landmine).
 - **M35** `identity_resolver:270-277` — supersede logic handles only strict subsets, so
@@ -1697,14 +1766,14 @@ failed attempt.
   grounding check accepts IDs from unrelated runs; `parse_payload` unguarded.
 - **M37** `gap_analyzer:278, 582-586` — `max_statements` bounds *themes*, not statements
   (unbounded prompt), and the research question is passed to the model as a bare UUID.
-- **M38** `screening_orchestrator:353-364` — review overrides ignored when counting
+- **M38** **Fixed (round 22).** `screening_orchestrator:353-364` — review overrides ignored when counting
   dispositions.
 - **M39** `screening_orchestrator:163-208` — `except Exception: uncertain.append(...)`
   turns store errors into a screening outcome.
-- **M40** `title_abstract_screener:216` — `confidence` not clamped despite the schema
+- **M40** **Fixed (round 22).** `title_abstract_screener:216` — `confidence` not clamped despite the schema
   declaring 0..1, defeating the review gate.
-- **M41** `title_abstract_screener:221-231` — logs "forcing exclude" but does nothing.
-- **M42** `locator_unpaywall:180-184` — sorting by artifact UUID destroys the priority
+- **M41** **Fixed (round 22).** `title_abstract_screener:221-231` — logs "forcing exclude" but does nothing.
+- **M42** **Fixed (round 22).** `locator_unpaywall:180-184` — sorting by artifact UUID destroys the priority
   ordering the orchestrator depends on (the code even comments "keep that order").
 - **M43** `locator_unpaywall:328-343` — on a non-duplicate `put` failure, `snap_id` points at
   a phantom artifact, and `derived_from` provenance is written to it.
@@ -1712,13 +1781,13 @@ failed attempt.
   reads the whole file before checking size (20 GB path ⇒ OOM, not `ValueError`).
 - **M45** `extractor_pypdf:122-162` — CPU-bound PDF parsing on the event loop with no
   `to_thread`, no page cap, no wall-clock limit.
-- **M46** `fetcher_http:230, 267-271` — off-by-one: `max_redirects=5` permits 6 hops.
+- **M46** **Refuted (round 22).** `fetcher_http:230, 267-271` — off-by-one: `max_redirects=5` permits 6 hops.
 - **M47** `fetcher_http:71` — blocking `socket.getaddrinfo` on the event loop, no timeout,
   once per URL **and per redirect hop**. Use `loop.getaddrinfo` + a small cache.
 - **M48** No global rate limiter, concurrency cap or semaphore anywhere in `src/`; the shared
   `_pinned_backend._addresses` dict is mutated without a lock. Config has no
   `requests_per_second`/`max_concurrency`/`retry` fields.
-- **M49** Unbounded `Retry-After` sleeps (`crossref:106-128`, `semantic_scholar:101-119`) —
+- **M49** **Fixed (round 22).** Unbounded `Retry-After` sleeps (`crossref:106-128`, `semantic_scholar:101-119`) —
   `Retry-After: 86400` ⇒ 24 h per attempt, ×4.
 - **M50** `fetcher_http:233-234` — SSRF pinning silently disabled when a client is injected
   (`if self._own_client`), losing DNS-rebinding protection with no warning.
@@ -2127,18 +2196,19 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 39 | **47** |
+| Medium (M1-M86) | 86 | 47 | **39** |
 | Low (L1-L39) | 39 | 5 | **34** |
-| **Total** | **158** | **77** | **81** |
+| **Total** | **158** | **86** | **72** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17, M19, M20, M22, M24, M26, M27, M29, M65-M71, M74,
-  M75, M77, M79, M80, M81, M82, M86**.
-- Open Medium: **M18, M21, M23, M25, M28, M30-M64, M72, M73, M76, M78, M83, M84,
-  M85**.
+- Closed Medium: **M1-M16, M17, M19, M20, M22, M24, M26, M27, M29, M32-M34, M38,
+  M40-M42, M46, M49, M65-M71, M74, M75, M77, M79, M80, M81, M82, M86** (M46 was
+  refuted, not fixed).
+- Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
+  M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
   (round 21). **L38 is partially fixed** and stays open — see the round-21 notes.
 
@@ -2154,26 +2224,17 @@ derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
 Effort means **fix + regression test + full-suite verification**, not just the edit.
 
-### 9.2 Small bucket — 40 findings (~20 h)
+### 9.2 Small bucket — 31 findings (~15 h)
 
 **Routing / qualification — wrong numbers that steer decisions: done (round 19).**
 
 All eight (M17, M19, M20, M22, M24, M26, M27, M29) are fixed; see §1.1 and the
 round-19 notes. The routing items still open are the semantics cluster in §9.3.
 
-**Literature / documents — correctness (9, all S)**
+**Literature / documents — correctness: done (round 22).**
 
-| ID | Scope |
-|---|---|
-| M32 | `KeyError` escapes validation; call site catches only `ValueError` ⇒ orphaned artifacts |
-| M33 | Identifiers interpolated into URLs unencoded; `is_valid_doi()` never called |
-| M34 | Canonical IDs store raw un-normalized DOIs; loop var `key` rebound `frozenset`→`str` |
-| M38 | Review overrides ignored when counting dispositions |
-| M40 | `confidence` not clamped to 0..1 despite the schema, defeating the review gate |
-| M41 | Logs "forcing exclude" but does nothing |
-| M42 | Sorting by artifact UUID destroys the priority ordering the orchestrator depends on |
-| M46 | `max_redirects=5` permits 6 hops |
-| M49 | Unbounded `Retry-After` sleep — `86400` ⇒ 24 h per attempt, ×4 |
+All nine are resolved — M32-M34, M38, M40-M42 and M49 fixed, and M46 refuted
+with a measurement (see the round-22 notes). See §1.1.
 
 **Core / config — hygiene with a real consequence (8, all S)**
 
@@ -2249,7 +2310,7 @@ span `main.py`).
 | 1 | ~~Routing — wrong numbers~~ | ~~M17, M19, M20, M22, M24, M26, M27, M29~~ | **done (round 19)** |
 | 2 | ~~CLI reporting + exit codes~~ | ~~M65-M71, M74, M75, L39~~ | **done (round 20)** |
 | 3 | ~~Novelty detector~~ | ~~L12, L13, L14~~ done; **L38 partial** | **done (round 21)** |
-| 4 | Literature correctness | M32, M33, M34, M38, M40, M41, M42, M46, M49 | 9 S |
+| 4 | ~~Literature correctness~~ | ~~M32-M34, M38, M40-M42, M46, M49~~ | **done (round 22)** |
 | 5 | Scientific-core follow-on | L15, L16, L18, L19, L21 | 4 S, 1 M |
 | 6 | Routing semantics | M18, M21, M23, M25, M28, M30, M31, L26 | 8 M |
 | 7 | Kernel / config hygiene | M51-M55, M57, M58, M60, M63, M64, L24, L25, L34, L35, L36, L37 | 13 S |
@@ -2259,10 +2320,10 @@ span `main.py`).
 | 11 | CLI structure | M72, M73, M76, L33 | 4 M |
 | 12 | Large, one round each | M48, then M78 | 2 L |
 
-Batches 4-5 are ~12 findings for roughly 6 h and clear most of the *verified
-wrong* findings. The long tail is hygiene.
+Batch 5 is ~5 findings and clears the last of the *verified wrong* findings
+in the small bucket. The long tail is hygiene.
 
-**Rough total: ~112 h** (batches 1-3, ~14 h, are done). That is the honest number, and it is why the next
+**Rough total: ~108 h** (batches 1-4, ~18 h, are done). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Candidates for closing as accepted (from the S bucket)

@@ -282,14 +282,26 @@ class PaperIdentityResolverService:
             seen_values: set[str] = set()
             for pid in members_sorted:
                 paper = id_to_paper[pid]
-                if paper.doi and paper.doi not in seen_values:
-                    canonical_ids.append({"scheme": "doi", "value": paper.doi})
-                    seen_values.add(paper.doi)
+                # M34: normalize before comparing, and key the dedupe set by
+                # "scheme:value" in both branches so the two sources of DOIs
+                # collapse together. PaperRecord normalizes its own `doi` field
+                # but NOT the values in `external_identifiers`, so one merged
+                # identity emitted the same DOI twice — once bare, once as a
+                # URL — which downstream consumers read as two different papers.
+                doi = normalize_doi(paper.doi) if paper.doi else None
+                if doi:
+                    doi_key = f"doi:{doi}"
+                    if doi_key not in seen_values:
+                        canonical_ids.append({"scheme": "doi", "value": doi})
+                        seen_values.add(doi_key)
                 for eid in paper.external_identifiers:
-                    key = f"{eid.scheme}:{eid.value}"
-                    if key not in seen_values and eid.scheme in IDENTITY_SCHEMES:
-                        canonical_ids.append({"scheme": eid.scheme, "value": eid.value})
-                        seen_values.add(key)
+                    # M34: this rebound the loop's `key` — a frozenset of member
+                    # ids the supersede check above depends on — to a str.
+                    value = normalize_doi(eid.value) if eid.scheme == "doi" else eid.value
+                    ident = f"{eid.scheme}:{value}"
+                    if ident not in seen_values and eid.scheme in IDENTITY_SCHEMES:
+                        canonical_ids.append({"scheme": eid.scheme, "value": value})
+                        seen_values.add(ident)
 
             # Convert canonical_ids to ExternalIdentifier objects
             from research_harness.research.schemas.common import ExternalIdentifier

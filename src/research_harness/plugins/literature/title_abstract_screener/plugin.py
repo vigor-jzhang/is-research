@@ -230,7 +230,10 @@ Return JSON matching the schema. Criterion IDs must be from the protocol (inclus
             matched_exclusion_criteria=data["matched_exclusion_criteria"],
             reason_codes=data["reason_codes"],
             rationale_summary=data["rationale_summary"],
-            confidence=float(data["confidence"]),
+            # M40: the response schema declares minimum 0 / maximum 1, but the
+            # value was used raw, so an out-of-range confidence could defeat the
+            # review gate that filters on it.
+            confidence=min(1.0, max(0.0, float(data["confidence"]))),
             information_sufficiency=info_suff,
             model_assessed=True,
         )
@@ -245,7 +248,13 @@ Return JSON matching the schema. Criterion IDs must be from the protocol (inclus
                 screening_decision.matched_exclusion_criteria,
                 screening_decision.decision,
             )
-            # We don't force, we just log — the spec says 'explicit exclusion → exclude' but we trust model validation; we could enforce
+            # M41: this logged "forcing exclude" and then did nothing, so the
+            # rule existed only as a log line and a model could match an
+            # exclusion criterion and still include the paper. Matched exclusion
+            # criteria are protocol facts, not model judgments.
+            screening_decision = screening_decision.model_copy(
+                update={"decision": ScreeningDecisionEnum.exclude}
+            )
 
         env = ArtifactEnvelope.create(
             payload=screening_decision,

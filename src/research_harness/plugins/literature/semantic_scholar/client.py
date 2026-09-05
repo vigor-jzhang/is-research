@@ -7,6 +7,7 @@ import logging
 import os
 import random
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -20,13 +21,27 @@ from research_harness.contracts.literature import (
     LiteratureSearchRequest,
     LiteratureSourceError,
 )
-from research_harness.plugins.literature.semantic_scholar.mapper import map_semantic_scholar_paper
+from research_harness.plugins.literature.semantic_scholar.mapper import (
+    map_semantic_scholar_paper,
+)
+from research_harness.research.schemas.common import normalize_doi
 
 logger = logging.getLogger(__name__)
 
 SEMANTIC_SCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1"
 DEFAULT_TIMEOUT = 20.0
 MAX_RETRIES = 3
+_MAX_RETRY_AFTER_SECONDS = 30.0
+
+
+def _clamp_retry_after(seconds: float) -> float:
+    """M49: a server-supplied Retry-After was trusted without bound.
+
+    `Retry-After: 86400` meant a 24-hour sleep per attempt, four times over.
+    Clamp to something a caller can actually wait for; the loop still gives up
+    and raises after MAX_RETRIES.
+    """
+    return max(0.0, min(float(seconds), _MAX_RETRY_AFTER_SECONDS))
 DEFAULT_FIELDS = "paperId,corpusId,externalIds,title,abstract,year,venue,publicationTypes,publicationDate,authors,url,openAccessPdf"
 
 
@@ -106,7 +121,7 @@ class SemanticScholarClient:
                         except ValueError:
                             retry_after = None
                     if attempt < MAX_RETRIES:
-                        sleep_for = (
+                        sleep_for = _clamp_retry_after(
                             retry_after
                             if retry_after is not None
                             else (2**attempt + random.uniform(0, 1))
@@ -125,6 +140,7 @@ class SemanticScholarClient:
                                 sleep_for = float(resp.headers["Retry-After"])
                             except ValueError:
                                 pass
+                        sleep_for = _clamp_retry_after(sleep_for)
                         logger.warning(
                             "Semantic Scholar 5xx %s retry after %s", resp.status_code, sleep_for
                         )
@@ -243,15 +259,22 @@ class SemanticScholarClient:
         # Semantic Scholar supports GET /paper/{paperId} where paperId can be "DOI:10.123/abc"
         # If identifier looks like DOI, prefix with DOI:
         raw_id = identifier.strip()
-        # Check if it's DOI-like (10.xxx/)
-        paper_id = raw_id
-        if raw_id.lower().startswith("doi:"):
+        # M33: accept every DOI spelling — bare, "doi:"-prefixed, or a full
+        # resolver URL — and normalize to the bare form so equivalent
+        # identifiers hit the same resource. Previously only "doi:" and "10."
+        # were recognised, so "https://doi.org/10.1000/x" was passed through
+        # verbatim as the paper id and produced a nonsense path. A Semantic
+        # Scholar paperId is not DOI-like and is used unchanged (not lowercased).
+        normalized = normalize_doi(raw_id)
+        if normalized.startswith("10.") or raw_id.lower().startswith("doi:"):
+            paper_id = f"DOI:{normalized}"
+        else:
             paper_id = raw_id
-        elif raw_id.startswith("10."):
-            paper_id = f"DOI:{raw_id}"
         # else assume it's paperId as is (e.g., 649def34...)
 
-        url = f"{SEMANTIC_SCHOLAR_BASE}/paper/{paper_id}"
+        # M33: the identifier is a path segment; percent-encode it (keeping "/"
+        # so the DOI prefix survives) instead of interpolating it raw.
+        url = f"{SEMANTIC_SCHOLAR_BASE}/paper/{quote(paper_id, safe='/')}"
         params = {"fields": DEFAULT_FIELDS}
         headers = self._headers()
 
@@ -280,7 +303,7 @@ class SemanticScholarClient:
                         except ValueError:
                             pass
                     if attempt < MAX_RETRIES:
-                        sleep_for = (
+                        sleep_for = _clamp_retry_after(
                             retry_after
                             if retry_after is not None
                             else (2**attempt + random.uniform(0, 1))

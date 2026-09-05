@@ -7,6 +7,7 @@ import logging
 import os
 import random
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -26,6 +27,18 @@ logger = logging.getLogger(__name__)
 CROSSREF_BASE = "https://api.crossref.org/works"
 DEFAULT_TIMEOUT = 20.0
 MAX_RETRIES = 3
+_MAX_RETRY_AFTER_SECONDS = 30.0
+
+
+def _clamp_retry_after(seconds: float) -> float:
+    """M49: a server-supplied Retry-After was trusted without bound.
+
+    `Retry-After: 86400` meant a 24-hour sleep per attempt, four times over —
+    one hostile or misconfigured response could hang a run for days. Clamp to
+    something a caller can actually wait for; the loop still gives up and raises
+    after MAX_RETRIES.
+    """
+    return max(0.0, min(float(seconds), _MAX_RETRY_AFTER_SECONDS))
 
 
 class CrossrefClient:
@@ -111,7 +124,7 @@ class CrossrefClient:
                         except ValueError:
                             retry_after = None
                     if attempt < MAX_RETRIES:
-                        sleep_for = (
+                        sleep_for = _clamp_retry_after(
                             retry_after
                             if retry_after is not None
                             else (2**attempt + random.uniform(0, 1))
@@ -135,6 +148,7 @@ class CrossrefClient:
                                 sleep_for = float(resp.headers["Retry-After"])
                             except ValueError:
                                 pass
+                        sleep_for = _clamp_retry_after(sleep_for)
                         logger.warning(
                             "Crossref 5xx %s, retry (attempt %d) after %s",
                             resp.status_code,
@@ -262,7 +276,17 @@ class CrossrefClient:
         # Crossref expects DOI as path, not URL-encoded? Use raw DOI
         # Ensure we use original DOI with slash, but encode?
         # httpx will handle path encoding if we pass as URL
-        url = f"{CROSSREF_BASE}/{doi}"
+        # M33: the identifier is a path segment and was interpolated raw, so a
+        # DOI containing "?" or "#" could truncate the path or start a query
+        # string. Percent-encode it, keeping "/" — those separators are
+        # structural for Crossref's works/{doi} route.
+        #
+        # is_valid_doi() was considered here and rejected: _DOI_RE requires a
+        # 4-9 digit registrant, so it rejects short DOIs that the rest of this
+        # repository treats as valid (its own fixtures use "10.123/test").
+        # Encoding removes the injection risk on its own; validation would only
+        # have turned fetchable identifiers into hard errors.
+        url = f"{CROSSREF_BASE}/{quote(doi, safe='/')}"
         params: dict[str, Any] = {}
         if self.mailto:
             params["mailto"] = self.mailto
@@ -286,7 +310,7 @@ class CrossrefClient:
                         except ValueError:
                             pass
                     if attempt < MAX_RETRIES:
-                        sleep_for = (
+                        sleep_for = _clamp_retry_after(
                             retry_after
                             if retry_after is not None
                             else (2**attempt + random.uniform(0, 1))

@@ -600,6 +600,13 @@ Task: produce cross-paper synthesis themes and statements grounded ONLY in the p
         for eid in cand.conflicting_evidence_ids:
             if eid not in ev_by_id:
                 raise ValueError(f"hallucinated conflicting evidence id {eid!r} (not in corpus)")
+            # M32: the supporting loop checked the paper mapping, this one did
+            # not. An unmapped conflicting id therefore raised KeyError six
+            # lines later, after the statements had already been persisted,
+            # orphaning artifacts and forcing a re-billed re-run. The call site
+            # catches ValueError, not KeyError.
+            if eid not in paper_by_evidence:
+                raise ValueError(f"conflicting evidence id {eid!r} has no paper mapping")
 
         if cand.type not in SynthesisStatementType.values():
             raise ValueError(f"invalid synthesis statement type {cand.type!r}")

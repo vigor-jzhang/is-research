@@ -194,9 +194,13 @@ class UnpaywallLocatorService:
                 except Exception:
                     continue
             if loc_ids:
-                # Already have locations for this identity+doi, reuse (idempotency)
-                # Return sorted for determinism
-                loc_ids.sort()
+                # Already have locations for this identity+doi, reuse (idempotency).
+                # M42: these were created in provider priority order and
+                # `store.list` returns them in that same order (created_at ASC).
+                # Sorting by artifact UUID destroyed the priority the acquisition
+                # orchestrator depends on to prefer a publisher PDF over a
+                # repository copy, and bought no determinism — the store order
+                # was already deterministic.
                 return loc_ids
             # If snapshot exists but no locations for this identity yet, we still need to create locations for this identity from snapshot's raw
             # So we should load snapshot raw and create locations
