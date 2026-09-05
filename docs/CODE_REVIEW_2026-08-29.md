@@ -92,7 +92,8 @@ in the working tree, uncommitted.
 | **H19-H24** literature + provider robustness | **Fixed** (round 17) | 8 plugin files + `research/prompt_safety.py` |
 | **H6-H12** scientific correctness | **Fixed** (round 18) | `proposition_verifier`, `comparative_statics`, `numerical_analysis`, `equilibrium_deriver` |
 | **M17, M19, M20, M22, M24, M26, M27, M29** routing numbers | **Fixed** (round 19) | `routing/qualification.py`, `readiness.py`, `preflight.py`, `tournament/accounting.py`, `task_aware.py`, `policy_router`, `evaluation_live_quality` |
-| The remaining M/L backlog | **Triaged** (round 19) — 94 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **M65-M71, M74, M75, L39** CLI reporting + exit codes | **Fixed** (round 20) | `cli/main.py` |
+| The remaining M/L backlog | **Triaged** (round 19) — 84 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -762,6 +763,68 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 20 notes (M65-M75, L39 — CLI reporting and exit codes)
+
+Batch 2 of the §9 triage. Ten findings, all in `cli/main.py`, split between
+"the command reports the wrong thing" and "the command cannot fail".
+
+- **M65** — `propositions generate` took `next()` over a listing that is
+  `ORDER BY created_at ASC`, i.e. the **oldest** verification, so a proposition
+  re-verified after a fix kept reporting the first failed attempt. It also
+  re-listed and re-parsed every envelope once per proposition. Now one listing
+  and one parse per artifact type, keyed to the newest record
+  (`_newest_by_proposition_id`). The same first-match shape affected the
+  critique and interpretation lines, which also reported the oldest.
+- **M66** — `new_id in await store.get_children(plan_id)` compared a `str`
+  against `list[ProvenanceLink]` and was therefore never true; the enrichment
+  line could not print. Now compares `link.target_artifact_id`.
+- **M67** — `documents locate` processed `included_identity_ids[:10]` while
+  reporting `found/{total}` over all of them, so a 200-paper set reported
+  "3/200" and silently skipped 190. The cap looked like leftover debugging (no
+  flag controls it), so it is gone rather than documented.
+- **M68** — `BENCHMARK_BY_ROLE[role]` was unguarded; `long_context` is a
+  first-class role elsewhere, so it produced a raw `KeyError` traceback.
+- **M69** — `novelty report` and `novelty gate` called the same service methods
+  as `novelty validate` but without its try/except, so a provider or search
+  failure surfaced as a traceback instead of an error and exit 1.
+- **M70** — `shadow-campaign` listed every decision ever persisted, so the table
+  showed earlier campaigns' rows while the footer counted them all as this
+  campaign's. Now filtered to `campaign.decision_ids`.
+- **M71** — `eval run` and `evaluation calibration` printed the verdict and
+  always exited 0, which is exactly why neither can gate CI. Both now exit
+  non-zero when the report did not pass / an audit is not `ok`. **Behaviour
+  change**: any existing script calling these and ignoring the status will now
+  see failures.
+- **M74** — three `except Exception: pass` handlers hid malformed payloads,
+  dangling identity-member references and unreadable acquisitions. Each now
+  reports what it could not read. The test asserts the invariant directly: no
+  exception handler in `main.py` may consist of a bare `pass`.
+- **M75** — `session inspect` interpolated `session_id` straight into a path.
+  The id is now validated and the resolved path checked to be under the session
+  root, and both reads pass `encoding="utf-8"` instead of depending on the
+  platform locale.
+- **L39** — `equilibrium derive` treated only `not_solvable` as failure;
+  `failed` printed a green ✓ and exited 0. The mark now follows the status, and
+  `failed` exits non-zero. **`partially_derived` deliberately still exits 0** —
+  it is a real, usable outcome (a partially verified candidate), not a failure,
+  and failing it would make the command unusable for the common case. The
+  finding listed it alongside `failed`; treating the two alike would have been
+  wrong, so the exit-code helper documents the distinction.
+
+**Test note.** Of the 17 added tests, 16 fail before the change. The one that
+passes both ways pins that a valid session inside the root still reads — the
+M75 containment fix must not lock out real sessions. Where a fix introduced a
+pure helper (`_newest_by_proposition_id`, `_campaign_decisions`, the three
+exit-code helpers) the test exercises it directly; where the defect sits inside
+a command closure that builds a runtime, the test asserts on `main.py`'s source
+instead. Those source-level tests are weaker but still fail if the fix is
+reverted — the same shape as the round-16 H13 test.
+
+**One thing left open deliberately:** `novelty validate` calls
+`svc.create_gate` (its second phase) with no try/except either. That is the same
+defect as M69 in a command M69 does not name, so it was left alone rather than
+widened mid-round; it should be folded into the next CLI pass.
 
 ### Round 19 notes (M17-M29 — routing numbers)
 
@@ -1627,29 +1690,29 @@ failed attempt.
   `PluginError` for the same condition.
 
 **CLI**
-- **M65** `main.py:4143-4150` — `propositions generate` reports the **oldest** verification
+- **M65** **Fixed (round 20).** `main.py:4143-4150` — `propositions generate` reports the **oldest** verification
   (`store.list` is `ORDER BY created_at ASC`), parses every envelope twice, and re-lists all
   verifications per proposition.
-- **M66** `main.py:5780` — `new_id in await store.get_children(...)` compares a `str` against
+- **M66** **Fixed (round 20).** `main.py:5780` — `new_id in await store.get_children(...)` compares a `str` against
   `list[ProvenanceLink]`; **always False**, so the enrichment line never prints.
-- **M67** `main.py:1861-1889` — `documents locate` processes only the first 10 identities but
+- **M67** **Fixed (round 20).** `main.py:1861-1889` — `documents locate` processes only the first 10 identities but
   reports `found/{total}` over all of them.
-- **M68** `main.py:6724` — `BENCHMARK_BY_ROLE[role]` is an unguarded lookup; `long_context`
+- **M68** **Fixed (round 20).** `main.py:6724` — `BENCHMARK_BY_ROLE[role]` is an unguarded lookup; `long_context`
   is a first-class role elsewhere ⇒ raw `KeyError` traceback.
-- **M69** `main.py:5567-5573, 5607` — `novelty report`/`gate` lack the try/except that
+- **M69** **Fixed (round 20).** `main.py:5567-5573, 5607` — `novelty report`/`gate` lack the try/except that
   `novelty validate` (5486-5496) has.
-- **M70** `main.py:7390-7395` — `shadow-campaign` prints all persisted decisions, not the
+- **M70** **Fixed (round 20).** `main.py:7390-7395` — `shadow-campaign` prints all persisted decisions, not the
   campaign's, so the count contradicts the header.
-- **M71** `main.py:6828-6864, 5992-6042` — `evaluation calibration` and `eval run` always
+- **M71** **Fixed (round 20).** `main.py:6828-6864, 5992-6042` — `evaluation calibration` and `eval run` always
   exit 0 regardless of verdict/failures; unusable as CI gates.
 - **M72** `main.py` — zero uses of `typer.Choice`. Eight `--role` options accept any string;
   `--direction`, `--format`, `--style`, `--policy` likewise. `leaderboard show` (6420) can
   raise from `validate_role`.
 - **M73** SQLite connections leak on every error path that raises `typer.Exit` (12+ sites
   close only on the happy path). Use `try/finally` or dedupe into `_get_artifact_store`.
-- **M74** `main.py:606-607, 1180-1181, 2119-2120` — `except Exception: pass` hides dangling
+- **M74** **Fixed (round 20).** `main.py:606-607, 1180-1181, 2119-2120` — `except Exception: pass` hides dangling
   references and other data-integrity problems.
-- **M75** `main.py:425-441` — `session inspect` interpolates `session_id` into a path with no
+- **M75** **Fixed (round 20).** `main.py:425-441` — `session inspect` interpolates `session_id` into a path with no
   containment check, and `read_text()` without `encoding=`.
 - **M76** `main.py:6252-6256, 6489-6494, 6497-6502` — `_tournament_config`/`_routing_config`/
   `_live_quality_config` accept `extra_plugins` and ignore it; 23 call sites pass it.
@@ -1854,7 +1917,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 - **L37** `config/schema.py:450` — an empty `plugins` list yields a runtime that silently does
   nothing; `start_all()` then re-runs `setup_all()` and returns success.
 - **L38** `novelty_validator:1882, 1930` — O(N×M) full-store scans in `_gather_evidence`.
-- **L39** `cli/main.py:3764-3770` — only `not_solvable` exits non-zero; `failed` and
+- **L39** **Fixed (round 20).** `cli/main.py:3764-3770` — only `not_solvable` exits non-zero; `failed` and
   `partially_derived` print a green ✓ and exit 0.
 
 ---
@@ -1994,18 +2057,19 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 30 | **56** |
-| Low (L1-L39) | 39 | 1 | **38** |
-| **Total** | **158** | **64** | **94** |
+| Medium (M1-M86) | 86 | 39 | **47** |
+| Low (L1-L39) | 39 | 2 | **37** |
+| **Total** | **158** | **74** | **84** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17, M19, M20, M22, M24, M26, M27, M29, M77, M79, M80,
-  M81, M82, M86**.
-- Open Medium: **M18, M21, M23, M25, M28, M30-M76, M78, M83, M84, M85**.
-- Closed Low: **L20** (round 18's H9).
+- Closed Medium: **M1-M16, M17, M19, M20, M22, M24, M26, M27, M29, M65-M71, M74,
+  M75, M77, M79, M80, M81, M82, M86**.
+- Open Medium: **M18, M21, M23, M25, M28, M30-M64, M72, M73, M76, M78, M83, M84,
+  M85**.
+- Closed Low: **L20** (round 18's H9), **L39** (round 20).
 
 ### 9.1 Legend
 
@@ -2019,7 +2083,7 @@ derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
 Effort means **fix + regression test + full-suite verification**, not just the edit.
 
-### 9.2 Small bucket — 52 findings (~26 h)
+### 9.2 Small bucket — 42 findings (~21 h)
 
 **Routing / qualification — wrong numbers that steer decisions: done (round 19).**
 
@@ -2053,23 +2117,14 @@ round-19 notes. The routing items still open are the semantics cluster in §9.3.
 | M63 | `envelope_payload_dict` returns `{}` for unknown payloads ⇒ scored as empty |
 | M64 | `registry` raises `ValueError` where `bootstrap` raises `PluginError` |
 
-**CLI — mostly "wrong thing printed / wrong exit code" (9, all S)**
+**CLI reporting + exit codes — done (round 20).**
 
-| ID | Scope |
-|---|---|
-| M65 | `propositions generate` reports the **oldest** verification, parses every envelope twice |
-| M66 | `new_id in await store.get_children(...)` compares `str` to `list[Link]` ⇒ always False |
-| M67 | `documents locate` processes 10 identities, reports `found/{total}` over all |
-| M68 | `BENCHMARK_BY_ROLE[role]` unguarded ⇒ raw `KeyError` for `long_context` |
-| M69 | `novelty report`/`gate` lack the try/except `novelty validate` has |
-| M70 | `shadow-campaign` prints every decision, not the campaign's |
-| M71 | `evaluation calibration` and `eval run` always exit 0 ⇒ unusable as CI gates |
-| M74 | `except Exception: pass` hides dangling references |
-| M75 | `session inspect` interpolates `session_id` into a path with no containment check |
+All nine (M65-M71, M74, M75) are fixed; see §1.1 and the round-20 notes. The CLI
+items still open are the structure cluster in §9.3 (M72, M73, M76, L33).
 
 **Round-11 pass (1):** M84 — `missing_abstract` hard-coded `0` instead of aggregating the real flag.
 
-**Low (25, all S):** L2, L3, L4, L5, L6, L8, L9, L11, L12, L16, L17, L19, L22, L24, L25, L27, L28, L30, L31, L32, L34, L35, L36, L37, L39.
+**Low (24, all S):** L2, L3, L4, L5, L6, L8, L9, L11, L12, L16, L17, L19, L22, L24, L25, L27, L28, L30, L31, L32, L34, L35, L36, L37.
 
 Notable among these because they are *verified* wrong, not merely untidy:
 **L12** — `"for the first time"` is blacklisted, so the canonical `absolute_priority/critical`
@@ -2121,7 +2176,7 @@ span `main.py`).
 | # | Batch | IDs | Effort |
 |---|---|---|---|
 | 1 | ~~Routing — wrong numbers~~ | ~~M17, M19, M20, M22, M24, M26, M27, M29~~ | **done (round 19)** |
-| 2 | CLI reporting + exit codes | M65-M71, M74, M75, L39 | 10 S |
+| 2 | ~~CLI reporting + exit codes~~ | ~~M65-M71, M74, M75, L39~~ | **done (round 20)** |
 | 3 | Novelty detector | L12, L14, L13, L38 | 2 S, 2 M |
 | 4 | Literature correctness | M32, M33, M34, M38, M40, M41, M42, M46, M49 | 9 S |
 | 5 | Scientific-core follow-on | L15, L16, L18, L19, L21 | 4 S, 1 M |
@@ -2133,10 +2188,10 @@ span `main.py`).
 | 11 | CLI structure | M72, M73, M76, L33 | 4 M |
 | 12 | Large, one round each | M48, then M78 | 2 L |
 
-Batches 2-5 are ~26 findings for roughly 16 h and clear most of the *verified
+Batches 3-5 are ~16 findings for roughly 11 h and clear most of the *verified
 wrong* findings. The long tail is hygiene.
 
-**Rough total: ~122 h** (batch 1, ~4 h, is done). That is the honest number, and it is why the next
+**Rough total: ~117 h** (batches 1-2, ~9 h, are done). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Candidates for closing as accepted (from the S bucket)

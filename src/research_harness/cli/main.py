@@ -420,19 +420,29 @@ def session_inspect(
     session_id: str, root: Annotated[pathlib.Path | None, typer.Option()] = None
 ) -> None:
     """Inspect a session's events."""
+    import re
     from pathlib import Path
 
     r = Path(root) if root else Path(".research/sessions")
+    # M75: session_id is user input interpolated straight into a path. Without a
+    # containment check an id like `../../etc` reads outside the session root.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", session_id or ""):
+        console.print(f"[red]Invalid session id {session_id!r}[/red]")
+        raise typer.Exit(code=1)
     events_path = r / session_id / "events.jsonl"
     meta_path = r / session_id / "metadata.json"
+    if r.resolve() not in events_path.resolve().parents:
+        console.print(f"[red]Session {session_id!r} escapes the session root[/red]")
+        raise typer.Exit(code=1)
     if not events_path.exists():
         console.print(f"[red]Session {session_id!r} not found at {events_path}[/red]")
         raise typer.Exit(code=1) from None
 
     if meta_path.exists():
-        console.print(f"[dim]Metadata: {meta_path.read_text()}[/dim]")
+        meta_text = meta_path.read_text(encoding="utf-8")
+        console.print(f"[dim]Metadata: {meta_text}[/dim]")
 
-    lines = events_path.read_text().splitlines()
+    lines = events_path.read_text(encoding="utf-8").splitlines()
     console.print(f"[cyan]Session {session_id} has {len(lines)} events[/cyan]")
     for line in lines[:20]:
         # truncate
@@ -618,8 +628,9 @@ def artifacts_lineage(
                         console.print(f"    statement: {stmt[:80]}")
                     elif hasattr(env.payload, "question"):
                         console.print(f"    question: {env.payload.question}")  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+                except Exception as e:
+                    # M74: silently swallowing this hid malformed payloads.
+                    console.print(f"    [dim]payload preview unavailable: {e}[/dim]")
         await store.close()
 
     asyncio.run(_run())
@@ -1190,8 +1201,9 @@ def identities_inspect(
 
                 paper = p_env.parse_payload(PaperRecord)
                 console.print(f"  [dim]{pid[:8]}[/dim] {paper.title}  doi={paper.doi}")
-            except Exception:
-                pass
+            except Exception as e:
+                # M74: a dangling member reference used to disappear silently.
+                console.print(f"  [yellow]member paper {pid[:8]} unreadable: {e}[/yellow]")
         # Check if superseded
         children_links = await store.get_children(identity_id)
         superseded_by = [
@@ -1858,7 +1870,10 @@ def documents_locate(
             unpaywall_loc = runtime.services.get("document_locator.unpaywall")
 
             found = 0
-            for pi_id in screened_set.included_identity_ids[:10]:
+            # M67: this processed only the first 10 identities while reporting
+            # found/total over all of them, so a 200-paper set reported "3/200"
+            # and silently skipped 190.
+            for pi_id in screened_set.included_identity_ids:
                 locs: list[str] = []
                 if meta_loc:
                     try:
@@ -2099,8 +2114,12 @@ def documents_inspect(
             console.print(
                 f"Acquisition status: {acq.status.value} http {acq.http_status} final_url {acq.final_url}"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # M74: a missing or unreadable acquisition is a data-integrity
+            # problem, not something to drop on the floor.
+            console.print(
+                f"[yellow]acquisition {doc.document_acquisition_id} unreadable: {e}[/yellow]"
+            )
         # Provenance
         parents, _children = await store.get_provenance(doc_id)
         if parents:
@@ -3688,7 +3707,12 @@ def equilibrium_derive(
                 for f in rec.failures:
                     console.print(f"  [red]{f.get('error', '')}[/red]")
                 raise typer.Exit(code=1)
-            console.print(f"[green]✓ Equilibrium execution: {exec_id}[/green]")
+            # L39: `failed` used to print a green check and exit 0.
+            mark = {
+                "derived": "[green]✓[/green]",
+                "partially_derived": "[yellow]~[/yellow]",
+            }.get(rec.status.value, "[red]✗[/red]")
+            console.print(f"{mark} Equilibrium execution: {exec_id} ({rec.status.value})")
             console.print(
                 f"  status {rec.status.value}  problems {rec.optimization_problems_created} "
                 f"focs {rec.focs_created} brs {rec.best_responses_created} "
@@ -3725,6 +3749,10 @@ def equilibrium_derive(
                                         f"    {'✓' if chk.passed else '✗'} {chk.check_type.value}: {chk.detail[:100]}"
                                     )
                     break
+
+            if _equilibrium_exit_code(rec.status.value):
+                console.print(f"[red]Equilibrium derivation {rec.status.value}[/red]")
+                raise typer.Exit(code=1)
 
     asyncio.run(_run())
 
@@ -4051,16 +4079,23 @@ def propositions_generate(
             )
 
             console.print(f"[green]✓ Propositions: {len(prop_ids)}[/green]")
+            # M65: one listing and one parse per artifact type, not one listing
+            # (and two parses) per proposition.
+            verifications = _newest_by_proposition_id(
+                await store.list(artifact_type="proposition_verification"),
+                PropositionVerification,
+            )
+            critiques = _newest_by_proposition_id(
+                await store.list(artifact_type="proposition_critique"),
+                PropositionCritique,
+            )
+            interpretations = _newest_by_proposition_id(
+                await store.list(artifact_type="economic_interpretation"),
+                EconomicInterpretation,
+            )
             for pid in prop_ids:
                 p = (await store.get(pid)).parse_payload(Proposition)
-                v = next(
-                    (
-                        env.parse_payload(PropositionVerification)
-                        for env in await store.list(artifact_type="proposition_verification")
-                        if env.parse_payload(PropositionVerification).proposition_id == pid
-                    ),
-                    None,
-                )
+                v = verifications.get(pid)
                 tag = (
                     "[green]✓[/green]"
                     if v and v.status.value == "verified"
@@ -4069,21 +4104,13 @@ def propositions_generate(
                     else "[red]✗[/red]"
                 )
                 console.print(f"  {tag} {pid[:8]} [{p.claim_type.value}] {p.statement[:90]}")
-                crits = [
-                    env.parse_payload(PropositionCritique)
-                    for env in await store.list(artifact_type="proposition_critique")
-                    if env.parse_payload(PropositionCritique).proposition_id == pid
-                ]
-                if crits:
-                    console.print(f"     critique verdict: {crits[0].verdict.value}")
-                interps = [
-                    env.parse_payload(EconomicInterpretation)
-                    for env in await store.list(artifact_type="economic_interpretation")
-                    if env.parse_payload(EconomicInterpretation).proposition_id == pid
-                ]
-                if interps:
+                crit = critiques.get(pid)
+                if crit is not None:
+                    console.print(f"     critique verdict: {crit.verdict.value}")
+                interp = interpretations.get(pid)
+                if interp is not None:
                     console.print(
-                        f"     interpretation: {interps[0].economic_interpretation[:100]}"
+                        f"     interpretation: {interp.economic_interpretation[:100]}"
                     )
 
     asyncio.run(_run())
@@ -5477,13 +5504,19 @@ def novelty_report(
         async with runtime:
             svc = runtime.services.require("novelty_validator.default")
             store = runtime.services.require("artifact_store.default")
-            report_id = await svc.create_report(
-                package,
-                as_of=as_of,
-                offline=offline,
-                max_results=max_results,
-                max_claims=max_claims,
-            )
+            # M69: same failure handling as `novelty validate`. Without it a
+            # provider or search failure surfaced as a raw traceback.
+            try:
+                report_id = await svc.create_report(
+                    package,
+                    as_of=as_of,
+                    offline=offline,
+                    max_results=max_results,
+                    max_claims=max_claims,
+                )
+            except Exception as e:
+                console.print(f"[red]Novelty validation failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
             from research_harness.research.schemas.novelty import NoveltyValidationReport
 
             report = (await store.get(report_id)).parse_payload(NoveltyValidationReport)
@@ -5517,7 +5550,12 @@ def novelty_gate(
         async with runtime:
             svc = runtime.services.require("novelty_validator.default")
             store = runtime.services.require("artifact_store.default")
-            gate_id = await svc.create_gate(package, report)
+            # M69: same failure handling as `novelty validate`.
+            try:
+                gate_id = await svc.create_gate(package, report)
+            except Exception as e:
+                console.print(f"[red]Novelty gate failed: {e}[/red]")
+                raise typer.Exit(code=1) from e
             from research_harness.research.schemas.novelty import SubmissionReadinessGate
 
             gate = (await store.get(gate_id)).parse_payload(SubmissionReadinessGate)
@@ -5690,7 +5728,13 @@ def novelty_enrich(
                     console.print(f"  supersedes {candidate}")
             for env in await store.list(artifact_type="evidence_enrichment_execution"):
                 ex = env.parse_payload(EvidenceEnrichmentExecution)
-                if ex.plan_id and new_id in await store.get_children(ex.plan_id):
+                # M66: get_children returns ProvenanceLink objects, so
+                # `new_id in [...]` compared a str against links and was never
+                # true — the enrichment line could never print.
+                if ex.plan_id and any(
+                    link.target_artifact_id == new_id
+                    for link in await store.get_children(ex.plan_id)
+                ):
                     console.print(
                         f"  enrichment: {ex.before_evidence_basis.value} -> "
                         f"{ex.after_evidence_basis.value}  outcome {ex.outcome.value}  "
@@ -5951,8 +5995,64 @@ def eval_run(
                     console.print(f"    [red]{cr.error[:160]}[/red]")
             console.print(f"  report artifact: {report_id}")
             console.print(f"  run artifact: {run_id}")
+            # M71: this printed the status but always exited 0, so `eval run`
+            # could not be used as a CI gate.
+            if _eval_exit_code(report.status.value):
+                console.print(
+                    f"[red]Benchmark {benchmark} did not pass ({report.status.value})[/red]"
+                )
+                raise typer.Exit(code=1)
 
     asyncio.run(_run())
+
+
+def _newest_by_proposition_id(envelopes: Any, payload_cls: Any) -> dict[str, Any]:
+    """Map proposition_id -> the NEWEST payload of `payload_cls` in `envelopes`.
+
+    M65: `store.list` is ORDER BY created_at ASC, so the first match is the
+    oldest record. A proposition re-verified after a fix kept reporting the
+    original failed attempt. Lists once, parses each envelope once.
+    """
+    newest: dict[str, tuple[Any, Any]] = {}
+    for env in envelopes:
+        payload = env.parse_payload(payload_cls)
+        key = payload.proposition_id
+        prev = newest.get(key)
+        if prev is None or env.created_at >= prev[0]:
+            newest[key] = (env.created_at, payload)
+    return {key: value for key, (_ts, value) in newest.items()}
+
+
+def _campaign_decisions(decisions: list[Any], campaign: Any) -> list[Any]:
+    """The decisions belonging to `campaign`, in the campaign's recorded order.
+
+    M70: `list_decisions()` returns every decision ever persisted, so the table
+    listed earlier campaigns' rows while the footer counted them all as this
+    campaign's.
+    """
+    by_id = {d.id: d for d in decisions}
+    return [by_id[i] for i in (getattr(campaign, "decision_ids", None) or []) if i in by_id]
+
+
+def _eval_exit_code(status: str) -> int:
+    """M71: `eval run` exits non-zero unless the report passed, so it can gate CI."""
+    from research_harness.research.schemas.evaluation import EvaluationReportStatus
+
+    return 0 if status == EvaluationReportStatus.passed.value else 1
+
+
+def _calibration_exit_code(verdicts: list[str]) -> int:
+    """M71: `evaluation calibration` exits non-zero if any audit is not `ok`."""
+    return 1 if any(v != "ok" for v in verdicts) else 0
+
+
+def _equilibrium_exit_code(status: str) -> int:
+    """L39: `equilibrium derive` must not exit 0 on a failed derivation.
+
+    `partially_derived` deliberately stays 0: it is a real, usable outcome (the
+    selected candidate is partially verified), not a failure like `failed`.
+    """
+    return 1 if status in ("not_solvable", "failed") else 0
 
 
 def _print_metric(metric) -> None:  # type: ignore[no-untyped-def]
@@ -6632,9 +6732,18 @@ def live_quality_run(
                 requested_model=role_cfg.model,
             )
             svc = runtime.services.require("live_quality.default")
+            # M68: `long_context` is a first-class role elsewhere, so this
+            # lookup raised a bare KeyError traceback instead of reporting it.
+            benchmark_id = BENCHMARK_BY_ROLE.get(role)
+            if benchmark_id is None:
+                console.print(
+                    f"[red]no live-quality benchmark for role {role!r}; "
+                    f"expected one of {sorted(BENCHMARK_BY_ROLE)}[/red]"
+                )
+                raise typer.Exit(code=1)
             run = await svc.run_live_quality(
                 role,
-                BENCHMARK_BY_ROLE[role],
+                benchmark_id,
                 model_config,
                 repetitions=repetitions,
             )
@@ -6773,6 +6882,14 @@ def evaluation_calibration(
                         artifact_id=audit.id,
                     )
                 )
+            # M71: a failed audit printed red but exited 0.
+            if _calibration_exit_code([a.verdict for a in audits]):
+                not_ok = sum(1 for a in audits if a.verdict != "ok")
+                console.print(
+                    f"[red]Calibration audit not ok for {not_ok} of {len(audits)} "
+                    f"benchmark(s)[/red]"
+                )
+                raise typer.Exit(code=1)
 
     asyncio.run(_run())
 
@@ -7301,7 +7418,10 @@ def routing_shadow_campaign(
         async with runtime:
             svc = runtime.services.require("task_aware_router.default")
             campaign = await svc.shadow_campaign(max_qualification_age_seconds=max_age)
-            decisions = await svc.list_decisions()
+            # M70: list_decisions() returns every decision ever persisted, so the
+            # table showed earlier campaigns' rows while the footer counted them
+            # all as this campaign's.
+            decisions = _campaign_decisions(await svc.list_decisions(), campaign)
             header = f"{'task':32s} {'static':38s} {'shadow':38s} {'switch':6s} {'status':16s} {'fallback':38s}"
             console.print(header)
             console.print("-" * len(header))
