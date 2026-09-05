@@ -8229,7 +8229,13 @@ def _routing_leaderboard(
     role: str,
     entries: list[dict[str, Any]],
     *,
-    repetitions: int = 1,
+    # M30: these fixtures used to rely on the router accepting fixture evidence
+    # and a single repetition. RoleLeaderboard.evidence_type documents that
+    # "Production routing requires live_quality_evidence", and the criteria
+    # require 3 repetitions, so genuine cases must model valid production
+    # evidence. Cases that want to test rejection pass the weak value
+    # explicitly.
+    repetitions: int = 3,
     age_seconds: float | None = None,
 ) -> dict[str, Any]:
     created = (
@@ -8242,6 +8248,7 @@ def _routing_leaderboard(
         "tournament_run_id": "routing-run",
         "plan_hash": "routing-hash",
         "ranking_rules": {},
+        "evidence_type": "live_quality_evidence",
         "entries": entries,
         "created_at": created.isoformat(),
         "metadata": {"repetitions": repetitions},

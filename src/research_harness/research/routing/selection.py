@@ -31,6 +31,32 @@ from research_harness.research.schemas.tournament import RoleLeaderboard
 DEFAULT_REQUIRED_PASS_RATE = 0.85
 DEFAULT_MIN_STRUCTURED_RATE = 0.5
 DEFAULT_MAX_MODEL_ERROR_RATE = 0.5
+
+
+def _role_defaults(role: str | None) -> tuple[float, float]:
+    """M28: the router's gate must never be looser than qualification.
+
+    Routing consumes the evidence that the qualification pass produces, on the
+    same two metrics (`deterministic_pass_rate` and
+    `structured_output_success_rate`). The router's own defaults were far looser
+    than the role criteria (0.50 structured vs 0.85-0.90; 0.85 pass rate vs 0.90
+    for the `fast` role), so routing could select a model that qualification
+    would reject. Derive from the criteria instead of restating them.
+
+    The error dimension is deliberately NOT aligned: the router gates on
+    `model_error_rate` (share of calls that errored) while the criteria gate on
+    `provider_error_frequency`, a different measurement. Matching the numbers
+    without matching the metric would be false precision.
+    """
+    if role is None:
+        return DEFAULT_REQUIRED_PASS_RATE, DEFAULT_MIN_STRUCTURED_RATE
+    from research_harness.research.routing.readiness import criteria_for_role
+
+    criteria = criteria_for_role(role)
+    return (
+        criteria.min_deterministic_pass_rate,
+        criteria.min_structured_output_success_rate,
+    )
 # Errored cases are excluded from deterministic_pass_rate by design, so this is
 # the only gate that stops a model which fails to complete most cases from
 # qualifying on the strength of the few it did finish.
@@ -80,13 +106,14 @@ def filter_eligible(
     request: RoutingRequest,
 ) -> tuple[list[RoutingCandidateAssessment], list[RoutingCandidateAssessment]]:
     """Apply the mandatory gate. Returns (eligible, rejected)."""
+    role_required_rate, role_min_structured = _role_defaults(getattr(request, "role", None))
     required_rate = (
-        DEFAULT_REQUIRED_PASS_RATE
+        role_required_rate
         if request.required_deterministic_pass_rate is None
         else request.required_deterministic_pass_rate
     )
     min_structured = (
-        DEFAULT_MIN_STRUCTURED_RATE
+        role_min_structured
         if request.min_structured_output_success_rate is None
         else request.min_structured_output_success_rate
     )
@@ -242,5 +269,13 @@ def decide_status(
     if not eligible:
         return RoutingDecisionStatus.no_eligible_model, "no candidate satisfies the gate"
     if use_fallback:
+        # M21: with a single eligible candidate `select()` returns (None, None),
+        # because there is no distinct fallback — yet this used to report
+        # "fallback model selected" naming no model. Report the truth instead.
+        if len(eligible) < 2:
+            return (
+                RoutingDecisionStatus.no_eligible_model,
+                "no fallback available: only one candidate satisfies the gate",
+            )
         return RoutingDecisionStatus.fallback, "fallback model selected"
     return RoutingDecisionStatus.selected, "primary model selected"

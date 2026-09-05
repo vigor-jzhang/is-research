@@ -10,7 +10,6 @@ and production behavior is unchanged in Phase 7C.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from research_harness.kernel.errors import PluginError
@@ -35,6 +34,7 @@ from research_harness.research.schemas.routing import (
     RoutingRequest,
 )
 from research_harness.research.schemas.tournament import RoleLeaderboard
+from research_harness.research.timeutil import age_seconds
 
 _PRODUCER = "routing.policy_router"
 
@@ -205,7 +205,12 @@ class PolicyModelRouterService:
     ) -> tuple[RoleLeaderboard | None, float | None, bool, bool]:
         def _evidence_ok(board: RoleLeaderboard) -> bool:
             if not request.evidence_types:
-                return True
+                # M30: unset used to accept ANY evidence type, including
+                # `fixture_evidence`. RoleLeaderboard.evidence_type documents that
+                # "Production routing requires live_quality_evidence", so the
+                # permissive default let routing decide on offline fixture
+                # tournaments it was never meant to treat as production evidence.
+                return board.evidence_type != "fixture_evidence"
             return board.evidence_type in request.evidence_types
 
         if request.leaderboard_ids:
@@ -233,13 +238,15 @@ class PolicyModelRouterService:
         if not boards:
             return None, None, False, False
         leaderboard = max(boards, key=lambda b: b.created_at)
-        age = (datetime.now(UTC) - leaderboard.created_at).total_seconds()
+        # M31: created_at comes from a parsed payload and may be naive.
+        age = age_seconds(leaderboard.created_at)
         max_age = (
             self._max_age
             if request.leaderboard_max_age_seconds is None
             else request.leaderboard_max_age_seconds
         )
-        too_old = max_age is not None and age > max_age
+        # M31: an unreadable timestamp cannot demonstrate freshness.
+        too_old = max_age is not None and (age is None or age > max_age)
         repetitions = int(leaderboard.metadata.get("repetitions") or 1)
         insufficient_reps = repetitions < request.min_repetitions
         return leaderboard, age, too_old, insufficient_reps

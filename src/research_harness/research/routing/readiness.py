@@ -17,6 +17,7 @@ from research_harness.research.schemas.live_quality import (
     LiveQualityModelResult,
     QualificationCriteria,
 )
+from research_harness.research.timeutil import age_seconds
 
 # Role-specific standards (overridable per run, persisted with the assessment).
 ROLE_QUALIFICATION_CRITERIA: dict[str, QualificationCriteria] = {
@@ -80,10 +81,13 @@ def qualify_model(
     if not result.task_results:
         reasons.append("no live-quality task results")
     if criteria.leaderboard_max_age_seconds is not None:
-        from datetime import UTC, datetime
-
-        age = (datetime.now(UTC) - result.evidence_timestamp).total_seconds()
-        if age > criteria.leaderboard_max_age_seconds:
+        # M31: result.evidence_timestamp comes from a parsed payload, so it may be
+        # naive — subtracting it from an aware datetime raised TypeError.
+        age = age_seconds(result.evidence_timestamp)
+        if age is None:
+            # M31: an unreadable timestamp cannot demonstrate freshness.
+            reasons.append("stale live evidence: evidence timestamp is unreadable")
+        elif age > criteria.leaderboard_max_age_seconds:
             reasons.append(
                 f"stale live evidence: {age:.0f}s > {criteria.leaderboard_max_age_seconds}s"
             )

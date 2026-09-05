@@ -72,7 +72,10 @@ class RoutingRequest(BaseModel):
         ),
     )
     min_repetitions: int = Field(
-        default=1, ge=1, description="Minimum leaderboard repetitions of evidence"
+        # M30: was 1, while the qualification criteria require 3. A single run is
+        # not enough evidence to select a production model, so routing accepted
+        # leaderboards that qualification would call insufficient.
+        default=3, ge=1, description="Minimum leaderboard repetitions of evidence"
     )
     leaderboard_max_age_seconds: float | None = Field(default=None, ge=1.0)
     leaderboard_ids: list[str] | None = Field(

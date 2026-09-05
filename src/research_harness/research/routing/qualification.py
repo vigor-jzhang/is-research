@@ -44,6 +44,7 @@ from research_harness.research.schemas.qualification import (
     TaskQualificationMatrix,
     TaskQualificationResult,
 )
+from research_harness.research.timeutil import age_seconds
 
 _STABILITY_STABLE_MARGIN = 0.05
 _STABILITY_MAX_VARIANCE = 0.02
@@ -260,6 +261,28 @@ def _rank_key(c: QualificationCandidateResult) -> tuple[Any, ...]:
     return (-det, -structured, error, latency, cost, c.candidate_id)
 
 
+def _apply_eligibility(
+    candidates: list[QualificationCandidateResult],
+    primary: str | None,
+    fallback: str | None,
+) -> None:
+    """M18: set primary/fallback eligibility on every candidate.
+
+    Eligibility is stricter than qualification: a qualified candidate is
+    primary/fallback eligible only if its evidence is not unstable, and the
+    selected primary is never its own fallback. This used to be a side effect
+    inside `build_role_summary` alone, so `build_qualification_matrix` — which
+    computes primary/fallback itself — reported rows still carrying the
+    constructor defaults (all False) unless the same list had already been
+    through `build_role_summary`. Both callers now go through here.
+    """
+    del fallback  # reserved: eligibility does not currently depend on it
+    for c in candidates:
+        stable_ok = (c.stability or "unstable") != "unstable"
+        c.primary_eligible = bool(c.qualified and stable_ok)
+        c.fallback_eligible = bool(c.qualified and stable_ok and c.candidate_id != primary)
+
+
 def build_role_summary(
     candidates: list[QualificationCandidateResult],
     criteria: QualificationCriteria,
@@ -282,10 +305,7 @@ def build_role_summary(
 
     # eligibility (Phase 7D.2): qualified and not unstable; the selected primary
     # is never its own fallback
-    for c in candidates:
-        stable_ok = (c.stability or "unstable") != "unstable"
-        c.primary_eligible = bool(c.qualified and stable_ok)
-        c.fallback_eligible = bool(c.qualified and stable_ok and c.candidate_id != primary)
+    _apply_eligibility(candidates, primary, fallback)
 
     rejection_counts: dict[str, int] = {}
     for c in candidates:
@@ -329,6 +349,11 @@ def build_qualification_matrix(
         status = "qualified_without_fallback"
     else:
         status = "no_qualified_model"
+    # M18: eligibility must be computed here, not inherited from a previous
+    # build_role_summary call. This function computes primary/fallback itself, so
+    # its rows carried the constructor defaults (all False) whenever the
+    # candidate list had not already been through build_role_summary.
+    _apply_eligibility(candidates, primary, fallback)
 
     rows: list[ProductionQualificationMatrixRow] = []
     for c in candidates:
@@ -447,8 +472,14 @@ def evidence_extraction_diagnostics(
             statement = str(ev.get("statement") or "").strip()
             if statement and source_lower:
                 terms = [w for w in statement.lower().split() if len(w) > 4 and w.isalpha()]
-                if terms and not any(t in source_lower for t in terms):
-                    diag["unsupported_claims"] += 1
+                # M23: `not any(...)` only fired when EVERY substantive term was
+                # absent from the source. For ordinary prose some term almost
+                # always appears somewhere, so this bucket was effectively always
+                # 0. A claim is unsupported when MOST of its terms are absent.
+                if terms:
+                    missing = sum(1 for t in terms if t not in source_lower)
+                    if missing > len(terms) / 2:
+                        diag["unsupported_claims"] += 1
             category = str(ev.get("category") or "")
             if category and category not in _EVIDENCE_CATEGORIES:
                 diag["invalid_categories"] += 1
@@ -478,10 +509,15 @@ def aggregate_task_performance(
     return LiveQualityTaskPerformance(
         task_id=task,
         task_name=TASK_LABELS.get(task, ""),
-        repetitions=max((tp.repetitions for tp in entries), default=0),
+        # M25: max() reported the best-covered case as the task's coverage, so a
+        # task backed by one 5-repetition case and one 1-repetition case claimed
+        # 5. MIN is the honest number: the weakest case bounds the confidence.
+        repetitions=min((tp.repetitions for tp in entries), default=0),
         pass_rate_mean=fmean(rates) if rates else None,
         pass_rate_worst=min(rates) if rates else None,
-        pass_rate_variance=pvariance(rates) if len(rates) > 1 else 0.0,
+        # M25: variance over a single sample used to report 0.0, i.e. "perfectly
+        # stable" from one data point. Unknown is not zero.
+        pass_rate_variance=pvariance(rates) if len(rates) > 1 else None,
         pass_rates=list(rates),
         structured_output_success_rate=fmean(structured) if structured else None,
         provider_error_frequency=fmean(provider) if provider else None,
@@ -518,10 +554,13 @@ def qualify_task(
     if tp is None:
         return False, [f"no task-level results for task {task!r}"]
     if criteria.leaderboard_max_age_seconds is not None:
-        from datetime import UTC, datetime
-
-        age = (datetime.now(UTC) - result.evidence_timestamp).total_seconds()
-        if age > criteria.leaderboard_max_age_seconds:
+        # M31: evidence_timestamp comes from a parsed payload, so it may be naive
+        # — subtracting it from an aware datetime raised TypeError.
+        age = age_seconds(result.evidence_timestamp)
+        if age is None:
+            # M31: an unreadable timestamp cannot demonstrate freshness.
+            reasons.append("stale live evidence: evidence timestamp is unreadable")
+        elif age > criteria.leaderboard_max_age_seconds:
             reasons.append(
                 f"stale live evidence: {age:.0f}s > {criteria.leaderboard_max_age_seconds}s"
             )

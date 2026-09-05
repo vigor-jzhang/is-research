@@ -24,7 +24,6 @@ Selection rules (documented, never opaque):
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from research_harness.research.routing.qualification import task_rank_key
@@ -35,6 +34,7 @@ from research_harness.research.schemas.routing import (
     TaskAwareRoutingDecision,
     TaskAwareRoutingStatus,
 )
+from research_harness.research.timeutil import age_seconds
 
 TASK_AWARE_POLICY_ID = "task_aware_shadow_v1"
 TASK_AWARE_POLICY_VERSION = "1"
@@ -88,9 +88,14 @@ def build_task_aware_decision(
     age = (
         matrix_age_seconds
         if matrix_age_seconds is not None
-        else (datetime.now(UTC) - matrix.created_at).total_seconds()
+        # M31: matrix.created_at comes from a parsed payload and may be naive.
+        else age_seconds(matrix.created_at)
     )
-    stale = max_qualification_age_seconds is not None and age > max_qualification_age_seconds
+    # M31: an unreadable timestamp cannot demonstrate freshness, so treat it as
+    # stale rather than letting `age > limit` raise on None.
+    stale = max_qualification_age_seconds is not None and (
+        age is None or age > max_qualification_age_seconds
+    )
 
     reason = ""
     if not task_rows:
@@ -167,7 +172,7 @@ def build_task_aware_decision(
         status=status,
         reason=reason,
         matrix_id=matrix.id,
-        matrix_age_seconds=round(age, 3),
+        matrix_age_seconds=round(age, 3) if age is not None else None,
         current_static_model=static_model,
         static_model_provider=static_provider,
         qualified_candidates=qualified_candidates,

@@ -137,7 +137,8 @@ async def test_shadow_mode_would_switch(tmp_path: pathlib.Path):
             _entry("winner", det=0.99, latency=40.0, cost=0.05),
             _entry("current", det=0.9, latency=100.0, cost=0.02),
         ],
-        metadata={"repetitions": 2},
+        evidence_type="live_quality_evidence",
+        metadata={"repetitions": 3},
     )
     from research_harness.research.envelope import ArtifactEnvelope
 
@@ -180,7 +181,8 @@ async def test_shadow_same_as_current_no_switch(tmp_path: pathlib.Path):
         entries=[
             _entry("winner", det=0.99, latency=40.0),
         ],
-        metadata={"repetitions": 1},
+        evidence_type="live_quality_evidence",
+        metadata={"repetitions": 3},
     )
     from research_harness.research.envelope import ArtifactEnvelope
 
