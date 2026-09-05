@@ -518,9 +518,10 @@ class LiveQualityService:
             criteria = criteria_for_role(r)
             from research_harness.research.routing.qualification import candidate_result
 
-            latest = await self._latest_live_results_for_role(r)
+            latest, run_ids = await self._latest_live_results_for_role(r)
             candidate_results = [
-                candidate_result(lr, criteria, live_quality_run_id=None) for lr in latest.values()
+                candidate_result(lr, criteria, live_quality_run_id=run_ids.get(lr.candidate_id))
+                for lr in latest.values()
             ]
             if not candidate_results:
                 continue
@@ -564,29 +565,43 @@ class LiveQualityService:
 
         return (await self._store.get(matrix_id)).parse_payload(ProductionQualificationMatrix)
 
-    async def _live_results_for_campaign(self, campaign: Any) -> dict[str, Any]:
+    async def _live_results_for_campaign(
+        self, campaign: Any
+    ) -> tuple[dict[str, Any], dict[str, str]]:
         """Reconstruct {candidate_id: LiveQualityModelResult} from a campaign's
-        live-quality runs (full task performance incl. Phase 7D.3 fields)."""
+        live-quality runs (full task performance incl. Phase 7D.3 fields).
+
+        Returns the results and the {candidate_id: run_id} they came from, so
+        derived rows keep the provenance M26 was dropping."""
         from research_harness.research.schemas.live_quality import LiveQualityRun
 
         live_results: dict[str, Any] = {}
+        run_ids: dict[str, str] = {}
         for run_id in campaign.live_quality_run_ids:
             try:
                 run = (await self._store.get(run_id)).parse_payload(LiveQualityRun)
             except Exception:  # noqa: BLE001
                 continue
             live_results[run.result.candidate_id] = run.result
-        return live_results
+            run_ids[run.result.candidate_id] = run_id
+        return live_results, run_ids
 
-    async def _latest_live_results_for_role(self, role: str) -> dict[str, Any]:
+    async def _latest_live_results_for_role(
+        self, role: str
+    ) -> tuple[dict[str, Any], dict[str, str]]:
         """Latest LiveQualityModelResult per candidate across all the role's
         campaigns (Phase 7D.3D). Lets per-candidate campaigns be run
         incrementally (each persists on completion) while the task matrix
-        aggregates the most recent evidence per candidate."""
+        aggregates the most recent evidence per candidate.
+
+        Returns the results and the {candidate_id: run_id} of the winning run,
+        so task rows record which run justified them (M26)."""
         from research_harness.research.schemas.live_quality import LiveQualityRun
 
         campaigns = await self.list_campaigns(role=role)
         latest: dict[str, Any] = {}
+        latest_ts: dict[str, Any] = {}
+        run_ids: dict[str, str] = {}
         for campaign in campaigns:
             for run_id in campaign.live_quality_run_ids:
                 try:
@@ -594,12 +609,12 @@ class LiveQualityService:
                 except Exception:  # noqa: BLE001
                     continue
                 cid = run.result.candidate_id
-                if (
-                    cid not in latest
-                    or run.result.evidence_timestamp > latest[cid].evidence_timestamp
-                ):
+                ts = run.result.evidence_timestamp
+                if cid not in latest or ts > latest_ts[cid]:
                     latest[cid] = run.result
-        return latest
+                    latest_ts[cid] = ts
+                    run_ids[cid] = run_id
+        return latest, run_ids
 
     async def task_qualification(
         self,
@@ -621,7 +636,7 @@ class LiveQualityService:
             raise ValueError(
                 f"no qualification campaign for role {role!r}; run `routing qualify` first"
             )
-        live_results = await self._latest_live_results_for_role(role)
+        live_results, run_ids = await self._latest_live_results_for_role(role)
         if not live_results:
             raise ValueError(f"no live-quality runs available for role {role!r} campaign")
         criteria = criteria_for_role(role)
@@ -631,6 +646,7 @@ class LiveQualityService:
             benchmark_id=campaigns[0].benchmark_id,
             repetitions=campaigns[0].repetitions,
             criteria=criteria,
+            live_quality_run_ids=run_ids,
         )
         await self._store.put(
             ArtifactEnvelope.create(
@@ -669,7 +685,7 @@ class LiveQualityService:
             if not campaigns:
                 continue
             campaign = campaigns[0]
-            live_results = await self._live_results_for_campaign(campaign)
+            live_results, run_ids = await self._live_results_for_campaign(campaign)
             if model_id not in live_results:
                 continue
             matrix, _rows = build_task_matrix(
@@ -677,6 +693,7 @@ class LiveQualityService:
                 role=role,
                 benchmark_id=campaign.benchmark_id,
                 repetitions=campaign.repetitions,
+                live_quality_run_ids=run_ids,
             )
             stability_by_model = {c.candidate_id: c.stability for c in campaign.candidates}
             latency_by_model = {c.candidate_id: c.latency_ms_p50 for c in campaign.candidates}

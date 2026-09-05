@@ -290,7 +290,15 @@ async def run_candidate_preflight(
             provider=candidate.provider,
             requested_model=candidate.requested_model,
             resolved_model=resolved,
-            status=PreflightStatus.capability_mismatch,
+            # M19: classify the failure. Reporting every structured-output
+            # failure as capability_mismatch recorded a rate limit as a model
+            # deficiency, which build_remaining_task_coverage then read as "the
+            # model cannot do this" instead of "the provider was unavailable".
+            # Only error text is classified -- never the model's own output,
+            # which could contain a marker like "timeout" by chance. With no
+            # error at all the response was simply unparseable, which is a
+            # genuine capability mismatch.
+            status=(_classify_error(err) if err else PreflightStatus.capability_mismatch),
             checks=checks,
             required_context_chars=required_context_chars,
             timeout_seconds=timeout_seconds,
@@ -376,10 +384,13 @@ async def preflight_required_context_chars(
     *, role: str, benchmark_cases: list[dict[str, Any]]
 ) -> int:
     """Estimate the required context size (characters) for a role's live-quality
-    benchmark from the case inputs (documents, statements, papers, fixtures).
-    Cheap and deterministic; used to size the context probe."""
-    total = 0
+    benchmark: the largest single case's input, not the sum over every case
+    (documents, statements, papers, fixtures). Cheap and deterministic; used to
+    size the context probe, which holds one case at a time -- summing overstated
+    the requirement by ~3x on live-quality-reasoning-v1."""
+    largest = 0
     for case in benchmark_cases:
+        total = 0
         inp = case.get("input") or {}
         for key in ("documents", "papers", "evidence", "statements", "profiles", "themes"):
             for item in inp.get(key) or []:
@@ -397,4 +408,5 @@ async def preflight_required_context_chars(
                 total += len(str(payload.get("description") or "")) + len(
                     str(payload.get("statement") or "") or ""
                 )
-    return max(total, 0)
+        largest = max(largest, total)
+    return largest

@@ -129,18 +129,21 @@ def build_task_aware_decision(
 
         static_row = next((r for r in qualified_rows if r.candidate_id == static_model), None)
         if static_row is not None:
-            if primary.deterministic_pass_rate_mean is not None:
-                quality_delta = primary.deterministic_pass_rate_mean - (
-                    static_row.deterministic_pass_rate_mean or 0.0
+            # M27: an unknown baseline is not a baseline of zero. Subtracting
+            # `or 0.0` turned "we never measured the static model" into
+            # "+0.95 better than current". All three deltas need both sides.
+            if (
+                primary.deterministic_pass_rate_mean is not None
+                and static_row.deterministic_pass_rate_mean is not None
+            ):
+                quality_delta = (
+                    primary.deterministic_pass_rate_mean
+                    - static_row.deterministic_pass_rate_mean
                 )
-            if primary.latency_ms_p50 is not None:
-                latency_delta = primary.latency_ms_p50 - (
-                    static_row.latency_ms_p50 if static_row.latency_ms_p50 is not None else 0.0
-                )
-            if primary.estimated_cost is not None:
-                cost_delta = primary.estimated_cost - (
-                    static_row.estimated_cost if static_row.estimated_cost is not None else 0.0
-                )
+            if primary.latency_ms_p50 is not None and static_row.latency_ms_p50 is not None:
+                latency_delta = primary.latency_ms_p50 - static_row.latency_ms_p50
+            if primary.estimated_cost is not None and static_row.estimated_cost is not None:
+                cost_delta = primary.estimated_cost - static_row.estimated_cost
     else:
         fallback_id = static_model
         fallback_not_live_qualified = True

@@ -104,8 +104,7 @@ def qualify_model(
         reasons.append(
             f"provider_error_frequency {provider_error:.3f} > {criteria.max_provider_error_rate}"
         )
-    excluded = _excluded_grounding(result)
-    effective_grounding = max(0, result.critical_grounding_failures - excluded)
+    effective_grounding = effective_critical_grounding(result)
     if criteria.require_no_critical_grounding_failures and effective_grounding:
         reasons.append(f"{effective_grounding} critical grounding failure(s)")
     cases = sum(t.cases_total for t in result.task_results)
@@ -114,6 +113,19 @@ def qualify_model(
 
     qualified = not reasons
     return qualified, reasons
+
+
+def effective_critical_grounding(result: LiveQualityModelResult) -> int:
+    """Critical-grounding failures NOT attributable to confirmed benchmark or
+    evaluator defects (Phase 7D.2).
+
+    Every consumer of the grounding count must go through this, not just the
+    qualification gate. When only the gate did, a model whose grounding
+    failures were all confirmed defects came out `qualified` from
+    `qualify_model` and `unstable` from `stability_status` at the same time.
+    """
+    excluded = _excluded_grounding(result)
+    return max(0, result.critical_grounding_failures - excluded)
 
 
 def _excluded_grounding(result: LiveQualityModelResult) -> int:

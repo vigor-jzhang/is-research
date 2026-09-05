@@ -18,7 +18,11 @@ from __future__ import annotations
 from statistics import fmean, pvariance
 from typing import Any
 
-from research_harness.research.routing.readiness import criteria_for_role, qualify_model
+from research_harness.research.routing.readiness import (
+    criteria_for_role,
+    effective_critical_grounding,
+    qualify_model,
+)
 from research_harness.research.routing.tasks import (
     TASK_LABELS,
     canonical_task,
@@ -192,7 +196,9 @@ def stability_status(result: LiveQualityModelResult, criteria: QualificationCrit
     if (
         worst is None
         or worst < threshold
-        or result.critical_grounding_failures
+        # M17: the same confirmed-defect exclusion qualify_model applies, or a
+        # model exonerated by the ledger is still called unstable here.
+        or effective_critical_grounding(result)
         or provider_error > criteria.max_provider_error_rate
     ):
         return "unstable"
@@ -595,6 +601,7 @@ def build_task_matrix(
     benchmark_id: str,
     repetitions: int,
     criteria: QualificationCriteria | None = None,
+    live_quality_run_ids: dict[str, str] | None = None,
 ) -> tuple[TaskQualificationMatrix, list[TaskQualificationResult]]:
     """Build the role's task-qualification matrix from live-quality results
     (Phase 7D.3). Role isolation enforced; role qualification is computed
@@ -612,7 +619,15 @@ def build_task_matrix(
             continue
         qualified_tasks_by_model[result.candidate_id] = []
         for task in tasks:
-            row = task_candidate_result(result, task, criteria, live_quality_run_id=None)
+            row = task_candidate_result(
+                result,
+                task,
+                criteria,
+                # M26: provenance. Hardcoding None meant every task row lost the
+                # run it came from, so consumers like the task-aware router
+                # collected an empty qualification_result_ids list.
+                live_quality_run_id=(live_quality_run_ids or {}).get(result.candidate_id),
+            )
             if row is None:
                 continue
             rows.append(row)
@@ -716,14 +731,19 @@ def build_remaining_task_coverage(
     )
 
     by_role = {m.role: m for m in matrices}
-    preflight_by_model: dict[str, str] = {}
-    latest_preflight: dict[str, Any] = {}
+    preflight_by_model: dict[tuple[str, str], str] = {}
+    latest_preflight: dict[tuple[str, str], Any] = {}
     for p in preflights:
+        # M22: key by (candidate, role). A preflight is a role-specific probe —
+        # reasoning, critic and fast ask for different things — so keying on the
+        # candidate alone applied whichever role happened to be newest to all
+        # three, reporting critic availability as reasoning availability.
+        key = (p.candidate_id, p.role)
         if (
-            p.candidate_id not in latest_preflight
-            or p.created_at > latest_preflight[p.candidate_id].created_at
+            key not in latest_preflight
+            or p.created_at > latest_preflight[key].created_at
         ):
-            latest_preflight[p.candidate_id] = p
+            latest_preflight[key] = p
     for key, p in latest_preflight.items():
         preflight_by_model[key] = p.status.value
 
@@ -745,7 +765,7 @@ def build_remaining_task_coverage(
             provider_unavailable = sum(
                 1
                 for m in tested
-                if preflight_by_model.get(m)
+                if preflight_by_model.get((m, role))
                 in {
                     "temporarily_unavailable",
                     "provider_error",

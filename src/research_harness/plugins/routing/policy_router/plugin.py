@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from research_harness.kernel.errors import PluginError
 from research_harness.kernel.plugin import Plugin, PluginContext, PluginMetadata
 from research_harness.research.envelope import ArtifactEnvelope
 from research_harness.research.routing.policies import (
@@ -178,8 +179,16 @@ class PolicyModelRouterService:
         Reuses provider capability metadata; no provider-specific logic here."""
         try:
             provider_obj = self._lookup(f"model_provider.{provider}")
-            caps = provider_obj.capabilities
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            # M29: a provider that cannot be resolved is a wiring fault, not a
+            # model capability. Returning False here marked every candidate on
+            # that provider "capability rejected", which can empty a whole role
+            # while the recorded reason blames the models.
+            raise PluginError(
+                f"cannot resolve model provider {provider!r} to check capabilities: {e}"
+            ) from e
+        caps = getattr(provider_obj, "capabilities", None)
+        if caps is None:
             return False
         if request.require_structured_output and not bool(
             getattr(caps, "structured_output", False)

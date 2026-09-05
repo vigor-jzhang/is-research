@@ -89,13 +89,17 @@ def aggregate_calls(calls: list[ModelCallRecord]) -> dict[str, Any]:
         out["latency_ms_p50"] = percentile(latencies, 0.5)
         out["latency_ms_p95"] = percentile(latencies, 0.95)
 
-    if any(c.prompt_tokens is not None for c in calls):
+    # M24: require EVERY call to report. Summing only the calls that happen to
+    # carry usage yields a number that looks like a total but silently omits the
+    # rest -- one call reporting 1000 next to one reporting None reported
+    # exactly 1000. Consumers gate on cost and token budgets, so a truncated
+    # total understates spend instead of being visibly unknown.
+    if all(c.prompt_tokens is not None for c in calls):
         out["input_tokens"] = sum(int(c.prompt_tokens or 0) for c in calls)
-    if any(c.completion_tokens is not None for c in calls):
+    if all(c.completion_tokens is not None for c in calls):
         out["output_tokens"] = sum(int(c.completion_tokens or 0) for c in calls)
-    totals = [c.total_tokens for c in calls if c.total_tokens is not None]
-    if totals:
-        out["total_tokens"] = sum(int(t) for t in totals)
+    if all(c.total_tokens is not None for c in calls):
+        out["total_tokens"] = sum(int(c.total_tokens or 0) for c in calls)
     elif out["input_tokens"] is not None and out["output_tokens"] is not None:
         out["total_tokens"] = out["input_tokens"] + out["output_tokens"]
 
