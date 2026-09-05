@@ -131,18 +131,20 @@ class TournamentModelResult(BaseModel):
     role: str
     benchmark_runs: list[BenchmarkRunRef] = Field(default_factory=list)
     calls: list[ModelCallRecord] = Field(default_factory=list)
-    deterministic_pass_rate: float | None = None
-    benchmark_pass_rate: float | None = None
-    case_pass_rate: float | None = None
+    # L30: every one of these is a share, but none was range-checked, so a rate
+    # of 5.0 validated and beat every threshold it was compared against.
+    deterministic_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    benchmark_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    case_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     # Share of cases that errored. Kept separate from deterministic_pass_rate,
     # which deliberately measures quality among completed cases only: a model
     # must clear both to qualify.
-    case_error_rate: float | None = None
+    case_error_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     # Share of repetitions that crashed before producing a report.
-    repetition_failure_rate: float | None = None
-    structured_output_success_rate: float | None = None
-    model_error_rate: float | None = None
-    retry_rate: float | None = None
+    repetition_failure_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    structured_output_success_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    model_error_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    retry_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     latency_ms_mean: float | None = None
     latency_ms_p50: float | None = None
     latency_ms_p95: float | None = None

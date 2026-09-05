@@ -82,7 +82,10 @@ class ModelPreflight(BaseModel):
     status: PreflightStatus
     checks: list[ModelPreflightCheck] = Field(default_factory=list)
     required_context_chars: int = 0
-    timeout_seconds: float = 0.0
+    # L31: 0.0 is a live timeout, not "unset" — a preflight built without one
+    # would fail instantly. In practice every call site in preflight.py passes
+    # it explicitly, so this was latent, but the default was a trap.
+    timeout_seconds: float = 30.0
     retries: int = 0
     error: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
@@ -313,7 +316,9 @@ class QualificationCampaign(BaseModel):
     leaderboard_ids: list[str] = Field(default_factory=list)
     criteria: QualificationCriteria
     started_at: datetime = Field(default_factory=_utcnow)
-    completed_at: datetime = Field(default_factory=_utcnow)
+    # L31: defaulting both to "now" reported a zero-duration campaign as
+    # complete. None until it actually completes.
+    completed_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"extra": "forbid"}

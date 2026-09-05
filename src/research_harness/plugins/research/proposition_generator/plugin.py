@@ -36,6 +36,12 @@ from research_harness.research.schemas.proposition import (
 
 logger = logging.getLogger(__name__)
 
+# L9: the claim types the proposition verifier can actually check. `threshold`
+# is a valid PropositionClaimType but the verifier has no implementation for
+# it, so advertising it here generated propositions whose only possible outcome
+# was a failed check with "claim_type not supported by the verifier".
+_VERIFIABLE_CLAIM_TYPES = ("monotonicity", "equality")
+
 
 class _PropItem(BaseModel):
     statement: str
@@ -224,14 +230,25 @@ class PropositionGeneratorService:
         return out
 
     async def _latest_verification(self, proposition_id: str) -> PropositionVerification | None:
+        """Newest verification for the proposition, or None.
+
+        L8: this returned the FIRST match. `store.list` is `created_at ASC`, so
+        for a proposition verified more than once that is the oldest — the same
+        defect as M65. A proposition re-verified after a fix kept acting on the
+        original, failed verdict.
+        """
+        newest: PropositionVerification | None = None
+        newest_at = None
         for env in await self._store.list(artifact_type="proposition_verification"):
             try:
                 v = env.parse_payload(PropositionVerification)
-                if v.proposition_id == proposition_id:
-                    return v
-            except Exception:
+                if v.proposition_id != proposition_id:
+                    continue
+                if newest is None or env.created_at >= newest_at:
+                    newest, newest_at = v, env.created_at
+            except Exception:  # noqa: BLE001
                 continue
-        return None
+        return newest
 
     def _build_schema(self) -> dict[str, Any]:
         return {
@@ -245,7 +262,7 @@ class PropositionGeneratorService:
                             "statement": {"type": "string"},
                             "claim_type": {
                                 "type": "string",
-                                "enum": PropositionClaimType.values(),
+                                "enum": list(_VERIFIABLE_CLAIM_TYPES),
                             },
                             "outcome_variable": {"type": "string"},
                             "parameter": {"type": "string"},

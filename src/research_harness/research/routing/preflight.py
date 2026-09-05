@@ -257,10 +257,12 @@ async def run_candidate_preflight(
     parsed: dict[str, Any] | None = None
     err = ""
     content: str | None = None
-    so_latency = (time.monotonic() - so_start) * 1000
+    # L28: the assignment that used to sit here was overwritten after the loop,
+    # and the inner call retried `retries` times on top of the outer loop's
+    # `retries`, making the attempt count (retries+1)**2 rather than retries+1.
     for _attempt in range(retries + 1):
         response, err = await _complete_with_retry(
-            provider, so_req, timeout_seconds=timeout_seconds, retries=retries
+            provider, so_req, timeout_seconds=timeout_seconds, retries=0
         )
         content = response.message.content if response is not None else None
         candidate_parsed = _parse_json_content(content)

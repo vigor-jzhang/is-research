@@ -971,7 +971,10 @@ class NumericalAnalysisService:
             return []
         total = round(sum(m.value for m in metrics), 9)
         notes.append(
-            "Only metrics definable from the model payoffs are computed; no fabricated welfare formulas."
+            "Only metrics definable from the model payoffs are computed. "
+            "`total_welfare` is an unweighted sum of the per-actor payoffs above, "
+            "i.e. a utilitarian welfare functional; it is not implied by the model "
+            "and no other welfare functional is claimed."
         )
         wa = WelfareAnalysis(
             model_id=model_id,

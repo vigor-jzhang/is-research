@@ -63,6 +63,11 @@ _NOVELTY_PATTERNS = [
 ]
 _NOVELTY_RE = re.compile("|".join(_NOVELTY_PATTERNS), flags=re.IGNORECASE)
 
+# L11: a normalised claim must still contain a substantive word, otherwise the
+# strip removed everything that mattered. 4+ letters, not 3: stripping "the
+# first study" leaves "the", which is non-empty but carries no content.
+_CONTENT_WORD_RE = re.compile(r"[A-Za-z]{4,}")
+
 
 class _FindingItem(BaseModel):
     statement: str
@@ -738,8 +743,17 @@ Rules:
         return out
 
     def _normalize_novelty(self, claim: str) -> tuple[str, bool]:
+        """Strip sweeping novelty language; never leave a contentless claim.
+
+        L11: if the pattern matched the WHOLE claim, stripping it left an empty
+        string, and producing a ContributionClaim with no content. Stripping can
+        also leave degenerate residue — "the first study" -> "the" — so the
+        result must still carry a real word, not merely be non-empty.
+        """
         if _NOVELTY_RE.search(claim):
-            return _NOVELTY_RE.sub("", claim).strip(), True
+            stripped = _NOVELTY_RE.sub("", claim).strip()
+            if stripped and _CONTENT_WORD_RE.search(stripped):
+                return stripped, True
         return claim, False
 
     def _resolve_finding_refs(

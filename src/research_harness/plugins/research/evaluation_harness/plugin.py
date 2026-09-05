@@ -118,7 +118,23 @@ class EvaluationHarnessService:
         self._blob_store = blob_store
         self._config = dict(config or {})
         self._judge_role = judge_role
-        self._cost_per_million = dict(cost_per_million_tokens or {"prompt": 0.0, "completion": 0.0})
+        # L34: an unset pricing table used to fall back to 0.0/0.0, so every
+        # unconfigured run reported $0.00 — indistinguishable from a genuinely
+        # free one. Keep it None so nothing is computed from a fabricated rate.
+        #
+        # The remaining half of L34 is a schema change and is NOT done here:
+        # `cost_usd` is a plain `float` on both EvaluationReport and
+        # EvaluationRun, and neither model has a metadata field, so a run cannot
+        # yet record "cost was never configured". Until then the warning below
+        # is what distinguishes the two cases in the logs.
+        self._cost_per_million = (
+            dict(cost_per_million_tokens) if cost_per_million_tokens else None
+        )
+        if self._cost_per_million is None:
+            logger.warning(
+                "no cost_per_million_tokens configured; reported costs will be 0.0, "
+                "not unknown — do not read them as free"
+            )
         self._producer = producer
 
     @property
@@ -297,11 +313,13 @@ class EvaluationHarnessService:
                 meta = r.model_metadata or {}
                 token_usage["prompt_tokens"] += int(meta.get("prompt_tokens") or 0)
                 token_usage["completion_tokens"] += int(meta.get("completion_tokens") or 0)
-                cost_usd += (
-                    int(meta.get("prompt_tokens") or 0) * self._cost_per_million.get("prompt", 0.0)
-                    + int(meta.get("completion_tokens") or 0)
-                    * self._cost_per_million.get("completion", 0.0)
-                ) / 1_000_000
+                if self._cost_per_million is not None:
+                    cost_usd += (
+                        int(meta.get("prompt_tokens") or 0)
+                        * self._cost_per_million.get("prompt", 0.0)
+                        + int(meta.get("completion_tokens") or 0)
+                        * self._cost_per_million.get("completion", 0.0)
+                    ) / 1_000_000
 
             case_result = self._build_case_result(case, c_env, produced, results)
             if workflow_error:
@@ -748,7 +766,19 @@ class EvaluationHarnessService:
         metrics: dict[str, float] = {}
         for r in results:
             if r.category == EvaluatorCategory.deterministic:
-                metrics.update(r.value.get("dimension_scores") or {})
+                # L3: `dict.update` silently let a later evaluator overwrite an
+                # earlier one's dimension score, so the reported number could
+                # come from the wrong evaluator with no trace.
+                for key, value in (r.value.get("dimension_scores") or {}).items():
+                    if key in metrics and metrics[key] != value:
+                        logger.warning(
+                            "dimension score %r from %s overwrites %s (was %s)",
+                            key,
+                            getattr(r, "evaluator_id", "?"),
+                            key,
+                            metrics[key],
+                        )
+                    metrics[key] = value
         return EvaluationCaseResult(
             case_id=case.id,
             case_name=case.name,

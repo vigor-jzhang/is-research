@@ -348,7 +348,11 @@ def audit_live_quality_benchmark(benchmark_id: str) -> BenchmarkCalibrationAudit
                     if key not in plan_keys:
                         grounding_bad.append((c.id, f"unresolved fixture placeholder {target!r}"))
         if c.id == "lq-evidence-extraction":
-            doc_pages = c.input.get("documents", [{}])[0].get("pages") or []
+            # L32: `.get(key, default)` only falls back when the key is MISSING,
+            # so `"documents": []` indexed [0] and raised IndexError, aborting
+            # the whole audit on a case that merely had no documents.
+            documents = c.input.get("documents") or [{}]
+            doc_pages = documents[0].get("pages") or []
             page_count = len(doc_pages)
             for p in doc_pages:
                 if int(p.get("page") or 0) < 1 or int(p.get("page") or 0) > max(page_count, 1):

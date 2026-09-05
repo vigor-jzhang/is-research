@@ -367,6 +367,21 @@ def build_qualification_matrix(
     )
 
 
+def _check_criteria_role(criteria: Any, role: str) -> None:
+    """L27: refuse criteria belonging to a different role.
+
+    The previous code silently relabelled them with `model_copy`, so passing
+    reasoning criteria while qualifying `critic` produced a summary that claimed
+    to be for `critic` but was judged on reasoning thresholds — which are
+    different (0.85 vs 0.90 on pass rate).
+    """
+    if criteria.role != role:
+        raise ValueError(
+            f"qualification criteria are for role {criteria.role!r}, "
+            f"not {role!r}; refusing to relabel them"
+        )
+
+
 def summarize_role_live(
     live_results: dict[str, LiveQualityModelResult],
     *,
@@ -380,8 +395,7 @@ def summarize_role_live(
     Role isolation: results whose `role` does not match the requested role are
     never considered (a reasoning-qualified model is not qualified for critic)."""
     criteria = criteria or criteria_for_role(role)
-    if criteria.role != role:
-        criteria = criteria.model_copy(update={"role": role})
+    _check_criteria_role(criteria, role)
     candidates = [
         candidate_result(result, criteria)
         for result in live_results.values()
@@ -607,8 +621,7 @@ def build_task_matrix(
     (Phase 7D.3). Role isolation enforced; role qualification is computed
     separately and recorded so task coverage never implies role qualification."""
     criteria = criteria or criteria_for_role(role)
-    if criteria.role != role:
-        criteria = criteria.model_copy(update={"role": role})
+    _check_criteria_role(criteria, role)
     tasks = tasks_for_role(role)
     rows: list[TaskQualificationResult] = []
     qualified_models_by_task: dict[str, list[str]] = {t: [] for t in tasks}

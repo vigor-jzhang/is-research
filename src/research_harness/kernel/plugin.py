@@ -20,7 +20,12 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+.*$")
+# L24: the trailing `.*` accepted anything after the three numeric components,
+# so a version like "1.2.3; DROP TABLE" validated. Allow only a semver
+# pre-release and/or build suffix.
+_VERSION_RE = re.compile(
+    r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
 
 
 class PluginMetadata(BaseModel):

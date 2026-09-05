@@ -26,7 +26,14 @@ from research_harness.research.schemas.tournament import (
 
 
 def percentile(values: Sequence[float], q: float) -> float | None:
-    """Nearest-rank percentile; None for empty input."""
+    """Linear-interpolation percentile; None for empty input.
+
+    L29: the docstring claimed "nearest-rank", but the implementation
+    interpolates between neighbours. It also never range-checked `q`, so
+    percentile(v, 5.0) silently extrapolated past the end of the sample.
+    """
+    if not 0.0 <= q <= 1.0:
+        raise ValueError(f"percentile q must be in [0, 1], got {q!r}")
     vals = sorted(values)
     if not vals:
         return None

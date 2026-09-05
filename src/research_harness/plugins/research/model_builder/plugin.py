@@ -353,6 +353,25 @@ class ModelBuilderService:
         mechanism_id: str,
         context: dict[str, Any],
     ) -> FormalAnalyticalModel:
+        # L22: the caps below are applied BEFORE validation, so an over-long
+        # spec validated as if it had always been this size and silently lost
+        # actors, variables or parameters — leaving expressions referring to
+        # symbols that no longer exist. Record what was dropped.
+        capped = (
+            ("actors", len(parsed.actors), self._max_actors),
+            ("variables", len(parsed.variables), self._max_variables),
+            ("parameters", len(parsed.parameters), self._max_parameters),
+            ("timing", len(parsed.timing), self._max_stages),
+            ("payoffs", len(parsed.payoffs), self._max_payoffs),
+            ("assumptions", len(parsed.assumptions), self._max_assumptions),
+        )
+        truncated = [
+            f"{name} {count}->{limit}" for name, count, limit in capped if count > limit
+        ]
+        if truncated:
+            context["truncated"] = truncated
+            logger.warning("model specification truncated: %s", ", ".join(truncated))
+
         actors = [
             ModelActor(
                 actor_id=a.actor_id,

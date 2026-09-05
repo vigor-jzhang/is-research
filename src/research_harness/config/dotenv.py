@@ -51,7 +51,9 @@ def load_dotenv(dotenv_path: str | pathlib.Path | None = None, override: bool = 
 def _load_file(path: pathlib.Path, override: bool = False) -> None:
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    # L35: a non-UTF-8 .env file used to escape raw; skip it like an unreadable
+    # one instead.
+    except (OSError, UnicodeDecodeError):
         return
     for line in text.splitlines():
         line = line.strip()

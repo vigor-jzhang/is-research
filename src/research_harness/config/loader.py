@@ -20,7 +20,9 @@ def load_config(path: str | pathlib.Path) -> AppConfig:
         data: Any = yaml.safe_load(text) or {}
     except yaml.YAMLError as e:
         raise ConfigurationError(f"failed to parse YAML {p}: {e}") from e
-    except OSError as e:
+    # L35: UnicodeDecodeError is a ValueError, not an OSError, so a config file
+    # in the wrong encoding escaped as a raw traceback.
+    except (OSError, UnicodeDecodeError) as e:
         raise ConfigurationError(f"failed to read config {p}: {e}") from e
 
     if not isinstance(data, dict):

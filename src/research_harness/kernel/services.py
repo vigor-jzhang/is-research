@@ -73,8 +73,11 @@ class ServiceRegistry:
         return len(self._services)
 
     def __bool__(self) -> bool:
-        # Registry should be truthy even when empty to avoid `or` pitfalls
-        return True
+        # L25: this returned True unconditionally, so `len(r) == 0` and `bool(r)`
+        # disagreed — the one place the container protocol must be consistent.
+        # Nothing in src/ relies on the old behaviour: callers test
+        # `is None`, not truthiness (kernel/plugin.py:90-102).
+        return len(self._services) > 0
 
     def __contains__(self, name: object) -> bool:
         return name in self._services

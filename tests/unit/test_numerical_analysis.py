@@ -522,7 +522,9 @@ async def test_welfare_calculation(tmp_path: pathlib.Path):
     pi1 = next(m for m in w.metrics if m.actor_id == "f1")
     assert pi1.value == pytest.approx(9.0, abs=1e-6)
     assert w.total_welfare == pytest.approx(18.0, abs=1e-6)
-    assert any("no fabricated welfare formulas" in n for n in w.notes)
+    # L17: the note used to claim "no fabricated welfare formulas" while the
+    # artifact shipped `total_welfare` — a utilitarian sum. It now says so.
+    assert any("utilitarian" in n for n in w.notes)
 
 
 @pytest.mark.asyncio
