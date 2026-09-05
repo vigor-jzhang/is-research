@@ -38,10 +38,17 @@ from research_harness.research.schemas.numerical import (
     WelfareAnalysis,
     WelfareMetric,
 )
-from research_harness.research.schemas.proposition import Proposition
+from research_harness.research.schemas.proposition import (
+    Proposition,
+    PropositionStatus,
+)
 from research_harness.research.symbolic import parse_sympy
 
 logger = logging.getLogger(__name__)
+
+# L16: a derivative smaller than this is numerically zero. sympy.N(expr, 12)
+# leaves residue of order 1e-13, which used to read as a definite sign.
+_SIGN_TOLERANCE = 1e-9
 
 _ARTIFACT_POINT_THRESHOLD = 500
 
@@ -168,9 +175,15 @@ class NumericalAnalysisService:
             e.variable: parse_sympy(e.expression.expression, table) for e in candidate.expressions
         }
         candidate_conditions = [c for e in candidate.expressions for c in e.conditions]
-        payoff_exprs = {
-            p.actor_id: parse_sympy(p.expression.expression, table) for p in model.payoffs
-        }
+        payoff_exprs: dict[str, Any] = {}
+        # L19: also keep the expressions index-aligned with model.payoffs. An
+        # actor with more than one payoff collided in the actor-keyed dict, so
+        # all but the last were dropped silently.
+        payoff_exprs_by_index: list[Any] = []
+        for p in model.payoffs:
+            expr = parse_sympy(p.expression.expression, table)
+            payoff_exprs_by_index.append(expr)
+            payoff_exprs[p.actor_id] = expr
         outcome_domains = {v.symbol: v for v in model.variables if v.symbol in candidate_exprs}
 
         # ------------------------------------------------------------------
@@ -187,6 +200,7 @@ class NumericalAnalysisService:
         all_results: list[NumericalResult] = []
         evaluated = 0
         infeasible = 0
+        feasible = 0
 
         for sweep in sweeps:
             for point in self._points_of(sweep):
@@ -217,6 +231,8 @@ class NumericalAnalysisService:
                 )
                 if not res.feasible:
                     infeasible += 1
+                else:
+                    feasible += 1
                 if evaluated <= self._artifact_threshold:
                     r_env = ArtifactEnvelope.create(
                         payload=res,
@@ -258,7 +274,14 @@ class NumericalAnalysisService:
         )
         exec_record.robustness_created = len(robustness_ids)
         welfare_ids = await self._welfare(
-            exec_id, candidate.model_id, candidate_id, model, all_results, params, payoff_exprs
+            exec_id,
+            candidate.model_id,
+            candidate_id,
+            model,
+            all_results,
+            params,
+            payoff_exprs,
+            payoff_exprs_by_index,
         )
         exec_record.welfare_created = len(welfare_ids)
         exec_record.completed_at = datetime.now(UTC)
@@ -288,7 +311,9 @@ class NumericalAnalysisService:
             welfare=welfare_ids,
             status="completed",
             summary=(
-                f"{len(results)} feasible results, {infeasible} infeasible points, "
+                # L15: `results` holds every evaluated point, feasible or not,
+                # so this used to report infeasible points as feasible results.
+                f"{feasible} feasible results, {infeasible} infeasible points, "
                 f"{len(robustness_ids)} robustness check(s), {len(welfare_ids)} welfare analysis(es)"
             ),
             metadata={"series_blob_ref": blob_ref} if blob_ref else {},
@@ -417,14 +442,38 @@ class NumericalAnalysisService:
         return sweep_envs
 
     def _default_parameters(self, params: dict[str, ModelParameter]) -> dict[str, float]:
-        """Deterministic baseline defaults: 1.0, or 10.0 for demand-like names."""
+        """Deterministic baseline defaults: 1.0, or 10.0 for demand-like names.
+
+        L15: the heuristic value is now reconciled with the declared domain.
+        A parameter declared on [0,1] used to start at 1.0 — the very edge of
+        its domain — so the sweeps derived from it (0.5x to 2x, and 0 to 1.5x)
+        immediately ran outside the domain and most scenarios were infeasible
+        from the outset.
+        """
         defaults: dict[str, float] = {}
         for name, p in params.items():
-            if "demand" in p.meaning.lower() or name == "a":
-                defaults[name] = 10.0
-            else:
-                defaults[name] = 1.0
+            preferred = 10.0 if ("demand" in p.meaning.lower() or name == "a") else 1.0
+            defaults[name] = self._default_within_domain(p, preferred)
         return defaults
+
+    def _default_within_domain(self, param: Any, preferred: float) -> float:
+        """L15: pull a heuristic default inside the parameter's declared domain."""
+        domain = (getattr(param, "domain", "R") or "R").strip()
+        if domain.startswith("[") and domain.endswith("]"):
+            try:
+                lo_s, hi_s = domain.strip("[]").split(",")
+                lo, hi = float(lo_s), float(hi_s)
+            except Exception:  # noqa: BLE001
+                return preferred
+            # The midpoint represents the domain. An edge value is degenerate
+            # (a probability of exactly 1.0) and pushes the derived sweep
+            # ranges straight out of the domain.
+            return (lo + hi) / 2.0
+        if domain in ("R_+", "R+", "> 0") and preferred <= 0:
+            return 1.0
+        if domain in ("R_-", "R-", "< 0") and preferred >= 0:
+            return -1.0
+        return preferred
 
     def _points_of(self, sweep_env: Any) -> list[dict[str, float]]:
         import numpy as np  # type: ignore[import-untyped]
@@ -438,6 +487,14 @@ class NumericalAnalysisService:
             vals = np.linspace(dim.start, dim.end, dim.steps)
             return [{**base, dim.parameter: round(float(v), 12)} for v in vals]
         dims = sweep.dimensions
+        # L15: a grid sweep carrying fewer than two dimensions raised IndexError
+        # and aborted the whole experiment. Degenerate grids are handled instead.
+        if not dims:
+            return [base]
+        if len(dims) == 1:
+            dim0 = dims[0]
+            vals0 = np.linspace(dim0.start, dim0.end, dim0.steps)
+            return [{**base, dim0.parameter: round(float(v), 12)} for v in vals0]
         v1 = np.linspace(dims[0].start, dims[0].end, dims[0].steps)
         v2 = np.linspace(dims[1].start, dims[1].end, dims[1].steps)
         return [
@@ -706,6 +763,33 @@ class NumericalAnalysisService:
                 continue
             if prop.model_id != model_id:
                 continue
+            # L16: a proposition the verifier already refuted is not something to
+            # hunt for numerical support for. Reporting "supported" for a claim
+            # whose status is `failed` contradicts the verification and reads as
+            # evidence it is not.
+            if prop.status in (PropositionStatus.failed, PropositionStatus.rejected):
+                refuted = RobustnessCheck(
+                    model_id=model_id,
+                    equilibrium_candidate_id=candidate_id,
+                    experiment_id=exec_id,
+                    proposition_id=env.artifact_id,
+                    check_type=RobustnessCheckType.proposition_support,
+                    description=f"numerical support of: {prop.statement[:90]}",
+                    outcome=RobustnessOutcome.not_testable,
+                    admissible_points=0,
+                    conclusion=(
+                        f"proposition status is {prop.status.value}; a refuted claim "
+                        f"is not tested for numerical support"
+                    ),
+                )
+                r_env = ArtifactEnvelope.create(
+                    payload=refuted,
+                    artifact_type="robustness_check",
+                    producer="research.numerical_analysis",
+                )
+                await self._store.put(r_env)
+                out.append(r_env.artifact_id)
+                continue
             check = await self._check_proposition_numerically(
                 exec_id,
                 model_id,
@@ -792,7 +876,15 @@ class NumericalAnalysisService:
             except Exception:  # noqa: BLE001
                 continue
             admissible += 1
-            sign = "positive" if dval > 0 else "negative" if dval < 0 else "zero"
+            # L16: compare against a tolerance. sympy.N(..., 12) leaves residue
+            # of order 1e-13, so a derivative that is mathematically zero read as
+            # "positive" and produced a spurious violation.
+            if dval > _SIGN_TOLERANCE:
+                sign = "positive"
+            elif dval < -_SIGN_TOLERANCE:
+                sign = "negative"
+            else:
+                sign = "zero"
             if sign != prop.expected_sign:
                 violations.append(
                     RobustnessViolation(
@@ -838,6 +930,7 @@ class NumericalAnalysisService:
         numerical_results: Sequence[NumericalResult | str],
         params: dict[str, ModelParameter],
         payoff_exprs: dict[str, Any],
+        payoff_exprs_by_index: list[Any] | None = None,
     ) -> list[str]:
         import sympy
 
@@ -855,8 +948,13 @@ class NumericalAnalysisService:
         subs.update({sympy.Symbol(k): float(v) for k, v in baseline.outcomes.items()})
         metrics: list[WelfareMetric] = []
         notes: list[str] = []
-        for payoff in model.payoffs:
-            expr = payoff_exprs[payoff.actor_id]
+        for _idx, payoff in enumerate(model.payoffs):
+            # L19: index-aligned, so an actor with two payoffs uses its own.
+            expr = (
+                payoff_exprs_by_index[_idx]
+                if payoff_exprs_by_index is not None
+                else payoff_exprs.get(payoff.actor_id)
+            )
             try:
                 val = float(sympy.N(expr.subs(subs), 12))  # type: ignore[arg-type]
                 metrics.append(

@@ -35,6 +35,53 @@ from research_harness.research.symbolic import (
 logger = logging.getLogger(__name__)
 
 
+def _soc_hessian(payoff_sym: Any, dvs: list[str], subs: dict[str, Any]) -> Any:
+    """Second-derivative matrix of `payoff_sym` w.r.t. `dvs`, then substituted.
+
+    L18: the diagonal alone (`diff(payoff, dv, 2)`) omits the cross-partials, so
+    for an actor controlling several variables it cannot detect a payoff that is
+    concave in each variable but not jointly.
+    """
+    import sympy
+
+    rows: list[list[Any]] = []
+    for i in range(len(dvs)):
+        row: list[Any] = []
+        for j in range(len(dvs)):
+            row.append(
+                sympy.simplify(
+                    sympy.cancel(
+                        sympy.diff(
+                            payoff_sym, sympy.Symbol(dvs[i]), sympy.Symbol(dvs[j])
+                        ).subs(subs)  # type: ignore[arg-type]
+                    )
+                )
+            )
+        rows.append(row)
+    return sympy.Matrix(rows)
+
+
+def _negative_definite(matrix: Any) -> bool | None:
+    """Is `matrix` negative definite? True/False, or None when undecidable.
+
+    L18: Sylvester's criterion applied to -M (negative definite iff -M is
+    positive definite iff every leading principal minor of -M is positive).
+    Returns None when a minor still contains symbols, so a symbolic payoff is
+    reported as "not shown" rather than silently passing.
+    """
+    import sympy
+
+    neg = -matrix
+    for k in range(1, neg.rows + 1):
+        minor = sympy.simplify(neg[:k, :k].det())
+        if minor.free_symbols:
+            return None
+        if sympy.ask(sympy.Q.positive(minor)) is not True:
+            return False
+    return True
+
+
+
 class EquilibriumVerifierService:
     def __init__(self, artifact_store: Any) -> None:
         self._store = artifact_store
@@ -238,12 +285,63 @@ class EquilibriumVerifierService:
             return checks, conditions, notes
 
         # 3. Second-order conditions (interior maximization: concave payoff)
+        #
+        # L18: group each actor's decision variables. Checking only the diagonal
+        # second derivative ignores cross-partials, so a payoff concave in each
+        # variable separately could still fail to be jointly concave.
+        soc_dvs_by_actor: dict[str, list[str]] = {}
         for actor, dv, _foc in foc_exprs:
+            soc_dvs_by_actor.setdefault(actor, []).append(dv)
+        for actor, dvs in soc_dvs_by_actor.items():
             payoff_sym = game_payoffs[actor]
-            dv_sym = sympy.Symbol(dv)
-            soc = sympy.simplify(
-                sympy.cancel(sympy.diff(payoff_sym, dv_sym, 2).subs(candidate_map))  # type: ignore[arg-type]
-            )
+            hessian = _soc_hessian(payoff_sym, dvs, candidate_map)
+            if len(dvs) > 1:
+                definite = _negative_definite(hessian)
+                if definite is True:
+                    checks.append(
+                        VerificationCheck(
+                            check_type=CheckType.second_order_condition,
+                            passed=True,
+                            detail=(
+                                f"Hessian of {actor} over {dvs} is negative definite "
+                                f"(cross-partials included)"
+                            ),
+                            symbolic_detail=str(hessian),
+                        )
+                    )
+                else:
+                    conditions.append(f"Hessian({actor}) negative definite")
+                    checks.append(
+                        VerificationCheck(
+                            check_type=CheckType.second_order_condition,
+                            passed=False,
+                            detail=(
+                                f"Hessian of {actor} over {dvs} is not negative "
+                                f"definite (cross-partials included); local optimum "
+                                f"unverified"
+                            ),
+                            symbolic_detail=str(hessian),
+                        )
+                    )
+                continue
+            soc = hessian[0, 0]
+            if soc == 0:
+                # L18: the old code recorded the condition "0 < 0", which is
+                # unsatisfiable by construction — emitted as a requirement that
+                # could never be met.
+                checks.append(
+                    VerificationCheck(
+                        check_type=CheckType.second_order_condition,
+                        passed=False,
+                        detail=(
+                            f"SOC of {actor} w.r.t. {dvs[0]} is exactly 0: the "
+                            f"second-order test is inconclusive (flat, not a strict "
+                            f"local maximum)"
+                        ),
+                        symbolic_detail=str(soc),
+                    )
+                )
+                continue
             if soc.free_symbols:
                 conditions.append(f"{soc} < 0")
                 checks.append(
@@ -251,7 +349,7 @@ class EquilibriumVerifierService:
                         check_type=CheckType.second_order_condition,
                         passed=False,
                         detail=(
-                            f"SOC of {actor} w.r.t. {dv} is symbolic "
+                            f"SOC of {actor} w.r.t. {dvs[0]} is symbolic "
                             f"({soc}); required condition recorded, not globally signable"
                         ),
                         symbolic_detail=str(soc),
@@ -262,7 +360,7 @@ class EquilibriumVerifierService:
                     VerificationCheck(
                         check_type=CheckType.second_order_condition,
                         passed=True,
-                        detail=f"SOC of {actor} w.r.t. {dv} is {soc} < 0",
+                        detail=f"SOC of {actor} w.r.t. {dvs[0]} is {soc} < 0",
                         symbolic_detail=str(soc),
                     )
                 )
@@ -273,7 +371,7 @@ class EquilibriumVerifierService:
                         check_type=CheckType.second_order_condition,
                         passed=False,
                         detail=(
-                            f"SOC of {actor} w.r.t. {dv} is {soc}, not "
+                            f"SOC of {actor} w.r.t. {dvs[0]} is {soc}, not "
                             f"negative; local optimum unverified"
                         ),
                         symbolic_detail=str(soc),

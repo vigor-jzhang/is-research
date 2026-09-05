@@ -137,8 +137,15 @@ class EquilibriumDeriverService:
         table = {v.symbol: v for v in model.variables}
         table.update({p.symbol: p for p in model.parameters})
         payoff_syms: dict[str, Any] = {}
+        # L19: also keep the expressions index-aligned with model.payoffs. An
+        # actor with more than one payoff (one per stage) collided in the
+        # actor-keyed dict, so every payoff but the last was dropped and all of
+        # that actor's FOCs were derived from the wrong objective.
+        payoff_exprs: list[Any] = []
         for p in model.payoffs:
-            payoff_syms[p.actor_id] = parse_sympy(p.expression.expression, table)
+            expr = parse_sympy(p.expression.expression, table)
+            payoff_exprs.append(expr)
+            payoff_syms[p.actor_id] = expr
 
         # ------------------------------------------------------------------
         # 2. Optimization problems + FOCs + best responses (SymPy)
@@ -148,7 +155,7 @@ class EquilibriumDeriverService:
         brs: list[str] = []
         foc_data: list[tuple[str, str, Any, Any]] = []  # actor, dv, foc(sympy), payoff(sympy)
 
-        for payoff in model.payoffs:
+        for idx, payoff in enumerate(model.payoffs):
             if not payoff.decision_variables:
                 continue
             problem = OptimizationProblem(
@@ -178,7 +185,8 @@ class EquilibriumDeriverService:
 
             import sympy
 
-            pay = payoff_syms[payoff.actor_id]
+            # L19: index-aligned, so an actor with two payoffs uses its own.
+            pay = payoff_exprs[idx]
             for dv in payoff.decision_variables:
                 dv_sym = sympy.Symbol(dv)
                 foc_sym = sympy.diff(pay, dv_sym)

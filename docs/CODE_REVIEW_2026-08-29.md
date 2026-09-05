@@ -97,7 +97,9 @@ in the working tree, uncommitted.
 | **L38** evidence gathering | **Partially fixed** (round 21) | `novelty_validator/plugin.py` |
 | **M32-M34, M38, M40-M42, M49** literature/documents correctness | **Fixed** (round 22) | `synthesis`, `crossref`, `semantic_scholar`, `identity_resolver`, `screening_orchestrator`, `title_abstract_screener`, `locator_unpaywall` |
 | **M46** redirect bound | **Refuted** (round 22) — see round-22 notes | — |
-| The remaining M/L backlog | **Triaged** (round 19) — 72 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **L15, L16, L18, L19** scientific-core follow-on | **Fixed** (round 23) | `numerical_analysis`, `equilibrium_verifier`, `equilibrium_deriver` |
+| **L21** actor in two stages | **Blocked** (round 23) — needs a timing schema change | — |
+| The remaining M/L backlog | **Triaged** (round 19) — 68 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -767,6 +769,64 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 23 notes (L15, L16, L18, L19, L21 — scientific-core follow-on)
+
+Batch 5, the last of the five triage batches. Four fixed; one blocked, and the
+block is the most useful thing in this round.
+
+- **L15** — three separate defects in one service. (a) Baseline defaults ignored
+  declared domains: a parameter on `[0,1]` started at 1.0, the domain edge, so
+  the sweeps derived from it (0.5x to 2x, and 0 to 1.5x) ran outside the domain
+  and most scenarios were infeasible before they began. Bounded intervals now
+  default to their midpoint. (b) `_points_of` indexed `dimensions[1]`
+  unconditionally, so a grid sweep carrying fewer than two dimensions raised
+  `IndexError` and aborted the whole experiment. (c) The summary reported
+  "`{len(results)}` feasible results", but `results` holds every evaluated point
+  — feasible or not — so infeasible points were counted as feasible results.
+- **L16** — (a) propositions the verifier had already refuted were still tested
+  for numerical support, and could come back `supported`. Since the benchmark
+  fixtures do set `PropositionStatus.failed`, this was reachable. A refuted
+  claim is now recorded `not_testable` rather than silently supported. (b) The
+  sign comparison used `sympy.N(expr, 12)` and then `> 0`, so a derivative of
+  1e-13 — zero to any sane precision — produced a definite sign and a spurious
+  `violated` outcome. Now compared against a tolerance.
+- **L18** — second-order conditions checked only the diagonal second derivative.
+  Payoffs are now grouped per actor and the **Hessian** (cross-partials
+  included) tested for negative definiteness via Sylvester's criterion, with a
+  symbolic result reported as "not shown" rather than silently passing. Verified
+  end to end: `-(q1^2) - q2^2 + 4*q1*q2` has both diagonal entries at -2 — so the
+  old check passed it — but the Hessian has eigenvalues -6 and +2, i.e. a saddle.
+  It is now rejected. Separately, `soc == 0` used to emit the condition `0 < 0`,
+  which is unsatisfiable by construction: emitted as a requirement that could
+  never be met. It is now reported as an inconclusive second-order test.
+- **L19** — payoffs were keyed by `actor_id`, so an actor with more than one
+  payoff lost all but the last, and every FOC for that actor was differentiated
+  from the wrong objective. The expressions are now index-aligned with
+  `model.payoffs` in both the deriver and the numerical analysis service.
+
+**L21 is blocked, not fixed — and attempting it broke six tests.** The finding
+is that an actor appearing in two stages is bound only to the first. The
+"obvious" fix (bind the actor to every stage it appears in) is **wrong**: the
+monopoly fixture lists the platform in a `payoffs realized` stage as well as its
+decision stage, and `ModelTimingStage` records only `actor_ids` — "actors active
+at this stage" — with no field for which variables are decided there. So
+"appears in a stage" cannot be distinguished from "decides in a stage", and the
+fix turned a single-stage game into a sequential one and derailed backward
+induction. The change was reverted. Fixing L21 needs the schema to say what is
+decided in a stage (e.g. `decision_variables` on `ModelTimingStage`).
+
+**A related collision L19 does not name.** `game_consistent_payoffs` in
+`research/symbolic.py` keys payoffs by `actor_id` too, so the **verifier** has
+the same defect. It is why the L19 regression test accepts `partially_derived`:
+the candidate expressions are now correct, but verification still sees one
+payoff per actor. Left alone deliberately — it is the backward-induction core
+rewritten for C4, and worth its own round rather than a drive-by change.
+
+**Test note.** Of the 15 added tests, 13 fail before the change. The 2 that pass
+both ways are guards: a jointly concave payoff must still verify (the Hessian
+check must not over-reject), and the monopoly model must still be treated as
+single-stage (pinning the L21 finding until the schema can express it).
 
 ### Round 22 notes (M32-M42, M46, M49 — literature and documents)
 
@@ -2006,20 +2066,20 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
   anywhere**; a `disputes` verdict cannot affect any outcome.
 - **L14** **Fixed (round 21).** `novelty_validator:971-984, 2105-2113` — "not threatened" can be concluded from
   bibliographic metadata alone for medium/low-risk claims.
-- **L15** `numerical_analysis:242-244, 286-368` — baseline defaults ignore declared domains
+- **L15** **Fixed (round 23).** `numerical_analysis:242-244, 286-368` — baseline defaults ignore declared domains
   (a `[0,1]` probability gets 1.0); `_points_of:381-403` raises `IndexError` for a 1-D grid;
   summary says "N feasible results" but counts infeasible ones.
-- **L16** `numerical_analysis:618-642` — proposition robustness includes **failed**
+- **L16** **Fixed (round 23).** `numerical_analysis:618-642` — proposition robustness includes **failed**
   propositions; sign compared at 12 digits with no tolerance (`1e-13` ⇒ spurious "violated").
 - **L17** `numerical_analysis:790` — `total_welfare` is an unjustified utilitarian sum, only
   computed at baseline, failing silently into `notes`.
-- **L18** `equilibrium_verifier:214-254` — SOC checks diagonal second derivatives only (no
+- **L18** **Fixed (round 23).** `equilibrium_verifier:214-254` — SOC checks diagonal second derivatives only (no
   Hessian/cross-partials) and emits an unsatisfiable `0 < 0` condition when `soc == 0`.
-- **L19** `equilibrium_deriver:139-141`, `numerical_analysis:123-125, 774-775` — payoff dict
+- **L19** **Fixed (round 23).** `equilibrium_deriver:139-141`, `numerical_analysis:123-125, 774-775` — payoff dict
   keyed by `actor_id` silently overwrites duplicate payoffs.
 - **L20** `equilibrium_deriver:761-770` vs `372-377` — analysis says `partially_derived`
   where the execution says `failed` for `pending`.
-- **L21** `symbolic.py:28-33` — an actor in two stages is bound to the first.
+- **L21** **Blocked (round 23).** `symbolic.py:28-33` — an actor in two stages is bound to the first.
 - **L22** `model_builder:365-393` — truncates before validating.
 - **L23** `kernel/manager.py:88-92` — optional dependencies participate in cycle detection,
   so a legitimate A→requires B, B→optional A configuration refuses to boot (**verified**).
@@ -2197,8 +2257,8 @@ The review found several classes of defect the suite structurally cannot catch:
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
 | Medium (M1-M86) | 86 | 47 | **39** |
-| Low (L1-L39) | 39 | 5 | **34** |
-| **Total** | **158** | **86** | **72** |
+| Low (L1-L39) | 39 | 10 | **29** |
+| **Total** | **158** | **90** | **68** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
@@ -2210,7 +2270,7 @@ derived finding-by-finding from §4/§5 against the progress table in §1.1.
 - Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
   M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
-  (round 21). **L38 is partially fixed** and stays open — see the round-21 notes.
+  (round 21), **L15, L16, L18, L19** (round 23). **L21 is blocked**, not fixed. **L38 is partially fixed** and stays open — see the round-21 notes.
 
 ### 9.1 Legend
 
@@ -2224,7 +2284,7 @@ derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
 Effort means **fix + regression test + full-suite verification**, not just the edit.
 
-### 9.2 Small bucket — 31 findings (~15 h)
+### 9.2 Small bucket — 27 findings (~13 h)
 
 **Routing / qualification — wrong numbers that steer decisions: done (round 19).**
 
@@ -2256,7 +2316,7 @@ items still open are the structure cluster in §9.3 (M72, M73, M76, L33).
 
 **Round-11 pass (1):** M84 — `missing_abstract` hard-coded `0` instead of aggregating the real flag.
 
-**Low (22, all S):** L2, L3, L4, L5, L6, L8, L9, L11, L16, L17, L19, L22, L24, L25, L27, L28, L30, L31, L32, L34, L35, L36, L37.
+**Low (18, all S):** L2, L3, L4, L5, L6, L8, L9, L11, L17, L22, L24, L25, L27, L28, L30, L31, L32, L34, L35, L36, L37.
 
 Notable among these because they are *verified* wrong, not merely untidy:
 **L12** — `"for the first time"` is blacklisted, so the canonical `absolute_priority/critical`
@@ -2275,7 +2335,7 @@ novelty phrase is **never detected** (and the span merge keeps the earlier risk)
 | CLI structure | M72, M73, M76, L33 | M72 and M73 span 8 options and 12+ error paths in a 7 400-line file; M76 is `extra_plugins` ignored by 3 more builders (23 call sites) — same shape as H14. |
 | Round-11 leftovers | M83, M85 | M83: decide whether to *emit* `_completed` or drop the metric. M85: honour or remove 5 stored-but-unread knobs (the `results_assembler` one is a live 3-calls-vs-budget-1 difference). |
 | Novelty | L38 (partial) | L13: wire the unconsumed critic pass or delete it. L14: stop concluding "not threatened" from metadata alone. L38 needs measurement. |
-| Scientific core | L7, L15, L18, L21 | Follow-ons to H6-H12. L18 (SOC ignores cross-partials) and L21 (actor in two stages) are real math defects, not hygiene. |
+| Scientific core | L7 | Follow-on to H6-H12 (symbolic table plumbing). |
 | Determinism / misc | L1, L10, L23, L26, L29, L33 | L1 needs a deterministic-id scheme; **L23 ⚠** touches `manager.py`, rewritten in round 15; L26 is shared mutable criteria (pairs with M28). |
 
 ### 9.4 Large bucket — 2 findings (~16 h)
@@ -2311,7 +2371,7 @@ span `main.py`).
 | 2 | ~~CLI reporting + exit codes~~ | ~~M65-M71, M74, M75, L39~~ | **done (round 20)** |
 | 3 | ~~Novelty detector~~ | ~~L12, L13, L14~~ done; **L38 partial** | **done (round 21)** |
 | 4 | ~~Literature correctness~~ | ~~M32-M34, M38, M40-M42, M46, M49~~ | **done (round 22)** |
-| 5 | Scientific-core follow-on | L15, L16, L18, L19, L21 | 4 S, 1 M |
+| 5 | ~~Scientific-core follow-on~~ | ~~L15, L16, L18, L19~~ done; **L21 blocked** | **done (round 23)** |
 | 6 | Routing semantics | M18, M21, M23, M25, M28, M30, M31, L26 | 8 M |
 | 7 | Kernel / config hygiene | M51-M55, M57, M58, M60, M63, M64, L24, L25, L34, L35, L36, L37 | 13 S |
 | 8 | Fetcher / network (⚠) | M44, M45, M47, M50 | 4 M |
@@ -2320,10 +2380,10 @@ span `main.py`).
 | 11 | CLI structure | M72, M73, M76, L33 | 4 M |
 | 12 | Large, one round each | M48, then M78 | 2 L |
 
-Batch 5 is ~5 findings and clears the last of the *verified wrong* findings
-in the small bucket. The long tail is hygiene.
+All five triage batches are now done. What is left is the semantic M-bucket
+(§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total: ~108 h** (batches 1-4, ~18 h, are done). That is the honest number, and it is why the next
+**Rough total: ~105 h** (all five batches, ~21 h, are done). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Candidates for closing as accepted (from the S bucket)
