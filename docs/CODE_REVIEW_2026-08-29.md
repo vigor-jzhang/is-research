@@ -106,7 +106,8 @@ in the working tree, uncommitted.
 | **M35, M36, M37, M39, M43** literature semantics | **Fixed** (round 27) | `identity_resolver`, `gap_analyzer`, `screening_orchestrator`, `locator_unpaywall` |
 | **M72, M73, M76, L33** CLI structure | **Fixed** (round 28) | `cli/main.py` |
 | **M53, M54, M56, M59, M61** bootstrap / config | **Fixed** (round 29) | `bootstrap.py`, `config/dotenv.py`, `contracts/`, `sessions/jsonl` |
-| The remaining M/L backlog | **Triaged** (round 19) — 30 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **M50, M51, M52, M55, M57, M58, M60, M63, M64** the un-batched M50-M64 block | **Fixed** (round 30) | `kernel/__init__.py`, `bootstrap.py`, `config/schema.py`, `blobs_filesystem`, `artifacts_sqlite`, `contracts/evaluator.py`, `registry.py`, `fetcher_http` |
+| The remaining M/L backlog | **Triaged** (round 19) — 21 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -776,6 +777,55 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 30 notes (M50-M64 sweep)
+
+Nine findings that had never been triaged into a batch. M53/M54/M56/M59/M61 were
+closed in round 29; M62 is still open (see the round-29 notes).
+
+- **M51** — `Runtime` was listed in `kernel.__all__` but imported only under
+  `TYPE_CHECKING`, so `from research_harness.kernel import Runtime` raised
+  `ImportError`. `AutonomyError` was not exported at all, despite existing in
+  `kernel/errors.py`. Both now imported and exported normally.
+- **M55** — `AppConfig.plugin_config()` had zero callers and had drifted from the
+  live `_derived_plugin_configs` by ~22 plugin ids, so it answered confidently
+  and wrongly. Deleted (68 lines).
+- **M52** — per-plugin config overrides were merged with `{**derived, **override}`,
+  so an override supplying one key of a section discarded every other key the
+  derived config had computed for it. Now merged one level into each section,
+  leaving non-dict values to be replaced outright.
+- **M63** — `envelope_payload_dict` returned `{}` for a payload it could not read,
+  so an evaluator scored that artifact as if it were genuinely empty — a silent
+  "fails everything" result that looks like a real evaluation. It now raises
+  `EvaluatorError`.
+- **M60** — `_row_to_link` substituted `datetime.now(UTC)` for a stored timestamp
+  it could not parse, turning corrupt data into a plausible link with a false
+  creation time. Now raises `ArtifactStoreError`.
+- **M64** — `registry.create_plugin` raised `ValueError` where
+  `bootstrap.create_plugin` raises `PluginError` for the same condition, so a
+  caller catching `ResearchHarnessError` missed one of the two. Now `PluginError`.
+- **M57** — `put_bytes` wrote the blob with a single `os.write`, which is allowed
+  to write less than the whole buffer, and then closed the fd both inline and
+  again in the `finally` (the second close always failed and was swallowed). Now
+  uses `os.fdopen`, which owns the fd and writes until drained.
+- **M58** — `exists()` and `stat()` caught every exception and reported "absent",
+  so a failing disk was indistinguishable from a missing blob. `OSError` now
+  propagates; a malformed reference is still simply absent, which is the claim
+  the caller is actually asking about.
+- **M50** — when an HTTP client is injected, the fetcher cannot install its pinned
+  transport, so DNS-rebinding protection is off. That was silent. It now logs a
+  warning naming the exposure. **This is a warning, not a fix**: the protection
+  still cannot be applied to a client the fetcher did not construct, and the
+  comment explaining why (a real lookup would dead-end offline fixtures) still
+  holds. Making it a hard error would break the benchmark fixtures.
+
+**Test note.** 12 of the 17 added tests fail before the change; the 5 that pass
+both ways are guards (an override still wins, a malformed reference is still
+absent, dict/model payloads still convert, `PluginError` is still a
+`ResearchHarnessError`, and no warning when the fetcher owns the client). The
+partial-write test patches `os.write` to write only 16 bytes per call — the old
+single-`os.write` path truncated the blob and then failed its own digest check,
+and the double-close test counts `os.close` calls on the temporary fd.
 
 ### Round 29 notes (M53, M54, M56, M59, M61 — bootstrap / config)
 
@@ -2154,14 +2204,14 @@ failed attempt.
   `requests_per_second`/`max_concurrency`/`retry` fields.
 - **M49** **Fixed (round 22).** Unbounded `Retry-After` sleeps (`crossref:106-128`, `semantic_scholar:101-119`) —
   `Retry-After: 86400` ⇒ 24 h per attempt, ×4.
-- **M50** `fetcher_http:233-234` — SSRF pinning silently disabled when a client is injected
+- **M50** **Fixed (round 30).** `fetcher_http:233-234` — SSRF pinning silently disabled when a client is injected
   (`if self._own_client`), losing DNS-rebinding protection with no warning.
 
 **Core / config**
-- **M51** `kernel/__init__.py:21-22` — `Runtime` is in `__all__` but imported only under
+- **M51** **Fixed (round 30).** `kernel/__init__.py:21-22` — `Runtime` is in `__all__` but imported only under
   `TYPE_CHECKING`. **Verified:** `from research_harness.kernel import Runtime` → `ImportError`.
   `AutonomyError` missing entirely.
-- **M52** `bootstrap.py:292-296` — per-plugin config overrides shallow-merged, silently
+- **M52** **Fixed (round 30).** `bootstrap.py:292-296` — per-plugin config overrides shallow-merged, silently
   dropping nested sections.
 - **M53** **Fixed (round 29).** `bootstrap.py:34-55, 132-136, 189` — entry-point discovery errors swallowed with no
   logging; one broken third-party package makes **every** plugin instantiation fail (no error
@@ -2169,28 +2219,28 @@ failed attempt.
 - **M54** **Fixed (round 29).** `config/dotenv.py:29-48, 56-71` — **verified:** `export FOO=bar` never defines
   `FOO`; inline `#` becomes part of the value; the loader walks up to 4 parent directories
   (picks up secrets from outside the project).
-- **M55** `config/schema.py:470-537` — `AppConfig.plugin_config()` is dead code (zero callers)
+- **M55** **Fixed (round 30).** `config/schema.py:470-537` — `AppConfig.plugin_config()` is dead code (zero callers)
   and has diverged from the live `_derived_plugin_configs` by ~22 plugin ids. Delete it.
 - **M56** **Fixed (round 29).** `contracts/*` — `LoopResult`, `Message`, `ToolCall`, `ToolSpec`, `ModelResponse`,
   `Usage`, `SessionEvent`, `SessionMetadata`, `ApprovalRequest/Decision` have no
   `model_config`, unlike `config/schema.py` (`extra: forbid`). A misspelled field is
   silently discarded — worst for `ModelRequest`/`ModelResponse`.
-- **M57** `blobs_filesystem:78-95` — `put_bytes` uses a single `os.write` (partial-write
+- **M57** **Fixed (round 30).** `blobs_filesystem:78-95` — `put_bytes` uses a single `os.write` (partial-write
   hazard) and double-closes the fd in `finally`.
-- **M58** `blobs_filesystem:145-146, 173-174` — `exists()`/`stat()` swallow every exception,
+- **M58** **Fixed (round 30).** `blobs_filesystem:145-146, 173-174` — `exists()`/`stat()` swallow every exception,
   so I/O errors are indistinguishable from "absent".
 - **M59** **Fixed (round 29 — was already fixed in `49c870e`, never marked).** `artifacts_sqlite:107+136, 247-262+267` — TOCTOU between the duplicate/cycle checks
   and the inserts.
-- **M60** `artifacts_sqlite:421-425` — `_row_to_link` fabricates `datetime.now(UTC)` when a
+- **M60** **Fixed (round 30).** `artifacts_sqlite:421-425` — `_row_to_link` fabricates `datetime.now(UTC)` when a
   stored timestamp fails to parse. **Fix:** raise `ArtifactStoreError`.
 - **M61** `sessions/jsonl:18-43` — secret scrubbing is exact-key-name only; `credentials`,
   `apiKey`, `Authorization` and secrets inside free-text (e.g. an error echoing
   `Bearer sk-or-v1-…`) survive; `read()` applies no scrubbing.
 - **M62** `sessions/jsonl:175-194` — a wildcard subscriber does a blocking file append on
   **every** event, on the publisher's critical path, with all failures logged and swallowed.
-- **M63** `evaluator.py:20-28` — `envelope_payload_dict` returns `{}` for unknown payload
+- **M63** **Fixed (round 30).** `evaluator.py:20-28` — `envelope_payload_dict` returns `{}` for unknown payload
   types ⇒ an evaluator scores an artifact as if empty.
-- **M64** `registry.py:737-741` — raises `ValueError` where `bootstrap.py:193` raises
+- **M64** **Fixed (round 30).** `registry.py:737-741` — raises `ValueError` where `bootstrap.py:193` raises
   `PluginError` for the same condition.
 
 **CLI**
@@ -2561,17 +2611,17 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 66 | **20** |
+| Medium (M1-M86) | 86 | 75 | **11** |
 | Low (L1-L39) | 39 | 28 | **10** |
-| **Total** | **158** | **127** | **30** |
+| **Total** | **158** | **136** | **21** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17-M25, M26-M43, M46, M49, M53, M54, M56, M59,
-  M61, M65-M77, M79-M82, M86** (M46 was refuted, not fixed; M44, M45, M47, M48,
-  M50-M52, M55, M57, M58, M60, M62-M64, M78, M83-M85 remain open).
+- Closed Medium: **M1-M16, M17-M25, M26-M43, M46, M49-M61, M63-M65, M66-M77,
+  M79-M82, M86** (M46 was refuted, not fixed; M44, M45, M47, M48, M62, M78,
+  M83-M85 remain open).
 - Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
   M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
@@ -2698,7 +2748,7 @@ span `main.py`).
 All five triage batches are now done. What is left is the semantic M-bucket
 (§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total now ~79 h**, of which ~45 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config). That is the honest number, and it is why the next
+**Rough total now ~76 h**, of which ~47 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config + M50-M64 sweep). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Accepted closures (round 24)
@@ -2749,7 +2799,7 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 29 the backlog is **30 open**: 20 Medium and 10 Low.
+After round 30 the backlog is **21 open**: 11 Medium and 10 Low.
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really

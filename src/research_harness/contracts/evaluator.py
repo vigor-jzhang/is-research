@@ -25,7 +25,12 @@ def envelope_payload_dict(env: ArtifactEnvelope[Any]) -> dict[str, Any]:
         return payload
     if hasattr(payload, "model_dump"):
         return payload.model_dump(mode="json")
-    return {}
+    # M63: returning {} meant an evaluator scored an artifact it could not read
+    # as if it were genuinely empty -- a silent "fails everything" result.
+    raise EvaluatorError(
+        f"artifact {getattr(env, 'artifact_id', '?')!r} has a payload of type "
+        f"{type(payload).__name__}, which cannot be read as a dict"
+    )
 
 
 class EvaluatorError(Exception):

@@ -498,8 +498,13 @@ class SQLiteArtifactStore:
         raw = row["created_at"]
         try:
             created_at = datetime.fromisoformat(raw)
-        except Exception:
-            created_at = datetime.now(UTC)
+        except Exception as e:
+            # M60: fabricating "now" turned an unreadable stored timestamp into a
+            # plausible-looking link with a false creation time.
+            raise ArtifactStoreError(
+                f"unreadable created_at for provenance link "
+                f"{row['source_artifact_id']!r} -> {row['target_artifact_id']!r}: {raw!r}"
+            ) from e
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=UTC)
         return ProvenanceLink(

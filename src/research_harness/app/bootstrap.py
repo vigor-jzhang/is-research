@@ -7,6 +7,7 @@ entry_points).
 
 from __future__ import annotations
 
+import copy
 import importlib.metadata
 import logging
 from collections.abc import Callable
@@ -233,10 +234,16 @@ def create_plugin(
 def _derived_plugin_configs(
     config: AppConfig, plugin_configs: dict[str, dict[str, Any]] | None
 ) -> dict[str, dict[str, Any]]:
-    """Build per-plugin config from AppConfig + overrides."""
+    """Build per-plugin config from AppConfig + overrides.
+
+    M52: overrides were shallow-merged, so an override that supplied only one
+    key of a section discarded every other key the derived config had already
+    computed for that section.
+    """
     pc: dict[str, dict[str, Any]] = {}
     if plugin_configs:
-        pc.update(plugin_configs)
+        for pid, cfg in plugin_configs.items():
+            pc[pid] = copy.deepcopy(cfg)
 
     derived: dict[str, dict[str, Any]] = {
         "routing.role_router": {"models": config.models.model_dump()},
@@ -314,7 +321,17 @@ def _derived_plugin_configs(
         if pid not in pc:
             pc[pid] = cfg
         else:
-            pc[pid] = {**cfg, **pc[pid]}
+            # M52: {**cfg, **override} replaced a whole section when the override
+            # supplied only part of it. Merge one level into each section.
+            merged = copy.deepcopy(cfg)
+            for key, value in pc[pid].items():
+                if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                    section = copy.deepcopy(merged[key])
+                    section.update(value)
+                    merged[key] = section
+                else:
+                    merged[key] = copy.deepcopy(value)
+            pc[pid] = merged
     return pc
 
 

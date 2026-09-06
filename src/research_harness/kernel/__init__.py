@@ -1,8 +1,7 @@
 """Kernel package - minimal infrastructure."""
 
-from typing import TYPE_CHECKING
-
 from research_harness.kernel.errors import (
+    AutonomyError,
     ConfigurationError,
     LoopLimitError,
     ModelError,
@@ -16,12 +15,11 @@ from research_harness.kernel.errors import (
 from research_harness.kernel.events import Event, EventBus
 from research_harness.kernel.manager import PluginManager
 from research_harness.kernel.plugin import Plugin, PluginContext, PluginMetadata
+from research_harness.kernel.runtime import Runtime
 from research_harness.kernel.services import ServiceRegistry
 
-if TYPE_CHECKING:
-    from research_harness.kernel.runtime import Runtime  # noqa: F401
-
 __all__ = [
+    "AutonomyError",
     "ConfigurationError",
     "Event",
     "EventBus",

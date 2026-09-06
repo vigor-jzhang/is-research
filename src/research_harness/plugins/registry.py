@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from research_harness.kernel.errors import PluginError
 from research_harness.kernel.plugin import Plugin
 
 
@@ -737,7 +738,9 @@ def create_plugin(plugin_id: str) -> Plugin:
     factory = BUILTIN_PLUGINS.get(plugin_id)
     if factory is None:
         available = sorted(BUILTIN_PLUGINS.keys())
-        raise ValueError(f"unknown plugin {plugin_id!r}. Available built-ins: {available}")
+        raise PluginError(
+            f"unknown plugin {plugin_id!r}. Available built-ins: {available}"
+        )
     return factory()
 
 

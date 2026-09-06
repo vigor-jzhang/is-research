@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -466,72 +464,3 @@ class AppConfig(BaseModel):
         return v
 
     model_config = {"extra": "forbid"}
-
-    def plugin_config(self, plugin_id: str) -> dict[str, Any]:
-        """Return dict config for a given plugin id (derived)."""
-        mapping: dict[str, dict[str, Any]] = {
-            "routing.role_router": {"models": self.models.model_dump()},
-            "routing.policy_router": {"models": self.models.model_dump()},
-            "evaluation.live_quality": {
-                "models": self.models.model_dump(),
-                "live_quality": self.live_quality.model_dump(),
-            },
-            "session.jsonl": {"session": self.session.model_dump()},
-            "loop.simple_tool_loop": {"loop": self.loop.model_dump()},
-            "autonomy.configurable": {"autonomy": self.runtime.autonomy},
-            "storage.artifacts_sqlite": {"artifacts": self.artifacts.model_dump()},
-            "storage.blobs_filesystem": {"documents": self.documents.model_dump()},
-            "literature.crossref": {"literature": self.literature.model_dump()},
-            "literature.semantic_scholar": {"literature": self.literature.model_dump()},
-            "literature.ingestion": {},
-            "literature.identity_resolver": {},
-            "literature.search_planner": {"literature": self.literature.model_dump()},
-            "literature.search_orchestrator": {"literature": self.literature.model_dump()},
-            "literature.screening_protocol_builder": {"literature": self.literature.model_dump()},
-            "literature.screening_view_builder": {},
-            "literature.title_abstract_screener": {"literature": self.literature.model_dump()},
-            "literature.screening_orchestrator": {"literature": self.literature.model_dump()},
-            "literature.evidence_extractor": {"literature": self.literature.model_dump()},
-            "literature.evidence_orchestrator": {"literature": self.literature.model_dump()},
-            "literature.synthesis": {"literature": self.literature.model_dump()},
-            "literature.gap_analyzer": {"literature": self.literature.model_dump()},
-            "research.gap_selection": {
-                "research": self.research.model_dump(),
-                "autonomy_mode": self.runtime.autonomy,
-            },
-            "research.mechanism_generator": {"research": self.research.model_dump()},
-            "research.mechanism_critic": {"research": self.research.model_dump()},
-            "research.model_builder": {"research": self.research.model_dump()},
-            "research.model_specification_critic": {"research": self.research.model_dump()},
-            "research.equilibrium_deriver": {"research": self.research.model_dump()},
-            "research.equilibrium_verifier": {},
-            "research.comparative_statics": {},
-            "research.proposition_verifier": {},
-            "research.proposition_critic": {"research": self.research.model_dump()},
-            "research.proposition_generator": {"research": self.research.model_dump()},
-            "research.numerical_analysis": {"research": self.research.model_dump()},
-            "documents.locator.metadata": {"documents": self.documents.model_dump()},
-            "documents.locator.unpaywall": {"documents": self.documents.model_dump()},
-            "documents.fetcher.http": {"documents": self.documents.model_dump()},
-            "documents.extractor.pypdf": {"documents": self.documents.model_dump()},
-            "documents.acquisition_orchestrator": {"documents": self.documents.model_dump()},
-            "research.evaluation_harness": {"evaluation": self.evaluation.model_dump()},
-            "evaluation.model_tournament": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.deterministic": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.retrieval": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.claim_grounding": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.citation_correctness": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.llm_judge": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.screening": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.evidence": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.gap_analysis": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.mechanism": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.equilibrium": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.numerical": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.comparative_statics": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.proposition": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.results_grounding": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.manuscript_grounding": {"evaluation": self.evaluation.model_dump()},
-            "evaluator.pipeline_integrity": {"evaluation": self.evaluation.model_dump()},
-        }
-        return mapping.get(plugin_id, {})

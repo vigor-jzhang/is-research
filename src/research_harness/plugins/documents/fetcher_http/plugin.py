@@ -174,6 +174,16 @@ class HttpFetcherService:
         # injected client brings its own transport, so a real lookup would
         # dead-end offline fixtures and benchmarks without adding protection.
         self._resolve_dns = (http_client is None) if resolve_dns is None else resolve_dns
+        if http_client is not None:
+            # M50: with an injected client there is no way to install our pinned
+            # transport, so DNS-rebinding protection is off. That used to happen
+            # silently; say so, so an operator can see the exposure they accepted.
+            logger.warning(
+                "an HTTP client was injected, so DNS pinning is inactive: "
+                "SSRF/DNS-rebinding protection cannot be applied to a client "
+                "this fetcher did not construct (resolve_dns=%s)",
+                self._resolve_dns,
+            )
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is not None:

@@ -77,9 +77,14 @@ class FilesystemBlobStore:
         # Use tempfile in same directory for atomic rename
         fd, tmp_path = tempfile.mkstemp(dir=str(target.parent))
         try:
-            os.write(fd, data)
-            os.fsync(fd)
-            os.close(fd)
+            # M57: a single os.write is allowed to write less than the whole
+            # buffer, and the fd was closed here and again in the finally -- the
+            # second close always failed and was swallowed. fdopen owns the fd
+            # and writes until the buffer is drained.
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
             # Verify temp file digest
             written = Path(tmp_path).read_bytes()
             if _sha256(written) != digest:
@@ -88,10 +93,6 @@ class FilesystemBlobStore:
             # Atomic rename
             os.replace(tmp_path, target)
         finally:
-            try:
-                os.close(fd)
-            except Exception:
-                pass
             Path(tmp_path).unlink(missing_ok=True)
         return BlobReference(
             algorithm="sha256",
@@ -142,7 +143,11 @@ class FilesystemBlobStore:
                     key = s
             target = self._path_for_key(key)
             return target.exists()
-        except Exception:
+        except OSError:
+            # M58: an I/O error is not the same claim as "absent". Let it out;
+            # only a malformed reference counts as not-found.
+            raise
+        except (TypeError, AttributeError, ValueError):
             return False
 
     async def stat(self, ref: BlobReference | str) -> BlobStat:
@@ -170,7 +175,9 @@ class FilesystemBlobStore:
                         data = target.read_bytes()
                         return BlobStat(exists=True, size_bytes=len(data), digest=_sha256(data))
                     return BlobStat(exists=False)
-        except Exception:
+        except OSError:
+            raise
+        except (TypeError, AttributeError, ValueError):
             return BlobStat(exists=False)
 
     async def delete(self, ref: BlobReference | str) -> None:
