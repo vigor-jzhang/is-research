@@ -29,6 +29,34 @@ class PaperIdentityResolverService:
         self._store = artifact_store
         self._events = events
 
+    async def _load_paper_for_merge(
+        self,
+        pid: str,
+        id_to_paper: dict[str, PaperRecord],
+        id_to_doi: dict[str, str | None],
+    ) -> bool:
+        """M35: load a member merged in from an overlapping existing identity.
+
+        The main resolve() loop only fetches the papers it was handed, so an id
+        pulled in by a merge has no PaperRecord yet — and the canonical
+        identifier loop reads `id_to_paper[pid]` directly. Returns False when
+        the record cannot be read, so the caller can drop the member.
+        """
+        if pid in id_to_paper:
+            return True
+        try:
+            env = await self._store.get(pid)
+            paper = (
+                PaperRecord.model_validate(env.payload)
+                if isinstance(env.payload, dict)
+                else env.parse_payload(PaperRecord)  # type: ignore[attr-defined]
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        id_to_paper[pid] = paper
+        id_to_doi[pid] = normalize_doi(paper.doi) if paper.doi else None
+        return True
+
     async def resolve(self, paper_artifact_ids: list[str]) -> IdentityResolutionResult:
         if not paper_artifact_ids:
             return IdentityResolutionResult()
@@ -216,6 +244,33 @@ class PaperIdentityResolverService:
         for _root, members in groups.items():
             members_sorted = sorted(members)
             key = frozenset(members_sorted)
+            # M35: supersede logic used to cover only groups that were strict
+            # SUBSETS of this one. Two groups that merely overlapped — {A,B} and
+            # {B,C} — matched neither branch, so both identities stayed active
+            # and the shared member belonged to two identities at once. Merge
+            # every overlapping existing group into this one and supersede the
+            # parts; the union then also gets a chance to match an existing
+            # identity below.
+            merged_into: list[str] = []
+            for existing_key, existing_env in existing_by_members.items():
+                if existing_env.artifact_id in superseded_ids:
+                    continue
+                if existing_key == key:
+                    continue
+                if existing_key & key:
+                    merged_into.append(existing_env.artifact_id)
+                    members_sorted = sorted(set(members_sorted) | set(existing_key))
+            if merged_into:
+                # M35: members merged in from an overlapping identity were not
+                # part of this call's input, so they are absent from the paper
+                # maps. Load them on demand; drop any that cannot be read rather
+                # than build an identity we cannot describe.
+                loadable: list[str] = []
+                for pid in members_sorted:
+                    if await self._load_paper_for_merge(pid, id_to_paper, id_to_doi):
+                        loadable.append(pid)
+                members_sorted = sorted(loadable)
+                key = frozenset(members_sorted)
             # Collect evidence for this group: all pair evidences where both members in group
             group_evidence: list[IdentityEvidence] = []
             # Find a representative evidence: if group size >1, we need at least one evidence that justifies merging
@@ -267,14 +322,18 @@ class PaperIdentityResolverService:
                 )
                 continue
 
-            # Check for supersedes: find existing current identities that are subsets of new group
-            superseded_found: list[str] = []
+            # Check for supersedes: existing identities fully contained in the
+            # (possibly merged) group. Overlaps were collected above; the two
+            # can name the same identity, so dedupe — a duplicate here produced
+            # a duplicate provenance edge and a UNIQUE constraint failure.
+            superseded_set: set[str] = set(merged_into)
             for existing_key, existing_env in existing_by_members.items():
                 if existing_env.artifact_id in superseded_ids:
                     continue
                 if existing_key.issubset(key) and existing_key != key:
                     # New group is superset of existing — should supersede
-                    superseded_found.append(existing_env.artifact_id)
+                    superseded_set.add(existing_env.artifact_id)
+            superseded_found: list[str] = sorted(superseded_set)
 
             # Create new identity
             # Canonical identifiers: collect unique DOIs etc from members

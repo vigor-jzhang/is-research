@@ -351,6 +351,7 @@ class UnpaywallLocatorService:
             artifact_type="provider_record_snapshot",
             producer="documents.locator.unpaywall",
         )
+        snap_id: str | None = None
         try:
             await self._store.put(snap_env)
             snap_id = snap_env.artifact_id
@@ -368,8 +369,17 @@ class UnpaywallLocatorService:
                         break
                 except Exception:
                     continue
-            else:
-                snap_id = snap_env.artifact_id
+        # M43: the `for ... else` used to fall back to snap_env.artifact_id when
+        # the put failed for a reason OTHER than a duplicate. That id was never
+        # persisted, so every location recorded a provider_snapshot_id pointing
+        # at a phantom artifact and derived_from provenance was written to it.
+        # Leave it None rather than forge a reference, and say so in the log.
+        if snap_id is None:
+            logger.error(
+                "could not persist provider snapshot for %s; locations will be recorded "
+                "without snapshot provenance (raw payload not preserved)",
+                norm_doi,
+            )
 
         locations = self._extract_locations_from_raw(raw, paper_identity_id, snap_id)
         created_ids: list[str] = []
@@ -399,14 +409,16 @@ class UnpaywallLocatorService:
                 producer="documents.locator.unpaywall",
             )
             await self._store.put(loc_env)
-            await self._store.add_provenance(
-                ProvenanceLink(
-                    relation=ProvenanceRelation.derived_from,
-                    source_artifact_id=snap_id,
-                    target_artifact_id=loc_env.artifact_id,
-                    producer="documents.locator.unpaywall",
+            # M43: only claim provenance from a snapshot that actually exists.
+            if snap_id is not None:
+                await self._store.add_provenance(
+                    ProvenanceLink(
+                        relation=ProvenanceRelation.derived_from,
+                        source_artifact_id=snap_id,
+                        target_artifact_id=loc_env.artifact_id,
+                        producer="documents.locator.unpaywall",
+                    )
                 )
-            )
             await self._store.add_provenance(
                 ProvenanceLink(
                     relation=ProvenanceRelation.derived_from,
@@ -423,7 +435,7 @@ class UnpaywallLocatorService:
         return created_ids
 
     def _extract_locations_from_raw(
-        self, raw: dict[str, Any], paper_identity_id: str, snapshot_id: str
+        self, raw: dict[str, Any], paper_identity_id: str, snapshot_id: str | None
     ) -> list[DocumentLocation]:
         locations: list[DocumentLocation] = []
         # Unpaywall structure: best_oa_location, oa_locations[]

@@ -209,8 +209,15 @@ class ScreeningOrchestratorService:
                         excluded.append(pi_id)
                     else:
                         uncertain.append(pi_id)
-                except Exception:
-                    uncertain.append(pi_id)
+                except Exception as e:
+                    # M39: a store read failure used to be recorded as
+                    # "uncertain", i.e. as a screening outcome — indistinguishable
+                    # from a model that genuinely could not decide. Record it as
+                    # a failure instead, and do not count the candidate as screened.
+                    logger.exception("Failed to read existing decision for %s", pi_id)
+                    failed.append(
+                        {"paper_identity_id": pi_id, "error": str(e), "stage": "reuse"}
+                    )
                 reused += 1
                 continue
 

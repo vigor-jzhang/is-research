@@ -103,7 +103,8 @@ in the working tree, uncommitted.
 | **L3, L9, L11, L17, L22, L24, L25, L27, L28, L30-L32, L35** Low sweep | **Fixed** (round 25) | 11 files |
 | **L8, L29, L34** Low sweep | **Partially fixed** (round 25) | `proposition_generator`, `tournament/accounting`, `evaluation_harness` |
 | **M18, M21, M23, M25, M28, M30, M31** routing semantics | **Fixed** (round 26) | `routing/selection`, `routing/qualification`, `routing/readiness`, `routing/task_aware`, `policy_router`, `schemas/routing`, `research/timeutil` |
-| The remaining M/L backlog | **Triaged** (round 19) — 43 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **M35, M36, M37, M39, M43** literature semantics | **Fixed** (round 27) | `identity_resolver`, `gap_analyzer`, `screening_orchestrator`, `locator_unpaywall` |
+| The remaining M/L backlog | **Triaged** (round 19) — 38 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -773,6 +774,55 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 27 notes (M35, M36, M37, M39, M43 — literature semantics)
+
+Five Medium findings across the literature and documents plugins.
+
+- **M35** — the identity resolver's supersede check covered only groups that
+  were strict SUBSETS of the new one. Two groups that merely overlapped — an
+  existing {A,B} and a new {B,C} — matched neither branch, so both identities
+  stayed active and the shared member belonged to two identities at once.
+  Overlapping groups are now merged and their parts superseded.
+  **Two follow-on problems surfaced while doing this**, both fixed: the merged
+  set can name an identity twice (once via the overlap scan, once via the
+  subset scan), which produced a duplicate supersede edge and a UNIQUE
+  constraint failure; and members pulled in from an existing identity were never
+  part of this call's input, so they were absent from the paper maps and
+  `id_to_paper[pid]` raised KeyError. Merged members are now loaded on demand,
+  and any that cannot be read are dropped rather than merged.
+- **M36** — the gap analyzer loaded every `synthesis_statement` artifact in the
+  store, so statements from unrelated runs entered the map that feeds the
+  grounding check and could supply artifact ids that do not belong to this
+  synthesis. `SynthesisTheme` carries its own statement ids in metadata, so the
+  scan is now scoped to those. The text-matching path is kept as a fallback for
+  themes without that metadata, but restricted to statements this synthesis
+  actually contains; `parse_payload` is guarded in both paths.
+- **M37** — two halves. (a) `max_statements` bounded the number of THEMES, not
+  statements, so a synthesis with few themes and many statements each produced
+  an unbounded prompt. Statements are now trimmed to the budget — and
+  `metadata["statement_ids"]` is trimmed with them, or the id list still spans
+  the full theme and the budget has no effect (found by test). (b) The research
+  question reached the model as a bare artifact id, which it cannot reason
+  about; it is now resolved to text, falling back to the id when unreadable.
+- **M39** — the screening orchestrator's reuse path caught every exception and
+  appended the candidate to `uncertain`, so a store read failure was recorded
+  as a screening outcome — indistinguishable from a model that genuinely could
+  not decide. It is now recorded in `failures` and not counted as uncertain.
+- **M43** — when the provider snapshot could not be persisted for a reason
+  other than a duplicate, the `for ... else` fell back to `snap_env.artifact_id`
+  — an id that was never written. Every location then recorded a
+  `provider_snapshot_id` pointing at a phantom artifact, and `derived_from`
+  provenance was written to it. The id is now left `None` in that case, the
+  provenance edge is skipped, and the loss of the raw payload is logged as an
+  error rather than silently papered over.
+
+**Test note.** Of the 9 added tests, 6 fail before the change; the 3 that pass
+both ways are guards (disjoint groups stay separate; locations carry the
+snapshot id when there is one; a missing question id yields None). One test was
+initially worthless — the M39 test reimplemented the branch in the test body
+instead of exercising it — and was rewritten to drive the real `screen()` path
+with a failing store.
 
 ### Round 26 notes (M18, M21, M23, M25, M28, M30, M31 — routing semantics)
 
@@ -1952,22 +2002,22 @@ failed attempt.
 - **M34** **Fixed (round 22).** `identity_resolver:283-292` — canonical identifiers store raw un-normalized DOIs,
   so one merged identity emits two canonical DOIs; also rebinds the loop variable `key`
   from `frozenset` to `str` (live landmine).
-- **M35** `identity_resolver:270-277` — supersede logic handles only strict subsets, so
+- **M35** **Fixed (round 27).** `identity_resolver:270-277` — supersede logic handles only strict subsets, so
   overlapping groups (A,B)/(B,C) leave both active.
-- **M36** `gap_analyzer:291-298` — loads **every** `synthesis_statement` in the store, so the
+- **M36** **Fixed (round 27).** `gap_analyzer:291-298` — loads **every** `synthesis_statement` in the store, so the
   grounding check accepts IDs from unrelated runs; `parse_payload` unguarded.
-- **M37** `gap_analyzer:278, 582-586` — `max_statements` bounds *themes*, not statements
+- **M37** **Fixed (round 27).** `gap_analyzer:278, 582-586` — `max_statements` bounds *themes*, not statements
   (unbounded prompt), and the research question is passed to the model as a bare UUID.
 - **M38** **Fixed (round 22).** `screening_orchestrator:353-364` — review overrides ignored when counting
   dispositions.
-- **M39** `screening_orchestrator:163-208` — `except Exception: uncertain.append(...)`
+- **M39** **Fixed (round 27).** `screening_orchestrator:163-208` — `except Exception: uncertain.append(...)`
   turns store errors into a screening outcome.
 - **M40** **Fixed (round 22).** `title_abstract_screener:216` — `confidence` not clamped despite the schema
   declaring 0..1, defeating the review gate.
 - **M41** **Fixed (round 22).** `title_abstract_screener:221-231` — logs "forcing exclude" but does nothing.
 - **M42** **Fixed (round 22).** `locator_unpaywall:180-184` — sorting by artifact UUID destroys the priority
   ordering the orchestrator depends on (the code even comments "keep that order").
-- **M43** `locator_unpaywall:328-343` — on a non-duplicate `put` failure, `snap_id` points at
+- **M43** **Fixed (round 27).** `locator_unpaywall:328-343` — on a non-duplicate `put` failure, `snap_id` points at
   a phantom artifact, and `derived_from` provenance is written to it.
 - **M44** `acquisition_orchestrator:385-480` — O(n³) store round-trips; `import_local:556-558`
   reads the whole file before checking size (20 GB path ⇒ OOM, not `ValueError`).
@@ -2388,17 +2438,17 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 54 | **32** |
+| Medium (M1-M86) | 86 | 59 | **27** |
 | Low (L1-L39) | 39 | 28 | **11** |
-| **Total** | **158** | **115** | **43** |
+| **Total** | **158** | **120** | **38** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17-M22, M23-M25, M26-M34, M38, M40-M42, M46, M49,
-  M65-M71, M74, M75, M77, M79-M82, M86** (M46 was refuted, not fixed; M84 and
-  M85 remain open).
+- Closed Medium: **M1-M16, M17-M25, M26-M37, M38-M43, M46, M49, M65-M71, M74,
+  M75, M77, M79-M82, M86** (M46 was refuted, not fixed; M44, M45, M47, M48,
+  M50-M64, M72, M73, M76, M78, M83-M85 remain open).
 - Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
   M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
@@ -2469,7 +2519,7 @@ novelty phrase is **never detected** (and the span merge keeps the earlier risk)
 | Cluster | IDs | Why it is M, not S |
 |---|---|---|
 | Routing semantics | — | **Done (round 26).** M18, M21, M23, M25, M28, M30, M31. |
-| Literature semantics | M35, M36, M37, M39, M43 | M35 is a merge-algorithm change; M36/M37 need run-scoping (the M8 pattern); M39 must distinguish store failure from screening outcome. |
+| Literature semantics | — | **Done (round 27).** M35, M36, M37, M39, M43. |
 | Literature performance | M44, M45, M47, M50 | M44 is O(n³) store round-trips plus a 20 GB-read-before-size-check; M45 needs `to_thread` + caps; **M47 ⚠** and **M50 ⚠** touch C6's SSRF/DNS pinning. |
 | Bootstrap / config | M53, M54, M56, M59, M61, M62 | M54 is a parser rewrite that also stops the loader walking 4 parents for secrets; **M56 ⚠** adds `extra: forbid` to 10 contract schemas and can break existing callers; M59 needs a transaction; M61 is secret-scrubbing breadth. |
 | CLI structure | M72, M73, M76, L33 | M72 and M73 span 8 options and 12+ error paths in a 7 400-line file; M76 is `extra_plugins` ignored by 3 more builders (23 call sites) — same shape as H14. |
@@ -2523,7 +2573,7 @@ span `main.py`).
 All five triage batches are now done. What is left is the semantic M-bucket
 (§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total now ~91 h**, of which ~35 h is done (five batches + Low sweep + routing semantics). That is the honest number, and it is why the next
+**Rough total now ~85 h**, of which ~40 h is done (five batches + Low sweep + routing + literature semantics). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Accepted closures (round 24)
@@ -2574,7 +2624,7 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 26 the backlog is **43 open**: 32 Medium and 11 Low.
+After round 27 the backlog is **38 open**: 27 Medium and 11 Low.
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really

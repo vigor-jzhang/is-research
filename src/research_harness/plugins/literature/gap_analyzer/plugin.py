@@ -287,15 +287,68 @@ class GapAnalyzerService:
             except Exception:
                 continue
 
-        # Map persisted synthesis_statement artifacts to their ids
-        stmt_artifacts = await self._store.list(artifact_type="synthesis_statement")
+        # M37: `_max_statements` bounded the number of THEMES above, not the
+        # number of statements, so the prompt built from `themes` was unbounded
+        # — a synthesis with few themes and many statements each produced an
+        # arbitrarily long prompt. Trim to the statement budget here.
+        if self._max_statements and themes:
+            budget = self._max_statements
+            trimmed: list[SynthesisTheme] = []
+            for theme in themes:
+                if budget <= 0:
+                    break
+                if len(theme.statements) > budget:
+                    # Keep metadata["statement_ids"] aligned with the retained
+                    # statements, otherwise the id list below still spans the
+                    # full theme and the budget has no effect.
+                    ids = list(theme.metadata.get("statement_ids") or [])
+                    meta = dict(theme.metadata)
+                    if len(ids) == len(theme.statements):
+                        meta["statement_ids"] = ids[:budget]
+                    theme = theme.model_copy(
+                        update={"statements": theme.statements[:budget], "metadata": meta}
+                    )
+                budget -= len(theme.statements)
+                trimmed.append(theme)
+            themes = trimmed
+            # Keep the by-text index consistent with the trimmed themes.
+            stmt_by_id = {}
+            for theme in themes:
+                for stmt in theme.statements:
+                    stmt_by_id.setdefault(stmt.statement[:120], stmt)
+
+        # ---------------- M36: scope statements to this synthesis ----------------
+        # The old form listed EVERY synthesis_statement in the store, so
+        # statements from unrelated runs entered `stmt_map` and could supply
+        # artifact ids that do not belong to this synthesis. SynthesisTheme
+        # carries the ids of its own statements in metadata; use those. Fall
+        # back to text matching, but only against statements this synthesis
+        # actually contains, and never let a parse failure abort the run.
+        own_texts = set(stmt_by_id)
         stmt_id_by_text: dict[str, str] = {}
         stmt_map: dict[str, SynthesisStatement] = {}
-        for s_env in stmt_artifacts:
-            s = s_env.parse_payload(SynthesisStatement)
-            key = s.statement[:120]
-            stmt_id_by_text[key] = s_env.artifact_id
-            stmt_map[s_env.artifact_id] = s
+        wanted_ids = [
+            sid for theme in themes for sid in (theme.metadata.get("statement_ids") or [])
+        ]
+        if wanted_ids:
+            for sid in wanted_ids:
+                try:
+                    s_env = await self._store.get(sid)
+                    s = s_env.parse_payload(SynthesisStatement)
+                except Exception:  # noqa: BLE001
+                    continue
+                stmt_id_by_text[s.statement[:120]] = sid
+                stmt_map[sid] = s
+        else:
+            for s_env in await self._store.list(artifact_type="synthesis_statement"):
+                try:
+                    s = s_env.parse_payload(SynthesisStatement)
+                except Exception:  # noqa: BLE001
+                    continue
+                key = s.statement[:120]
+                if key in own_texts:
+                    stmt_id_by_text[key] = s_env.artifact_id
+                    stmt_map[s_env.artifact_id] = s
 
         exec_record.themes_processed = len(themes)
         exec_record.statements_processed = len(stmt_map)
@@ -337,6 +390,11 @@ class GapAnalyzerService:
         # Coverage limitation from corpus (NOT a gap)
         coverage_limitations = list(corpus.documents_without_evidence)
 
+        # M37: the research question used to reach the model as a bare artifact
+        # id, which it cannot reason about. Resolve it to text here (the prompt
+        # builder is synchronous, so the store read belongs to the caller).
+        research_question_text = await self._load_question_text(research_question_id)
+
         # Analyze in a single bounded structured call (statements are already synthesized)
         prompt = self._build_prompt(
             synthesis,
@@ -346,6 +404,7 @@ class GapAnalyzerService:
             ev_id_to_paper,
             corpus,
             research_question_id,
+            research_question_text,
         )
         from research_harness.contracts.model import Message, ModelRequest
 
@@ -544,6 +603,23 @@ class GapAnalyzerService:
 
         return exec_env.artifact_id
 
+    async def _load_question_text(self, research_question_id: str | None) -> str | None:
+        """M37: resolve a research-question artifact id to its text."""
+        if not research_question_id:
+            return None
+        try:
+            q_env = await self._store.get(research_question_id)
+            from research_harness.research.schemas.project import ResearchQuestion
+
+            question = (
+                q_env.parse_payload(ResearchQuestion)
+                if hasattr(q_env, "parse_payload")
+                else ResearchQuestion.model_validate(q_env.payload)
+            )  # type: ignore[attr-defined]
+            return str(question.question)
+        except Exception:  # noqa: BLE001
+            return None
+
     def _build_prompt(
         self,
         synthesis: LiteratureSynthesis,
@@ -553,6 +629,7 @@ class GapAnalyzerService:
         ev_id_to_paper: dict[str, str],
         corpus: EvidenceCorpus,
         research_question_id: str | None,
+        research_question_text: str | None = None,
     ) -> str:
         theme_lines = []
         for theme in themes:
@@ -579,11 +656,13 @@ class GapAnalyzerService:
             else "All corpus documents yielded extractable evidence."
         )
 
-        rq = (
-            f"Research question context: {research_question_id}"
-            if research_question_id
-            else "No research question id provided."
-        )
+        if research_question_text:
+            rq = f"Research question: {research_question_text}"
+        elif research_question_id:
+            # Fall back to the id rather than lose the reference entirely.
+            rq = f"Research question (id, text unreadable): {research_question_id}"
+        else:
+            rq = "No research question id provided."
 
         return f"""You are analyzing a literature synthesis to identify candidate research gaps.
 
