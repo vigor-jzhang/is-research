@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import typer
 from rich.console import Console
@@ -13,6 +13,18 @@ from rich.table import Table
 from research_harness.config.dotenv import load_dotenv
 from research_harness.config.loader import load_config
 from research_harness.kernel.errors import ConfigurationError
+
+# M72: these options were documented as enumerations in their help text but
+# accepted any string, so a typo reached the service layer and surfaced as an
+# uncaught ConfigurationError (or, worse, an empty result) instead of a usage
+# error at the boundary. Typer turns a Literal into a real choice, listing the
+# valid values and exiting 2 on anything else. The role list mirrors
+# research.tournament.roles.SUPPORTED_ROLES.
+RoleOption = Literal["fast", "reasoning", "critic"]
+DirectionOption = Literal["ancestors", "descendants"]
+FormatOption = Literal["markdown", "latex", "docx", "pdf"]
+StyleOption = Literal["author_year", "apa"]
+PolicyOption = Literal["quality_first", "balanced", "cost_constrained", "latency_constrained"]
 
 # Load .env early so OPENROUTER_API_KEY is available for local runs.
 # For uv users, `uv run --env-file .env ...` is the canonical way;
@@ -306,12 +318,18 @@ def run_cmd(
     ),
     prompt: Annotated[str | None, typer.Option(help="Prompt to run")] = None,
     prompt_file: Annotated[pathlib.Path | None, typer.Option(help="File containing prompt")] = None,
-    role: Annotated[str, typer.Option(help="Model role")] = "fast",
+    role: Annotated[RoleOption, typer.Option(help="Model role")] = "fast",
     max_steps: Annotated[int | None, typer.Option(help="Override max_steps")] = None,
 ) -> None:
     """Run a simple agent loop end-to-end."""
     if prompt is None and prompt_file is None:
         prompt = "Hello, please use the echo tool to echo 'hello world' and then summarize."
+
+    if prompt is not None and prompt_file is not None:
+        # L33: the old code let --prompt-file overwrite --prompt without saying
+        # so, so a caller who passed both could not tell which one ran.
+        console.print("[red]--prompt and --prompt-file are mutually exclusive[/red]")
+        raise typer.Exit(code=2)
 
     if prompt_file is not None:
         prompt = pathlib.Path(prompt_file).read_text(encoding="utf-8")
@@ -505,35 +523,34 @@ def artifacts_list(
     import asyncio
 
     cfg_path = config if config is not None and config.exists() else None
-    store, _ = _get_artifact_store(cfg_path)
-
     async def _run() -> None:
-        artifacts = await store.list(artifact_type=artifact_type, session_id=session, limit=limit)
-        if not artifacts:
-            console.print("[dim]No artifacts found[/dim]")
-            return
-        table = Table(title="Artifacts")
-        table.add_column("ID", style="cyan", no_wrap=True)
-        table.add_column("Type", style="magenta")
-        table.add_column("Created", style="dim")
-        table.add_column("Session", style="yellow")
-        table.add_column("Hash", style="green")
-        for env in artifacts:
-            table.add_row(
-                env.artifact_id[:8] + "…",
-                env.artifact_type,
-                env.created_at.isoformat()[:19],
-                (env.session_id or "-")[:8],
-                env.content_hash[:8] + "…",
-            )
-            # Show full id on second line for copy
-            table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "", "")
-        console.print(table)
-        await store.close()
+        store, _ = _get_artifact_store(cfg_path)
+        try:
+            artifacts = await store.list(artifact_type=artifact_type, session_id=session, limit=limit)
+            if not artifacts:
+                console.print("[dim]No artifacts found[/dim]")
+                return
+            table = Table(title="Artifacts")
+            table.add_column("ID", style="cyan", no_wrap=True)
+            table.add_column("Type", style="magenta")
+            table.add_column("Created", style="dim")
+            table.add_column("Session", style="yellow")
+            table.add_column("Hash", style="green")
+            for env in artifacts:
+                table.add_row(
+                    env.artifact_id[:8] + "…",
+                    env.artifact_type,
+                    env.created_at.isoformat()[:19],
+                    (env.session_id or "-")[:8],
+                    env.content_hash[:8] + "…",
+                )
+                # Show full id on second line for copy
+                table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "", "")
+            console.print(table)
 
+        finally:
+            await store.close()
     asyncio.run(_run())
-
-
 @artifacts_app.command("inspect")
 def artifacts_inspect(
     artifact_id: str,
@@ -546,96 +563,102 @@ def artifacts_inspect(
     import json
 
     cfg_path = config if config is not None and config.exists() else None
-    store, _ = _get_artifact_store(cfg_path)
-
     async def _run() -> None:
+        store, _ = _get_artifact_store(cfg_path)
         try:
-            env = await store.get(artifact_id)
-        except Exception as e:
-            console.print(f"[red]Artifact {artifact_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        console.print(
-            f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}] v{env.schema_version}"
-        )
-        console.print(f"Created: {env.created_at.isoformat()} producer={env.producer}")
-        console.print(f"Session: {env.session_id} Run: {env.run_id}")
-        console.print(f"Hash: {env.content_hash}")
-        console.print(f"Metadata: {json.dumps(env.metadata, indent=2)}")
-        # Payload
-        if hasattr(env.payload, "model_dump"):
-            payload_str = json.dumps(env.payload.model_dump(mode="json"), indent=2)  # type: ignore[attr-defined]
-        else:
-            payload_str = json.dumps(env.payload, indent=2)  # type: ignore[arg-type]
-        console.print("[bold]Payload:[/bold]")
-        console.print(payload_str[:4000])
-        # Provenance summary
-        parents, children = await store.get_provenance(artifact_id)
-        if parents:
-            console.print(f"\n[bold]Parents ({len(parents)}):[/bold]")
-            for p in parents:
-                console.print(f"  {p.relation.value} ← {p.source_artifact_id}")
-        if children:
-            console.print(f"\n[bold]Children ({len(children)}):[/bold]")
-            for c in children:
-                console.print(f"  {c.relation.value} → {c.target_artifact_id}")
-        await store.close()
+            try:
+                env = await store.get(artifact_id)
+            except Exception as e:
+                console.print(f"[red]Artifact {artifact_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            console.print(
+                f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}] v{env.schema_version}"
+            )
+            console.print(f"Created: {env.created_at.isoformat()} producer={env.producer}")
+            console.print(f"Session: {env.session_id} Run: {env.run_id}")
+            console.print(f"Hash: {env.content_hash}")
+            console.print(f"Metadata: {json.dumps(env.metadata, indent=2)}")
+            # Payload
+            if hasattr(env.payload, "model_dump"):
+                payload_str = json.dumps(env.payload.model_dump(mode="json"), indent=2)  # type: ignore[attr-defined]
+            else:
+                payload_str = json.dumps(env.payload, indent=2)  # type: ignore[arg-type]
+            console.print("[bold]Payload:[/bold]")
+            if len(payload_str) > 4000:
+                console.print(payload_str[:4000])
+                console.print(
+                    f"[dim]... truncated: showing 4000 of {len(payload_str)} characters[/dim]"
+                )
+            else:
+                console.print(payload_str)
+            # Provenance summary
+            parents, children = await store.get_provenance(artifact_id)
+            if parents:
+                console.print(f"\n[bold]Parents ({len(parents)}):[/bold]")
+                for p in parents:
+                    console.print(f"  {p.relation.value} ← {p.source_artifact_id}")
+            if children:
+                console.print(f"\n[bold]Children ({len(children)}):[/bold]")
+                for c in children:
+                    console.print(f"  {c.relation.value} → {c.target_artifact_id}")
 
+        finally:
+            await store.close()
     asyncio.run(_run())
-
-
 @artifacts_app.command("lineage")
 def artifacts_lineage(
     artifact_id: str,
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
-    direction: Annotated[str, typer.Option(help="ancestors or descendants")] = "ancestors",
+    direction: Annotated[DirectionOption, typer.Option(help="ancestors or descendants")] = (
+        "ancestors"
+    ),
 ) -> None:
     """Show lineage for an artifact."""
     import asyncio
 
     cfg_path = config if config is not None and config.exists() else None
-    store, _ = _get_artifact_store(cfg_path)
-
     async def _run() -> None:
+        store, _ = _get_artifact_store(cfg_path)
         try:
-            # Verify artifact exists
-            await store.get(artifact_id)
-        except Exception as e:
-            console.print(f"[red]Artifact {artifact_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        try:
-            lineage = await store.get_lineage(artifact_id, direction=direction)
-        except Exception as e:
-            console.print(f"[red]Failed to get lineage: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        if not lineage:
-            console.print(f"[dim]No {direction} for {artifact_id}[/dim]")
-        else:
-            console.print(
-                f"[bold]{direction.capitalize()} of {artifact_id} ({len(lineage)}):[/bold]"
-            )
-            for env in lineage:
+            try:
+                # Verify artifact exists
+                await store.get(artifact_id)
+            except Exception as e:
+                console.print(f"[red]Artifact {artifact_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            try:
+                lineage = await store.get_lineage(artifact_id, direction=direction)
+            except Exception as e:
+                console.print(f"[red]Failed to get lineage: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            if not lineage:
+                console.print(f"[dim]No {direction} for {artifact_id}[/dim]")
+            else:
                 console.print(
-                    f"  [cyan]{env.artifact_id}[/cyan] [{env.artifact_type}] {env.created_at.isoformat()[:19]}"
+                    f"[bold]{direction.capitalize()} of {artifact_id} ({len(lineage)}):[/bold]"
                 )
-                # Show title or statement snippet if available
-                try:
-                    if hasattr(env.payload, "title"):
-                        console.print(f"    title: {env.payload.title}")  # type: ignore[attr-defined]
-                    elif hasattr(env.payload, "statement"):
-                        stmt = env.payload.statement  # type: ignore[attr-defined]
-                        console.print(f"    statement: {stmt[:80]}")
-                    elif hasattr(env.payload, "question"):
-                        console.print(f"    question: {env.payload.question}")  # type: ignore[attr-defined]
-                except Exception as e:
-                    # M74: silently swallowing this hid malformed payloads.
-                    console.print(f"    [dim]payload preview unavailable: {e}[/dim]")
-        await store.close()
+                for env in lineage:
+                    console.print(
+                        f"  [cyan]{env.artifact_id}[/cyan] [{env.artifact_type}] {env.created_at.isoformat()[:19]}"
+                    )
+                    # Show title or statement snippet if available
+                    try:
+                        if hasattr(env.payload, "title"):
+                            console.print(f"    title: {env.payload.title}")  # type: ignore[attr-defined]
+                        elif hasattr(env.payload, "statement"):
+                            stmt = env.payload.statement  # type: ignore[attr-defined]
+                            console.print(f"    statement: {stmt[:80]}")
+                        elif hasattr(env.payload, "question"):
+                            console.print(f"    question: {env.payload.question}")  # type: ignore[attr-defined]
+                    except Exception as e:
+                        # M74: silently swallowing this hid malformed payloads.
+                        console.print(f"    [dim]payload preview unavailable: {e}[/dim]")
 
+        finally:
+            await store.close()
     asyncio.run(_run())
-
-
 # ---------------------------------------------------------------------------
 # literature commands
 # ---------------------------------------------------------------------------
@@ -1125,31 +1148,31 @@ def identities_list(
         else:
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
-        identities = await store.list(artifact_type="paper_identity", limit=limit)
-        if not identities:
-            console.print("[dim]No paper identities found[/dim]")
+        try:
+            identities = await store.list(artifact_type="paper_identity", limit=limit)
+            if not identities:
+                console.print("[dim]No paper identities found[/dim]")
+                return
+            table = Table(title="Paper Identities")
+            table.add_column("ID", style="cyan")
+            table.add_column("Members", style="magenta")
+            table.add_column("Method", style="yellow")
+            table.add_column("DOI", style="green")
+            for env in identities:
+                from research_harness.research.schemas.identity import PaperIdentity
+
+                ident = env.parse_payload(PaperIdentity)
+                doi = next((e.value for e in ident.canonical_identifiers if e.scheme == "doi"), "-")
+                table.add_row(
+                    env.artifact_id[:8],
+                    str(len(ident.member_paper_artifact_ids)),
+                    ident.resolution_method.value,
+                    doi,
+                )
+                table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "")
+            console.print(table)
+        finally:
             await store.close()
-            return
-        table = Table(title="Paper Identities")
-        table.add_column("ID", style="cyan")
-        table.add_column("Members", style="magenta")
-        table.add_column("Method", style="yellow")
-        table.add_column("DOI", style="green")
-        for env in identities:
-            from research_harness.research.schemas.identity import PaperIdentity
-
-            ident = env.parse_payload(PaperIdentity)
-            doi = next((e.value for e in ident.canonical_identifiers if e.scheme == "doi"), "-")
-            table.add_row(
-                env.artifact_id[:8],
-                str(len(ident.member_paper_artifact_ids)),
-                ident.resolution_method.value,
-                doi,
-            )
-            table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "")
-        console.print(table)
-        await store.close()
-
     asyncio.run(_run())
 
 
@@ -1175,46 +1198,47 @@ def identities_inspect(
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
         try:
-            env = await store.get(identity_id)
-        except Exception as e:
-            console.print(f"[red]Identity {identity_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        from research_harness.research.schemas.identity import PaperIdentity
-
-        ident = env.parse_payload(PaperIdentity)
-        console.print(f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}]")
-        console.print(
-            f"Members ({len(ident.member_paper_artifact_ids)}): {ident.member_paper_artifact_ids}"
-        )
-        console.print(f"Method: {ident.resolution_method.value}  Confidence: {ident.confidence}")
-        console.print(
-            f"Canonical identifiers: {[f'{e.scheme}:{e.value}' for e in ident.canonical_identifiers]}"
-        )
-        console.print(
-            f"Evidence: {json.dumps([e.model_dump() for e in ident.resolution_evidence], indent=2)}"
-        )
-        # Show member titles
-        for pid in ident.member_paper_artifact_ids[:3]:
             try:
-                p_env = await store.get(pid)
-                from research_harness.research.schemas.paper import PaperRecord
-
-                paper = p_env.parse_payload(PaperRecord)
-                console.print(f"  [dim]{pid[:8]}[/dim] {paper.title}  doi={paper.doi}")
+                env = await store.get(identity_id)
             except Exception as e:
-                # M74: a dangling member reference used to disappear silently.
-                console.print(f"  [yellow]member paper {pid[:8]} unreadable: {e}[/yellow]")
-        # Check if superseded
-        children_links = await store.get_children(identity_id)
-        superseded_by = [
-            link.target_artifact_id
-            for link in children_links
-            if link.relation.value == "supersedes"
-        ]
-        if superseded_by:
-            console.print(f"[yellow]Superseded by: {superseded_by}[/yellow]")
-        await store.close()
+                console.print(f"[red]Identity {identity_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.identity import PaperIdentity
 
+            ident = env.parse_payload(PaperIdentity)
+            console.print(f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}]")
+            console.print(
+                f"Members ({len(ident.member_paper_artifact_ids)}): {ident.member_paper_artifact_ids}"
+            )
+            console.print(f"Method: {ident.resolution_method.value}  Confidence: {ident.confidence}")
+            console.print(
+                f"Canonical identifiers: {[f'{e.scheme}:{e.value}' for e in ident.canonical_identifiers]}"
+            )
+            console.print(
+                f"Evidence: {json.dumps([e.model_dump() for e in ident.resolution_evidence], indent=2)}"
+            )
+            # Show member titles
+            for pid in ident.member_paper_artifact_ids[:3]:
+                try:
+                    p_env = await store.get(pid)
+                    from research_harness.research.schemas.paper import PaperRecord
+
+                    paper = p_env.parse_payload(PaperRecord)
+                    console.print(f"  [dim]{pid[:8]}[/dim] {paper.title}  doi={paper.doi}")
+                except Exception as e:
+                    # M74: a dangling member reference used to disappear silently.
+                    console.print(f"  [yellow]member paper {pid[:8]} unreadable: {e}[/yellow]")
+            # Check if superseded
+            children_links = await store.get_children(identity_id)
+            superseded_by = [
+                link.target_artifact_id
+                for link in children_links
+                if link.relation.value == "supersedes"
+            ]
+            if superseded_by:
+                console.print(f"[yellow]Superseded by: {superseded_by}[/yellow]")
+        finally:
+            await store.close()
     asyncio.run(_run())
 
 
@@ -1339,34 +1363,35 @@ def screening_protocol_inspect(
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
         try:
-            env = await store.get(protocol_id)
-        except Exception as e:
-            console.print(f"[red]Protocol {protocol_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        from research_harness.research.schemas.screening_protocol import ScreeningProtocol
+            try:
+                env = await store.get(protocol_id)
+            except Exception as e:
+                console.print(f"[red]Protocol {protocol_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.screening_protocol import ScreeningProtocol
 
-        proto = env.parse_payload(ScreeningProtocol)
-        console.print(
-            f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}] {env.created_at.isoformat()}"
-        )
-        console.print(f"Objective: {proto.objective}")
-        console.print(f"Status: {proto.status.value}")
-        console.print(f"Inclusion ({len(proto.inclusion_criteria)}):")
-        for c in proto.inclusion_criteria:
+            proto = env.parse_payload(ScreeningProtocol)
             console.print(
-                f"  [green]{c.criterion_id}[/green] {c.description} (required={c.required})"
+                f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}] {env.created_at.isoformat()}"
             )
-        console.print(f"Exclusion ({len(proto.exclusion_criteria)}):")
-        for c in proto.exclusion_criteria:
-            console.print(f"  [red]{c.criterion_id}[/red] {c.description}")
-        console.print(f"Decision rules: {proto.decision_rules}")
-        # Check if superseded
-        children = await store.get_children(protocol_id)
-        superseded = [c.target_artifact_id for c in children if c.relation.value == "supersedes"]
-        if superseded:
-            console.print(f"[yellow]Superseded by: {superseded}[/yellow]")
-        await store.close()
-
+            console.print(f"Objective: {proto.objective}")
+            console.print(f"Status: {proto.status.value}")
+            console.print(f"Inclusion ({len(proto.inclusion_criteria)}):")
+            for c in proto.inclusion_criteria:
+                console.print(
+                    f"  [green]{c.criterion_id}[/green] {c.description} (required={c.required})"
+                )
+            console.print(f"Exclusion ({len(proto.exclusion_criteria)}):")
+            for c in proto.exclusion_criteria:
+                console.print(f"  [red]{c.criterion_id}[/red] {c.description}")
+            console.print(f"Decision rules: {proto.decision_rules}")
+            # Check if superseded
+            children = await store.get_children(protocol_id)
+            superseded = [c.target_artifact_id for c in children if c.relation.value == "supersedes"]
+            if superseded:
+                console.print(f"[yellow]Superseded by: {superseded}[/yellow]")
+        finally:
+            await store.close()
     asyncio.run(_run())
 
 
@@ -1395,41 +1420,41 @@ def screening_protocol_approve(
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
         try:
-            env = await store.get(protocol_id)
-        except Exception as e:
-            console.print(f"[red]Protocol {protocol_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        from research_harness.research.schemas.screening_protocol import (
-            ProtocolStatus,
-            ScreeningProtocol,
-        )
-
-        proto = env.parse_payload(ScreeningProtocol)
-        if proto.status == ProtocolStatus.approved:
-            console.print(f"[green]Protocol {protocol_id} already approved[/green]")
-            await store.close()
-            return
-        # Create approved version that supersedes draft
-        approved = proto.model_copy(update={"status": ProtocolStatus.approved})
-        from research_harness.research.envelope import ArtifactEnvelope
-
-        new_env = ArtifactEnvelope.create(
-            payload=approved, artifact_type="screening_protocol", producer="cli.approve"
-        )
-        await store.put(new_env)
-        await store.add_provenance(
-            ProvenanceLink(
-                relation=ProvenanceRelation.supersedes,
-                source_artifact_id=protocol_id,
-                target_artifact_id=new_env.artifact_id,
-                producer="cli.approve",
+            try:
+                env = await store.get(protocol_id)
+            except Exception as e:
+                console.print(f"[red]Protocol {protocol_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.screening_protocol import (
+                ProtocolStatus,
+                ScreeningProtocol,
             )
-        )
-        console.print(
-            f"[green]✓ Approved protocol: {new_env.artifact_id} supersedes {protocol_id}[/green]"
-        )
-        await store.close()
 
+            proto = env.parse_payload(ScreeningProtocol)
+            if proto.status == ProtocolStatus.approved:
+                console.print(f"[green]Protocol {protocol_id} already approved[/green]")
+                return
+            # Create approved version that supersedes draft
+            approved = proto.model_copy(update={"status": ProtocolStatus.approved})
+            from research_harness.research.envelope import ArtifactEnvelope
+
+            new_env = ArtifactEnvelope.create(
+                payload=approved, artifact_type="screening_protocol", producer="cli.approve"
+            )
+            await store.put(new_env)
+            await store.add_provenance(
+                ProvenanceLink(
+                    relation=ProvenanceRelation.supersedes,
+                    source_artifact_id=protocol_id,
+                    target_artifact_id=new_env.artifact_id,
+                    producer="cli.approve",
+                )
+            )
+            console.print(
+                f"[green]✓ Approved protocol: {new_env.artifact_id} supersedes {protocol_id}[/green]"
+            )
+        finally:
+            await store.close()
     asyncio.run(_run())
 
 
@@ -1528,46 +1553,48 @@ def screening_decisions_list(
         else:
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
-        # If execution filter, get decision ids from execution
-        filter_ids: set[str] | None = None
-        if execution:
-            try:
-                exec_env = await store.get(execution)
-                from research_harness.research.schemas.screening_execution import ScreeningExecution
+        try:
+            # If execution filter, get decision ids from execution
+            filter_ids: set[str] | None = None
+            if execution:
+                try:
+                    exec_env = await store.get(execution)
+                    from research_harness.research.schemas.screening_execution import (
+                        ScreeningExecution,
+                    )
 
-                rec = exec_env.parse_payload(ScreeningExecution)
-                filter_ids = set(rec.decision_artifact_ids)
-            except Exception as e:
-                console.print(f"[red]Execution {execution!r} not found: {e}[/red]")
-                raise typer.Exit(code=1) from e
-        decisions = await store.list(artifact_type="screening_decision")
-        if filter_ids is not None:
-            decisions = [d for d in decisions if d.artifact_id in filter_ids]
-        if not decisions:
-            console.print("[dim]No decisions found[/dim]")
+                    rec = exec_env.parse_payload(ScreeningExecution)
+                    filter_ids = set(rec.decision_artifact_ids)
+                except Exception as e:
+                    console.print(f"[red]Execution {execution!r} not found: {e}[/red]")
+                    raise typer.Exit(code=1) from e
+            decisions = await store.list(artifact_type="screening_decision")
+            if filter_ids is not None:
+                decisions = [d for d in decisions if d.artifact_id in filter_ids]
+            if not decisions:
+                console.print("[dim]No decisions found[/dim]")
+                return
+            table = Table(title="Screening Decisions")
+            table.add_column("ID", style="cyan")
+            table.add_column("PaperIdentity", style="magenta")
+            table.add_column("Decision", style="yellow")
+            table.add_column("Confidence", style="green")
+            table.add_column("Protocol", style="dim")
+            for env in decisions:
+                from research_harness.research.schemas.screening_decision import ScreeningDecision
+
+                dec = env.parse_payload(ScreeningDecision)
+                table.add_row(
+                    env.artifact_id[:8],
+                    dec.paper_identity_id[:8],
+                    dec.decision.value,
+                    str(dec.confidence),
+                    dec.screening_protocol_id[:8],
+                )
+                table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "", "")
+            console.print(table)
+        finally:
             await store.close()
-            return
-        table = Table(title="Screening Decisions")
-        table.add_column("ID", style="cyan")
-        table.add_column("PaperIdentity", style="magenta")
-        table.add_column("Decision", style="yellow")
-        table.add_column("Confidence", style="green")
-        table.add_column("Protocol", style="dim")
-        for env in decisions:
-            from research_harness.research.schemas.screening_decision import ScreeningDecision
-
-            dec = env.parse_payload(ScreeningDecision)
-            table.add_row(
-                env.artifact_id[:8],
-                dec.paper_identity_id[:8],
-                dec.decision.value,
-                str(dec.confidence),
-                dec.screening_protocol_id[:8],
-            )
-            table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "", "")
-        console.print(table)
-        await store.close()
-
     asyncio.run(_run())
 
 
@@ -1592,35 +1619,36 @@ def screening_decisions_inspect(
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
         try:
-            env = await store.get(decision_id)
-        except Exception as e:
-            console.print(f"[red]Decision {decision_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        from research_harness.research.schemas.screening_decision import ScreeningDecision
+            try:
+                env = await store.get(decision_id)
+            except Exception as e:
+                console.print(f"[red]Decision {decision_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.screening_decision import ScreeningDecision
 
-        dec = env.parse_payload(ScreeningDecision)
-        console.print(f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}]")
-        console.print(f"PaperIdentity: {dec.paper_identity_id}")
-        console.print(f"View: {dec.screening_view_id}  Protocol: {dec.screening_protocol_id}")
-        console.print(
-            f"Decision: {dec.decision.value}  Confidence: {dec.confidence}  Sufficiency: {dec.information_sufficiency.value}"
-        )
-        console.print(f"Matched inclusion: {dec.matched_inclusion_criteria}")
-        console.print(f"Matched exclusion: {dec.matched_exclusion_criteria}")
-        console.print(f"Reason codes: {dec.reason_codes}")
-        console.print(f"Rationale: {dec.rationale_summary}")
-        # Try to find review
-        reviews = await store.list(artifact_type="screening_review")
-        for r_env in reviews:
-            from research_harness.research.schemas.screening_review import ScreeningReview
+            dec = env.parse_payload(ScreeningDecision)
+            console.print(f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}]")
+            console.print(f"PaperIdentity: {dec.paper_identity_id}")
+            console.print(f"View: {dec.screening_view_id}  Protocol: {dec.screening_protocol_id}")
+            console.print(
+                f"Decision: {dec.decision.value}  Confidence: {dec.confidence}  Sufficiency: {dec.information_sufficiency.value}"
+            )
+            console.print(f"Matched inclusion: {dec.matched_inclusion_criteria}")
+            console.print(f"Matched exclusion: {dec.matched_exclusion_criteria}")
+            console.print(f"Reason codes: {dec.reason_codes}")
+            console.print(f"Rationale: {dec.rationale_summary}")
+            # Try to find review
+            reviews = await store.list(artifact_type="screening_review")
+            for r_env in reviews:
+                from research_harness.research.schemas.screening_review import ScreeningReview
 
-            rev = r_env.parse_payload(ScreeningReview)
-            if rev.screening_decision_id == decision_id:
-                console.print(
-                    f"[yellow]Review: {r_env.artifact_id} original={rev.original_decision} final={rev.final_decision} reviewer={rev.reviewer_type.value}[/yellow]"
-                )
-        await store.close()
-
+                rev = r_env.parse_payload(ScreeningReview)
+                if rev.screening_decision_id == decision_id:
+                    console.print(
+                        f"[yellow]Review: {r_env.artifact_id} original={rev.original_decision} final={rev.final_decision} reviewer={rev.reviewer_type.value}[/yellow]"
+                    )
+        finally:
+            await store.close()
     asyncio.run(_run())
 
 
@@ -1646,47 +1674,49 @@ def screening_sets_list(
         else:
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
-        sets = await store.list(artifact_type="screened_literature_set")
-        if execution:
-            sets = [
-                s
-                for s in sets
-                if s.payload.get("screening_execution_id") == execution
-                or s.parse_payload(
-                    __import__(
-                        "research_harness.research.schemas.screening_execution",
-                        fromlist=["ScreenedLiteratureSet"],
-                    ).ScreenedLiteratureSet
-                ).screening_execution_id
-                == execution
-            ]  # type: ignore[attr-defined]
-        if not sets:
-            console.print("[dim]No screened sets found[/dim]")
+        try:
+            sets = await store.list(artifact_type="screened_literature_set")
+            if execution:
+                sets = [
+                    s
+                    for s in sets
+                    if s.payload.get("screening_execution_id") == execution
+                    or s.parse_payload(
+                        __import__(
+                            "research_harness.research.schemas.screening_execution",
+                            fromlist=["ScreenedLiteratureSet"],
+                        ).ScreenedLiteratureSet
+                    ).screening_execution_id
+                    == execution
+                ]  # type: ignore[attr-defined]
+            if not sets:
+                console.print("[dim]No screened sets found[/dim]")
+                return
+            table = Table(title="Screened Literature Sets")
+            table.add_column("ID", style="cyan")
+            table.add_column("Execution", style="magenta")
+            table.add_column("Protocol", style="yellow")
+            table.add_column("Included", style="green")
+            table.add_column("Excluded", style="red")
+            table.add_column("Uncertain", style="dim")
+            for env in sets:
+                from research_harness.research.schemas.screening_execution import (
+                    ScreenedLiteratureSet,
+                )
+
+                s = env.parse_payload(ScreenedLiteratureSet)
+                table.add_row(
+                    env.artifact_id[:8],
+                    s.screening_execution_id[:8],
+                    s.screening_protocol_id[:8],
+                    str(len(s.included_identity_ids)),
+                    str(len(s.excluded_identity_ids)),
+                    str(len(s.uncertain_identity_ids)),
+                )
+                table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "", "", "")
+            console.print(table)
+        finally:
             await store.close()
-            return
-        table = Table(title="Screened Literature Sets")
-        table.add_column("ID", style="cyan")
-        table.add_column("Execution", style="magenta")
-        table.add_column("Protocol", style="yellow")
-        table.add_column("Included", style="green")
-        table.add_column("Excluded", style="red")
-        table.add_column("Uncertain", style="dim")
-        for env in sets:
-            from research_harness.research.schemas.screening_execution import ScreenedLiteratureSet
-
-            s = env.parse_payload(ScreenedLiteratureSet)
-            table.add_row(
-                env.artifact_id[:8],
-                s.screening_execution_id[:8],
-                s.screening_protocol_id[:8],
-                str(len(s.included_identity_ids)),
-                str(len(s.excluded_identity_ids)),
-                str(len(s.uncertain_identity_ids)),
-            )
-            table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "", "", "")
-        console.print(table)
-        await store.close()
-
     asyncio.run(_run())
 
 
@@ -1712,33 +1742,34 @@ def screening_sets_inspect(
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
         try:
-            env = await store.get(set_id)
-        except Exception as e:
-            console.print(f"[red]Set {set_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        from research_harness.research.schemas.screening_execution import ScreenedLiteratureSet
+            try:
+                env = await store.get(set_id)
+            except Exception as e:
+                console.print(f"[red]Set {set_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.screening_execution import ScreenedLiteratureSet
 
-        s = env.parse_payload(ScreenedLiteratureSet)
-        console.print(f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}]")
-        console.print(f"Execution: {s.screening_execution_id}")
-        console.print(f"Protocol: {s.screening_protocol_id}")
-        console.print(f"Included ({len(s.included_identity_ids)}): {s.included_identity_ids[:5]}")
-        console.print(f"Excluded ({len(s.excluded_identity_ids)}): {s.excluded_identity_ids[:5]}")
-        console.print(
-            f"Uncertain ({len(s.uncertain_identity_ids)}): {s.uncertain_identity_ids[:5]}"
-        )
-        console.print(f"Decisions ({len(s.decision_artifact_ids)}): {s.decision_artifact_ids[:5]}")
-        console.print(f"Created: {s.created_at.isoformat()}")
-        if s.metadata:
-            console.print(f"Metadata: {json.dumps(s.metadata, indent=2)}")
-        # Provenance
-        parents, _children = await store.get_provenance(set_id)
-        if parents:
-            console.print(f"\n[bold]Parents ({len(parents)}):[/bold]")
-            for p in parents:
-                console.print(f"  {p.relation.value} ← {p.source_artifact_id}")
-        await store.close()
-
+            s = env.parse_payload(ScreenedLiteratureSet)
+            console.print(f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}]")
+            console.print(f"Execution: {s.screening_execution_id}")
+            console.print(f"Protocol: {s.screening_protocol_id}")
+            console.print(f"Included ({len(s.included_identity_ids)}): {s.included_identity_ids[:5]}")
+            console.print(f"Excluded ({len(s.excluded_identity_ids)}): {s.excluded_identity_ids[:5]}")
+            console.print(
+                f"Uncertain ({len(s.uncertain_identity_ids)}): {s.uncertain_identity_ids[:5]}"
+            )
+            console.print(f"Decisions ({len(s.decision_artifact_ids)}): {s.decision_artifact_ids[:5]}")
+            console.print(f"Created: {s.created_at.isoformat()}")
+            if s.metadata:
+                console.print(f"Metadata: {json.dumps(s.metadata, indent=2)}")
+            # Provenance
+            parents, _children = await store.get_provenance(set_id)
+            if parents:
+                console.print(f"\n[bold]Parents ({len(parents)}):[/bold]")
+                for p in parents:
+                    console.print(f"  {p.relation.value} ← {p.source_artifact_id}")
+        finally:
+            await store.close()
     asyncio.run(_run())
 
 
@@ -1770,44 +1801,45 @@ def screening_review(
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
         try:
-            dec_env = await store.get(decision)
-        except Exception as e:
-            console.print(f"[red]Decision {decision!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        from research_harness.research.schemas.screening_decision import ScreeningDecision
+            try:
+                dec_env = await store.get(decision)
+            except Exception as e:
+                console.print(f"[red]Decision {decision!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.screening_decision import ScreeningDecision
 
-        dec = dec_env.parse_payload(ScreeningDecision)
-        review = ScreeningReview(
-            screening_decision_id=decision,
-            review_reason="human_override",
-            original_decision=dec.decision.value,
-            final_decision=final,
-            reviewer_type=ReviewerType.human,
-            notes=notes,
-        )
-        from research_harness.research.envelope import ArtifactEnvelope
-        from research_harness.research.provenance.relations import (
-            ProvenanceLink,
-            ProvenanceRelation,
-        )
-
-        env = ArtifactEnvelope.create(
-            payload=review, artifact_type="screening_review", producer="cli.review"
-        )
-        await store.put(env)
-        await store.add_provenance(
-            ProvenanceLink(
-                relation=ProvenanceRelation.derived_from,
-                source_artifact_id=decision,
-                target_artifact_id=env.artifact_id,
-                producer="cli.review",
+            dec = dec_env.parse_payload(ScreeningDecision)
+            review = ScreeningReview(
+                screening_decision_id=decision,
+                review_reason="human_override",
+                original_decision=dec.decision.value,
+                final_decision=final,
+                reviewer_type=ReviewerType.human,
+                notes=notes,
             )
-        )
-        console.print(
-            f"[green]✓ Review artifact: {env.artifact_id} final={final} (original {dec.decision.value} preserved)[/green]"
-        )
-        await store.close()
+            from research_harness.research.envelope import ArtifactEnvelope
+            from research_harness.research.provenance.relations import (
+                ProvenanceLink,
+                ProvenanceRelation,
+            )
 
+            env = ArtifactEnvelope.create(
+                payload=review, artifact_type="screening_review", producer="cli.review"
+            )
+            await store.put(env)
+            await store.add_provenance(
+                ProvenanceLink(
+                    relation=ProvenanceRelation.derived_from,
+                    source_artifact_id=decision,
+                    target_artifact_id=env.artifact_id,
+                    producer="cli.review",
+                )
+            )
+            console.print(
+                f"[green]✓ Review artifact: {env.artifact_id} final={final} (original {dec.decision.value} preserved)[/green]"
+            )
+        finally:
+            await store.close()
     asyncio.run(_run())
 
 
@@ -2010,52 +2042,52 @@ def documents_list(
         else:
             path = ".research/artifacts.db"
         store = SQLiteArtifactStore(path=path)
-        docs = await store.list(artifact_type="full_text_document")
-        # Filter by set/execution via corpus
-        if set_id or execution:
-            # Load corpus to filter
-            corpora = await store.list(artifact_type="full_text_corpus")
-            allowed_ids: set[str] | None = None
-            for c_env in corpora:
-                from research_harness.research.schemas.full_text import FullTextCorpus
+        try:
+            docs = await store.list(artifact_type="full_text_document")
+            # Filter by set/execution via corpus
+            if set_id or execution:
+                # Load corpus to filter
+                corpora = await store.list(artifact_type="full_text_corpus")
+                allowed_ids: set[str] | None = None
+                for c_env in corpora:
+                    from research_harness.research.schemas.full_text import FullTextCorpus
 
-                c = c_env.parse_payload(FullTextCorpus)
-                if set_id and c.screened_literature_set_id != set_id:
-                    continue
-                if execution and c.document_acquisition_execution_id != execution:
-                    continue
-                if allowed_ids is None:
-                    allowed_ids = set()
-                allowed_ids.update(c.available_document_ids)
-            if allowed_ids is not None:
-                docs = [d for d in docs if d.artifact_id in allowed_ids]
-            elif set_id or execution:
-                docs = []
-        if not docs:
-            console.print("[dim]No documents found[/dim]")
+                    c = c_env.parse_payload(FullTextCorpus)
+                    if set_id and c.screened_literature_set_id != set_id:
+                        continue
+                    if execution and c.document_acquisition_execution_id != execution:
+                        continue
+                    if allowed_ids is None:
+                        allowed_ids = set()
+                    allowed_ids.update(c.available_document_ids)
+                if allowed_ids is not None:
+                    docs = [d for d in docs if d.artifact_id in allowed_ids]
+                elif set_id or execution:
+                    docs = []
+            if not docs:
+                console.print("[dim]No documents found[/dim]")
+                return
+            table = Table(title="FullTextDocuments")
+            table.add_column("ID", style="cyan")
+            table.add_column("PaperIdentity", style="magenta")
+            table.add_column("Pages", style="yellow")
+            table.add_column("Status", style="green")
+            table.add_column("Chars", style="dim")
+            for env in docs:
+                from research_harness.research.schemas.full_text import FullTextDocument
+
+                d = env.parse_payload(FullTextDocument)
+                table.add_row(
+                    env.artifact_id[:8],
+                    d.paper_identity_id[:8],
+                    str(d.page_count),
+                    d.text_status.value,
+                    str(d.character_count),
+                )
+                table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "", "")
+            console.print(table)
+        finally:
             await store.close()
-            return
-        table = Table(title="FullTextDocuments")
-        table.add_column("ID", style="cyan")
-        table.add_column("PaperIdentity", style="magenta")
-        table.add_column("Pages", style="yellow")
-        table.add_column("Status", style="green")
-        table.add_column("Chars", style="dim")
-        for env in docs:
-            from research_harness.research.schemas.full_text import FullTextDocument
-
-            d = env.parse_payload(FullTextDocument)
-            table.add_row(
-                env.artifact_id[:8],
-                d.paper_identity_id[:8],
-                str(d.page_count),
-                d.text_status.value,
-                str(d.character_count),
-            )
-            table.add_row(f"[dim]{env.artifact_id}[/dim]", "", "", "", "")
-        console.print(table)
-        await store.close()
-
     asyncio.run(_run())
 
 
@@ -2083,70 +2115,73 @@ def documents_inspect(
             blob_root = ".research/blobs"
         store = SQLiteArtifactStore(path=path)
         try:
-            env = await store.get(doc_id)
-        except Exception as e:
-            console.print(f"[red]Document {doc_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        from research_harness.research.schemas.full_text import FullTextDocument
-
-        doc = env.parse_payload(FullTextDocument)
-        console.print(f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}]")
-        console.print(f"PaperIdentity: {doc.paper_identity_id}")
-        console.print(f"Acquisition: {doc.document_acquisition_id}")
-        console.print(f"Extractor: {doc.extractor} v{doc.extractor_version}")
-        console.print(
-            f"Pages: {doc.page_count} with_text {doc.pages_with_text} chars {doc.character_count} status {doc.text_status.value}"
-        )
-        console.print(
-            f"Source blob: {doc.source_blob.storage_key} sha256 {doc.source_blob.digest[:12]}..."
-        )
-        if doc.text_blob:
-            console.print(
-                f"Text blob: {doc.text_blob.storage_key} sha256 {doc.text_blob.digest[:12]}... size {doc.text_blob.size_bytes}"
-            )
-        console.print(f"Quality: {json.dumps(doc.quality_metrics, indent=2)}")
-        # Try to show acquisition
-        try:
-            acq_env = await store.get(doc.document_acquisition_id)
-            from research_harness.research.schemas.document_acquisition import DocumentAcquisition
-
-            acq = acq_env.parse_payload(DocumentAcquisition)
-            console.print(
-                f"Acquisition status: {acq.status.value} http {acq.http_status} final_url {acq.final_url}"
-            )
-        except Exception as e:
-            # M74: a missing or unreadable acquisition is a data-integrity
-            # problem, not something to drop on the floor.
-            console.print(
-                f"[yellow]acquisition {doc.document_acquisition_id} unreadable: {e}[/yellow]"
-            )
-        # Provenance
-        parents, _children = await store.get_provenance(doc_id)
-        if parents:
-            console.print(f"\n[bold]Parents ({len(parents)}):[/bold]")
-            for p in parents:
-                console.print(f"  {p.relation.value} ← {p.source_artifact_id}")
-        # Try to load one page of text via blob store
-        if doc.text_blob:
             try:
-                from research_harness.plugins.storage.blobs_filesystem.plugin import (
-                    FilesystemBlobStore,
+                env = await store.get(doc_id)
+            except Exception as e:
+                console.print(f"[red]Document {doc_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.full_text import FullTextDocument
+
+            doc = env.parse_payload(FullTextDocument)
+            console.print(f"[bold cyan]{env.artifact_id}[/bold cyan] [{env.artifact_type}]")
+            console.print(f"PaperIdentity: {doc.paper_identity_id}")
+            console.print(f"Acquisition: {doc.document_acquisition_id}")
+            console.print(f"Extractor: {doc.extractor} v{doc.extractor_version}")
+            console.print(
+                f"Pages: {doc.page_count} with_text {doc.pages_with_text} chars {doc.character_count} status {doc.text_status.value}"
+            )
+            console.print(
+                f"Source blob: {doc.source_blob.storage_key} sha256 {doc.source_blob.digest[:12]}..."
+            )
+            if doc.text_blob:
+                console.print(
+                    f"Text blob: {doc.text_blob.storage_key} sha256 {doc.text_blob.digest[:12]}... size {doc.text_blob.size_bytes}"
+                )
+            console.print(f"Quality: {json.dumps(doc.quality_metrics, indent=2)}")
+            # Try to show acquisition
+            try:
+                acq_env = await store.get(doc.document_acquisition_id)
+                from research_harness.research.schemas.document_acquisition import (
+                    DocumentAcquisition,
                 )
 
-                blobs = FilesystemBlobStore(root=blob_root)
-                data = await blobs.get_bytes(doc.text_blob)  # type: ignore[arg-type]
-                # Show first page snippet
-                j = json.loads(data.decode("utf-8"))
-                if j.get("pages"):
-                    first = j["pages"][0]
-                    snippet = first.get("text", "")[:500]
-                    console.print(
-                        f"\n[bold]First page snippet (page {first.get('page')}):[/bold]\n{snippet[:500]}"
-                    )
+                acq = acq_env.parse_payload(DocumentAcquisition)
+                console.print(
+                    f"Acquisition status: {acq.status.value} http {acq.http_status} final_url {acq.final_url}"
+                )
             except Exception as e:
-                console.print(f"[yellow]Could not load text blob: {e}[/yellow]")
-        await store.close()
+                # M74: a missing or unreadable acquisition is a data-integrity
+                # problem, not something to drop on the floor.
+                console.print(
+                    f"[yellow]acquisition {doc.document_acquisition_id} unreadable: {e}[/yellow]"
+                )
+            # Provenance
+            parents, _children = await store.get_provenance(doc_id)
+            if parents:
+                console.print(f"\n[bold]Parents ({len(parents)}):[/bold]")
+                for p in parents:
+                    console.print(f"  {p.relation.value} ← {p.source_artifact_id}")
+            # Try to load one page of text via blob store
+            if doc.text_blob:
+                try:
+                    from research_harness.plugins.storage.blobs_filesystem.plugin import (
+                        FilesystemBlobStore,
+                    )
 
+                    blobs = FilesystemBlobStore(root=blob_root)
+                    data = await blobs.get_bytes(doc.text_blob)  # type: ignore[arg-type]
+                    # Show first page snippet
+                    j = json.loads(data.decode("utf-8"))
+                    if j.get("pages"):
+                        first = j["pages"][0]
+                        snippet = first.get("text", "")[:500]
+                        console.print(
+                            f"\n[bold]First page snippet (page {first.get('page')}):[/bold]\n{snippet[:500]}"
+                        )
+                except Exception as e:
+                    console.print(f"[yellow]Could not load text blob: {e}[/yellow]")
+        finally:
+            await store.close()
     asyncio.run(_run())
 
 
@@ -2238,49 +2273,49 @@ def documents_text(
             blob_root = ".research/blobs"
         store = SQLiteArtifactStore(path=art_path)
         try:
-            env = await store.get(doc_id)
-        except Exception as e:
-            console.print(f"[red]Document {doc_id!r} not found: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        from research_harness.research.schemas.full_text import FullTextDocument
+            try:
+                env = await store.get(doc_id)
+            except Exception as e:
+                console.print(f"[red]Document {doc_id!r} not found: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            from research_harness.research.schemas.full_text import FullTextDocument
 
-        doc = env.parse_payload(FullTextDocument)
-        if not doc.text_blob:
-            console.print(f"[yellow]No text blob (status {doc.text_status.value})[/yellow]")
+            doc = env.parse_payload(FullTextDocument)
+            if not doc.text_blob:
+                console.print(f"[yellow]No text blob (status {doc.text_status.value})[/yellow]")
+                return
+            from research_harness.plugins.storage.blobs_filesystem.plugin import FilesystemBlobStore
+
+            blobs = FilesystemBlobStore(root=blob_root)
+            try:
+                data = await blobs.get_bytes(doc.text_blob)  # type: ignore[arg-type]
+            except Exception as e:
+                console.print(f"[red]Failed to load text blob: {e}[/red]")
+                raise typer.Exit(code=1) from e
+            j = json.loads(data.decode("utf-8"))
+            pages = j.get("pages", [])
+            if page is not None:
+                found = next((p for p in pages if p.get("page") == page), None)
+                if not found:
+                    console.print(f"[red]Page {page} not found (has {len(pages)} pages)[/red]")
+                    raise typer.Exit(code=1)
+                text = found.get("text", "")
+                console.print(f"[bold]Page {page} ({len(text)} chars):[/bold]")
+                console.print(text[:limit])
+                if len(text) > limit:
+                    console.print(f"[dim]... truncated, {len(text) - limit} more chars[/dim]")
+            else:
+                # Show overview
+                console.print(
+                    f"[bold]Document {doc_id} has {len(pages)} pages, status {doc.text_status.value}[/bold]"
+                )
+                for p in pages[:5]:
+                    snippet = p.get("text", "")[:200].replace("\n", " ")
+                    console.print(f"  Page {p.get('page')}: {snippet[:200]}")
+                if len(pages) > 5:
+                    console.print(f"[dim]... and {len(pages) - 5} more pages (use --page)[/dim]")
+        finally:
             await store.close()
-            return
-        from research_harness.plugins.storage.blobs_filesystem.plugin import FilesystemBlobStore
-
-        blobs = FilesystemBlobStore(root=blob_root)
-        try:
-            data = await blobs.get_bytes(doc.text_blob)  # type: ignore[arg-type]
-        except Exception as e:
-            console.print(f"[red]Failed to load text blob: {e}[/red]")
-            raise typer.Exit(code=1) from e
-        j = json.loads(data.decode("utf-8"))
-        pages = j.get("pages", [])
-        if page is not None:
-            found = next((p for p in pages if p.get("page") == page), None)
-            if not found:
-                console.print(f"[red]Page {page} not found (has {len(pages)} pages)[/red]")
-                raise typer.Exit(code=1)
-            text = found.get("text", "")
-            console.print(f"[bold]Page {page} ({len(text)} chars):[/bold]")
-            console.print(text[:limit])
-            if len(text) > limit:
-                console.print(f"[dim]... truncated, {len(text) - limit} more chars[/dim]")
-        else:
-            # Show overview
-            console.print(
-                f"[bold]Document {doc_id} has {len(pages)} pages, status {doc.text_status.value}[/bold]"
-            )
-            for p in pages[:5]:
-                snippet = p.get("text", "")[:200].replace("\n", " ")
-                console.print(f"  Page {p.get('page')}: {snippet[:200]}")
-            if len(pages) > 5:
-                console.print(f"[dim]... and {len(pages) - 5} more pages (use --page)[/dim]")
-        await store.close()
-
     asyncio.run(_run())
 
 
@@ -5100,9 +5135,7 @@ def _publication_config(config: pathlib.Path | None, extra_plugins: list[str]) -
 @publication_app.command("profile-create")
 def publication_profile_create(
     name: Annotated[str, typer.Option("--name", help="Journal / style name")],
-    style: Annotated[
-        str, typer.Option("--style", help="citation style: author_year | apa")
-    ] = "author_year",
+    style: Annotated[StyleOption, typer.Option("--style")] = "author_year",
     anonymous: Annotated[bool, typer.Option("--anonymous", help="Anonymous-review mode")] = False,
     total_word_limit: Annotated[
         int | None, typer.Option("--total-word-limit", help="Total word limit")
@@ -5220,7 +5253,7 @@ def publication_export(
     manuscript: Annotated[
         str, typer.Option("--manuscript", help="FormattedManuscript artifact id")
     ],
-    format: Annotated[str, typer.Option("--format", help="markdown | latex | docx | pdf")],
+    format: Annotated[FormatOption, typer.Option("--format")],
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -5920,6 +5953,9 @@ def _evaluation_config(config: pathlib.Path | None, extra_plugins: list[str]) ->
     ):
         if pid not in cfg.plugins:
             cfg.plugins.append(pid)
+    # M76: `extra_plugins` reached the config only on the default path; when a
+    # config file was supplied the caller's plugins were silently dropped.
+    _ensure_plugins(cfg, *extra_plugins)
     return cfg
 
 
@@ -6263,9 +6299,11 @@ def eval_list(
 
 
 def _tournament_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
-    cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
-    if "evaluation.model_tournament" not in cfg.plugins:
-        cfg.plugins.append("evaluation.model_tournament")
+    # M76: `extra_plugins` was accepted and then ignored — the helper forwarded
+    # its own constant to `_evaluation_config` instead of the caller's list, so
+    # a plugin a command asked for never reached the config.
+    cfg = _evaluation_config(config, [*extra_plugins, *_EVAL_REQUIRED])
+    _ensure_plugins(cfg, "evaluation.model_tournament")
     return cfg
 
 
@@ -6415,7 +6453,7 @@ def leaderboard_list(
 
 @leaderboard_app.command("show")
 def leaderboard_show(
-    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    role: Annotated[RoleOption, typer.Option(help="Logical role")],
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -6500,30 +6538,22 @@ def leaderboard_inspect(
 
 
 def _routing_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
-    cfg = _evaluation_config(config, list(_EVAL_REQUIRED))
-    for pid in ("routing.policy_router", "routing.task_aware_router"):
-        if pid not in cfg.plugins:
-            cfg.plugins.append(pid)
+    # M76: forward the caller's plugins instead of dropping them.
+    cfg = _evaluation_config(config, [*extra_plugins, *_EVAL_REQUIRED])
+    _ensure_plugins(cfg, "routing.policy_router", "routing.task_aware_router")
     return cfg
 
 
 def _live_quality_config(config: pathlib.Path | None, extra_plugins: list[str]) -> Any:
-    cfg = _routing_config(config, list(_EVAL_REQUIRED))
-    for pid in ("evaluation.live_quality",):
-        if pid not in cfg.plugins:
-            cfg.plugins.append(pid)
+    cfg = _routing_config(config, [*extra_plugins, *_EVAL_REQUIRED])
+    _ensure_plugins(cfg, "evaluation.live_quality")
     return cfg
 
 
 @routing_app.command("decide")
 def routing_decide(
-    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
-    policy: Annotated[
-        str,
-        typer.Option(
-            help="Policy id: quality_first | balanced | cost_constrained | latency_constrained"
-        ),
-    ] = "quality_first",
+    role: Annotated[RoleOption, typer.Option(help="Logical role")],
+    policy: Annotated[PolicyOption, typer.Option(help="Policy id")] = "quality_first",
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -6564,8 +6594,8 @@ def routing_decide(
 
 @routing_app.command("shadow")
 def routing_shadow(
-    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
-    policy: Annotated[str, typer.Option(help="Policy id")] = "quality_first",
+    role: Annotated[RoleOption, typer.Option(help="Logical role")],
+    policy: Annotated[PolicyOption, typer.Option(help="Policy id")] = "quality_first",
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -6638,7 +6668,7 @@ def routing_inspect(
 
 @routing_app.command("readiness")
 def routing_readiness(
-    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    role: Annotated[RoleOption, typer.Option(help="Logical role")],
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -6689,7 +6719,7 @@ def routing_policies_list() -> None:
 
 @live_quality_app.command("run")
 def live_quality_run(
-    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    role: Annotated[RoleOption, typer.Option(help="Logical role")],
     repetitions: Annotated[
         int, typer.Option(help="Runs per model/task (reliability validation)")
     ] = 3,
@@ -6896,7 +6926,7 @@ def evaluation_calibration(
 
 @routing_app.command("preflight")
 def routing_preflight(
-    role: Annotated[str | None, typer.Option(help="Filter by role (default: all)")] = None,
+    role: Annotated[RoleOption | None, typer.Option(help="Filter by role")] = None,
     model: Annotated[str | None, typer.Option(help="Probe one candidate model slug only")] = None,
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
@@ -6944,7 +6974,7 @@ def routing_preflight(
 
 @routing_app.command("qualify")
 def routing_qualify(
-    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    role: Annotated[RoleOption, typer.Option(help="Logical role")],
     repetitions: Annotated[int, typer.Option(help="Runs per candidate (>=3 recommended)")] = 3,
     tasks: Annotated[
         str | None,
@@ -7017,7 +7047,7 @@ def routing_qualify(
 
 @routing_qualification_app.command("matrix")
 def routing_qualification_matrix(
-    role: Annotated[str | None, typer.Option(help="Filter by role (default: all)")] = None,
+    role: Annotated[RoleOption | None, typer.Option(help="Filter by role")] = None,
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -7121,7 +7151,7 @@ def routing_qualification_inspect(
 
 @routing_qualification_app.command("summary")
 def routing_qualification_summary(
-    role: Annotated[str | None, typer.Option(help="Filter by role (default: all)")] = None,
+    role: Annotated[RoleOption | None, typer.Option(help="Filter by role")] = None,
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -7167,7 +7197,7 @@ def routing_qualification_summary(
 
 @routing_qualification_app.command("tasks")
 def routing_qualification_tasks(
-    role: Annotated[str | None, typer.Option(help="Filter by role (default: all)")] = None,
+    role: Annotated[RoleOption | None, typer.Option(help="Filter by role")] = None,
     config: Annotated[pathlib.Path | None, typer.Option(help="Config file path")] = pathlib.Path(
         "configs/example.yaml"
     ),
@@ -7245,7 +7275,7 @@ def routing_qualification_remaining(
 
 @routing_app.command("qualify-task")
 def routing_qualify_task(
-    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    role: Annotated[RoleOption, typer.Option(help="Logical role")],
     task: Annotated[
         str,
         typer.Option(
@@ -7338,7 +7368,7 @@ def routing_capability_profile(
 
 @routing_app.command("shadow-task")
 def routing_shadow_task(
-    role: Annotated[str, typer.Option(help="Logical role: fast | reasoning | critic")],
+    role: Annotated[RoleOption, typer.Option(help="Logical role")],
     task: Annotated[
         str,
         typer.Option(
@@ -7426,15 +7456,18 @@ def routing_shadow_campaign(
             console.print(header)
             console.print("-" * len(header))
             for d in sorted(decisions, key=lambda x: (x.role, x.task)):
+                # L33: pad inside the markup, or the pad counts the markup
+                # characters and the column lines up on the invisible tags
+                # instead of the visible text.
                 mark = (
-                    "[green]selected[/green]"
+                    "[green]selected        [/green]"
                     if d.status.value == "selected"
-                    else "[yellow]static_fallback[/yellow]"
+                    else "[yellow]static_fallback  [/yellow]"
                 )
                 console.print(
                     f"{d.task:32s} {str(d.current_static_model or ''):38s} "
                     f"{str(d.shadow_selected_model or '(static)'):38s} {str(d.would_switch):6s} "
-                    f"{mark:16s} {str(d.fallback_candidate_id or ''):38s}"
+                    f"{mark} {str(d.fallback_candidate_id or ''):38s}"
                 )
                 if d.reason:
                     console.print(f"  [yellow]reason: {d.reason}[/yellow]")

@@ -104,7 +104,8 @@ in the working tree, uncommitted.
 | **L8, L29, L34** Low sweep | **Partially fixed** (round 25) | `proposition_generator`, `tournament/accounting`, `evaluation_harness` |
 | **M18, M21, M23, M25, M28, M30, M31** routing semantics | **Fixed** (round 26) | `routing/selection`, `routing/qualification`, `routing/readiness`, `routing/task_aware`, `policy_router`, `schemas/routing`, `research/timeutil` |
 | **M35, M36, M37, M39, M43** literature semantics | **Fixed** (round 27) | `identity_resolver`, `gap_analyzer`, `screening_orchestrator`, `locator_unpaywall` |
-| The remaining M/L backlog | **Triaged** (round 19) — 38 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **M72, M73, M76, L33** CLI structure | **Fixed** (round 28) | `cli/main.py` |
+| The remaining M/L backlog | **Triaged** (round 19) — 34 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -774,6 +775,59 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 28 notes (M72, M73, M76, L33 — CLI structure)
+
+Four findings in `cli/main.py`, the last of the cleanly-scoped clusters.
+
+- **M76** — `_tournament_config`, `_routing_config` and `_live_quality_config`
+  each take an `extra_plugins` parameter and never use it: they call
+  `_evaluation_config(config, list(_EVAL_REQUIRED))`, forwarding their own
+  constant instead of the caller's list, so a plugin a command asked for was
+  silently dropped. All 23 call sites pass that same constant, which is already
+  in the base plugin list, so the parameter has been dead for as long as it has
+  existed. Two changes were needed: the three helpers now forward the caller's
+  list, and `_evaluation_config` now ensures `extra_plugins` on the config-file
+  path — until now they reached the config only on the default path, so the same
+  drop happened one level down.
+- **M72** — no `typer.Choice` anywhere in the CLI: eight `--role` options plus
+  `--direction`, `--format`, `--style` and `--policy` were plain `str` with the
+  allowed values written only in the help text. A typo therefore reached the
+  service layer; `leaderboard show` raises `ConfigurationError` from
+  `validate_role` on an unknown role. Each is now a `Literal`, which typer
+  renders as a real choice.
+  **Implementation note:** `typer.Choice` is not usable here — this project
+  pins `typer>=0.12` and the resolved version (0.27) no longer re-exports it,
+  and `click` is not installed as a separate distribution, so `click.Choice`
+  is unreachable too. `Literal` gives the same usage error (exit 2 listing the
+  valid values) with no extra dependency.
+- **M73** — 15 places open a store; all of them closed it only at the end of the
+  happy path (and some before an early `return`), so any exception in between
+  leaked the connection. With 100+ `typer.Exit` sites that is most error paths.
+  Every store is now opened inside a `try` with the close in a `finally`.
+  **Two shapes needed different handling.** Twelve sites build the store inside
+  the command's `async def _run()`; three build it *outside* via
+  `_get_artifact_store` and close it inside `_run`. Wrapping the outer scope
+  produced `await` outside an async function, so for those three the store had
+  to move inside `_run` first.
+- **L33** — partially fixed. Of the six nits:
+
+  | Nit | Status |
+  |---|---|
+  | `--prompt` silently discarded when `--prompt-file` is given | **Fixed** — now a usage error |
+  | silent 4000-char truncation in `artifacts inspect` | **Fixed** — says how many characters it dropped |
+  | Rich markup counted in a `{mark:16s}` pad | **Fixed** — the pad moved inside the markup |
+  | `runtime inspect` prints a "Services" heading over `metadata.provides` | **Not fixed** — needs a runtime service registry to print, which is a design question rather than a nit |
+  | `__import__()` string hacks (13 sites) | **Not fixed** — mechanical but touches 13 sites for no behaviour change |
+  | dead `or` branch that can raise `ValidationError` | **Not fixed** — folded into the `__import__` sites; needs the same pass |
+
+  L33 stays open until the remaining three are done.
+
+**Test note.** 14 of the 17 added tests fail before the change; the three that
+pass both ways are guards (the tournament plugin is still appended, and valid
+enum values are still accepted). The store-leak tests are source-shape tests
+rather than behavioural ones, because an end-to-end leak test would need a real
+command to raise after opening a store.
 
 ### Round 27 notes (M35, M36, M37, M39, M43 — literature semantics)
 
@@ -2086,16 +2140,16 @@ failed attempt.
   campaign's, so the count contradicts the header.
 - **M71** **Fixed (round 20).** `main.py:6828-6864, 5992-6042` — `evaluation calibration` and `eval run` always
   exit 0 regardless of verdict/failures; unusable as CI gates.
-- **M72** `main.py` — zero uses of `typer.Choice`. Eight `--role` options accept any string;
+- **M72** **Fixed (round 28).** `main.py` — zero uses of `typer.Choice`. Eight `--role` options accept any string;
   `--direction`, `--format`, `--style`, `--policy` likewise. `leaderboard show` (6420) can
   raise from `validate_role`.
-- **M73** SQLite connections leak on every error path that raises `typer.Exit` (12+ sites
+- **M73** **Fixed (round 28).** SQLite connections leak on every error path that raises `typer.Exit` (12+ sites
   close only on the happy path). Use `try/finally` or dedupe into `_get_artifact_store`.
 - **M74** **Fixed (round 20).** `main.py:606-607, 1180-1181, 2119-2120` — `except Exception: pass` hides dangling
   references and other data-integrity problems.
 - **M75** **Fixed (round 20).** `main.py:425-441` — `session inspect` interpolates `session_id` into a path with no
   containment check, and `read_text()` without `encoding=`.
-- **M76** `main.py:6252-6256, 6489-6494, 6497-6502` — `_tournament_config`/`_routing_config`/
+- **M76** **Fixed (round 28).** `main.py:6252-6256, 6489-6494, 6497-6502` — `_tournament_config`/`_routing_config`/
   `_live_quality_config` accept `extra_plugins` and ignore it; 23 call sites pass it.
 
 **Found during round 11 ("does this guard actually fire?" pass) — not yet fixed**
@@ -2285,7 +2339,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 - **L32** **Fixed (round 25).** `calibration.py:193-198` — unknown-benchmark branch records `case_id="*"`, which can
   never match, so the defect is never excluded; `:338` — `IndexError` on
   `{"documents": []}`.
-- **L33** `cli/main.py:313-317` — `--prompt` silently discarded when `--prompt-file` is given;
+- **L33** **Partially fixed (round 28).** `cli/main.py:313-317` — `--prompt` silently discarded when `--prompt-file` is given;
   `:274-284` — `runtime inspect` prints a "Services" heading over `metadata.provides`, not
   the registry; `:545` — silent 4000-char truncation; `:1643+` — `__import__()` string hacks
   where a normal import would do; `:1638-1650` — dead `or` branch that can raise
@@ -2438,23 +2492,25 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 59 | **27** |
-| Low (L1-L39) | 39 | 28 | **11** |
-| **Total** | **158** | **120** | **38** |
+| Medium (M1-M86) | 86 | 62 | **24** |
+| Low (L1-L39) | 39 | 28 | **10** |
+| **Total** | **158** | **123** | **34** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17-M25, M26-M37, M38-M43, M46, M49, M65-M71, M74,
-  M75, M77, M79-M82, M86** (M46 was refuted, not fixed; M44, M45, M47, M48,
-  M50-M64, M72, M73, M76, M78, M83-M85 remain open).
+- Closed Medium: **M1-M16, M17-M25, M26-M43, M46, M49, M65-M77, M79-M82, M86**
+  (M46 was refuted, not fixed; M44, M45, M47, M48, M50-M64, M78, M83-M85 remain
+  open).
 - Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
   M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
   (round 21), **L15, L16, L18, L19** (round 23), **L3, L9, L11, L17, L22, L24,
   L25, L27, L28, L30-L32, L35** (round 25), **L1, L2, L4, L6, L36 accepted**
-  (round 24). **L21 is blocked**; **L8, L29, L34, L38 are partially fixed**. **L38 is partially fixed** and stays open — see the round-21 notes.
+  (round 24), **L33 partially** (round 28). **L21 is blocked**; **L8, L29,
+  L33, L34, L38 are partially fixed** and stay open — see the round-21 and
+  round-28 notes.
 
 ### 9.1 Legend
 
@@ -2522,7 +2578,7 @@ novelty phrase is **never detected** (and the span merge keeps the earlier risk)
 | Literature semantics | — | **Done (round 27).** M35, M36, M37, M39, M43. |
 | Literature performance | M44, M45, M47, M50 | M44 is O(n³) store round-trips plus a 20 GB-read-before-size-check; M45 needs `to_thread` + caps; **M47 ⚠** and **M50 ⚠** touch C6's SSRF/DNS pinning. |
 | Bootstrap / config | M53, M54, M56, M59, M61, M62 | M54 is a parser rewrite that also stops the loader walking 4 parents for secrets; **M56 ⚠** adds `extra: forbid` to 10 contract schemas and can break existing callers; M59 needs a transaction; M61 is secret-scrubbing breadth. |
-| CLI structure | M72, M73, M76, L33 | M72 and M73 span 8 options and 12+ error paths in a 7 400-line file; M76 is `extra_plugins` ignored by 3 more builders (23 call sites) — same shape as H14. |
+| CLI structure | — | **Done (round 28).** M72, M73, M76; L33 partially (3 of 6 nits). |
 | Round-11 leftovers | M83, M85 | M83: decide whether to *emit* `_completed` or drop the metric. M85: honour or remove 5 stored-but-unread knobs (the `results_assembler` one is a live 3-calls-vs-budget-1 difference). |
 | Novelty | L38 (partial) | L13 and L14 are fixed (round 21). L38 is partially fixed (round 22): the per-item store round-trips are gone, but the scan itself remains until there is a store-level index. |
 | Scientific core | L7 | Follow-on to H6-H12 (symbolic table plumbing). |
@@ -2567,13 +2623,13 @@ span `main.py`).
 | 8 | Fetcher / network (⚠) | M44, M45, M47, M50 | 4 M |
 | 9 | Evaluation + metrics leftovers | M83, M84, L1-L6, L8, L9, L11 | ~11 S/M |
 | 10 | Bootstrap / schemas (⚠) | M53, M54, M56, M59, M61, M62, L23 | 7 M |
-| 11 | CLI structure | M72, M73, M76, L33 | 4 M |
+| 11 | CLI structure | — | — |
 | 12 | Large, one round each | M48, then M78 | 2 L |
 
 All five triage batches are now done. What is left is the semantic M-bucket
 (§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total now ~85 h**, of which ~40 h is done (five batches + Low sweep + routing + literature semantics). That is the honest number, and it is why the next
+**Rough total now ~82 h**, of which ~42 h is done (five batches + Low sweep + routing + literature semantics + CLI structure). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Accepted closures (round 24)
@@ -2624,7 +2680,7 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 27 the backlog is **38 open**: 27 Medium and 11 Low.
+After round 28 the backlog is **34 open**: 24 Medium and 10 Low.
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really
