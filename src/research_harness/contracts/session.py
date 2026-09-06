@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class SessionEvent(BaseModel):
+    model_config = {"extra": "forbid"}
     event_id: str
     event_type: str
     timestamp: datetime
@@ -19,6 +20,7 @@ class SessionEvent(BaseModel):
 
 
 class SessionMetadata(BaseModel):
+    model_config = {"extra": "forbid"}
     session_id: str
     created_at: datetime
     config_ref: dict[str, Any] | None = None

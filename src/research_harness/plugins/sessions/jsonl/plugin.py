@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,24 +23,55 @@ _SENSITIVE_KEYS = {
     "openrouter_api_key",
     "authorization",
     "password",
+    "passwd",
     "token",
     "access_token",
     "refresh_token",
+    "session_token",
+    # M61: `credentials` was the obvious omission — a dict handed to a provider
+    # is exactly where a key lives, and it had no sensitive name to match.
+    "credentials",
+    "client_secret",
     "secret",
+    "secret_key",
+    "private_key",
+    "access_key",
+    "auth",
+    "cookie",
     "bearer",
 }
+
+# M61: key names are not enough. A secret also arrives as free text — an error
+# message that echoes `Bearer sk-or-v1-...` has no sensitive key to match on,
+# so it was persisted verbatim.
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+"),
+    re.compile(r"sk-or-v1-[A-Za-z0-9]+"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+)
+
+_REDACTED = "[REDACTED]"
+
+
+def _redact_text(text: str) -> str:
+    out = text
+    for pattern in _SECRET_PATTERNS:
+        out = pattern.sub(_REDACTED, out)
+    return out
 
 
 def _scrub_sensitive(obj: Any) -> Any:
     if isinstance(obj, dict):
         scrubbed: dict[str, Any] = {}
         for k, v in obj.items():
-            if k.lower() in _SENSITIVE_KEYS:
+            if isinstance(k, str) and k.lower() in _SENSITIVE_KEYS:
                 continue
             scrubbed[k] = _scrub_sensitive(v)
         return scrubbed
     if isinstance(obj, list):
         return [_scrub_sensitive(x) for x in obj]
+    if isinstance(obj, str):
+        return _redact_text(obj)
     return obj
 
 
@@ -107,7 +139,10 @@ class JsonlSessionStore:
                 if not line:
                     continue
                 try:
-                    events.append(json.loads(line))
+                    # M61: scrub on the way out too. Anything written before a
+                    # key name or pattern was known is still on disk, and a
+                    # caller that reads a session should not be able to leak it.
+                    events.append(_scrub_sensitive(json.loads(line)))
                 except json.JSONDecodeError as e:
                     raise SessionError(f"corrupt event at {session_id}:{lineno}: {e}") from e
         return events

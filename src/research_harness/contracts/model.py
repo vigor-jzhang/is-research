@@ -10,6 +10,7 @@ from research_harness.contracts.common import Usage
 
 
 class ToolCall(BaseModel):
+    model_config = {"extra": "forbid"}
     id: str
     name: str
     arguments: dict[str, Any] | str
@@ -17,6 +18,7 @@ class ToolCall(BaseModel):
 
 
 class Message(BaseModel):
+    model_config = {"extra": "forbid"}
     role: str  # system, user, assistant, tool
     content: str | None = None
     tool_calls: list[ToolCall] | None = None
@@ -25,6 +27,7 @@ class Message(BaseModel):
 
 
 class ToolSpec(BaseModel):
+    model_config = {"extra": "forbid"}
     name: str
     description: str
     parameters: dict[str, Any]  # JSON schema
@@ -51,6 +54,7 @@ class ModelRequest(BaseModel):
 
 
 class ModelResponse(BaseModel):
+    model_config = {"extra": "forbid"}
     message: Message
     tool_calls: list[ToolCall] = Field(default_factory=list)
     finish_reason: str | None = None

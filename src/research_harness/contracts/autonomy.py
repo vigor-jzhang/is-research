@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class ApprovalRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     request_id: str
     checkpoint: str
     description: str
@@ -15,6 +16,7 @@ class ApprovalRequest(BaseModel):
 
 
 class ApprovalDecision(BaseModel):
+    model_config = {"extra": "forbid"}
     request_id: str
     approved: bool
     reason: str | None = None

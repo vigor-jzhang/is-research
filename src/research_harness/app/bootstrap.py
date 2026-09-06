@@ -49,9 +49,13 @@ def _load_entry_points() -> list[Any]:
                 return list(eps_map.get(ENTRY_POINT_GROUP, []))  # type: ignore[union-attr]
             # If it's already a dict-like
             return []
-        except Exception:
+        except Exception as e:
+            # M53: an unreadable distribution used to make every external
+            # plugin vanish with no trace of why.
+            logger.warning("entry point discovery fallback failed: %s", e)
             return []
-    except Exception:
+    except Exception as e:
+        logger.warning("entry point discovery failed: %s", e)
         return []
 
 
@@ -130,10 +134,18 @@ def discover_external_factories() -> dict[str, Callable[[], Plugin]]:
             return factory
 
         if plugin_id in factories:
-            raise PluginError(
-                f"duplicate external plugin id {plugin_id!r} from entry_points "
-                f"(value {ep.value!r}); already provided by another external plugin"
+            # M53: this used to raise, and because create_plugin builds the
+            # merged set every call, one third-party package colliding with
+            # another made EVERY plugin uninstantiable -- including built-ins.
+            # Skip the loser and say so instead.
+            logger.error(
+                "skipping duplicate external plugin id %r (value %r): already "
+                "provided by another external plugin (value %r)",
+                plugin_id,
+                ep.value,
+                getattr(ep, "value", "?"),
             )
+            continue
         factories[plugin_id] = _make_factory(ep)
     return factories
 
@@ -180,13 +192,22 @@ def list_available_plugins() -> list[tuple[str, str]]:
     return result
 
 
-def create_plugin(plugin_id: str) -> Plugin:
+def create_plugin(
+    plugin_id: str,
+    factories: dict[str, Callable[[], Plugin]] | None = None,
+) -> Plugin:
     """Create a plugin by id from merged factories.
 
     Validates that the returned object is a Plugin and that its metadata id
     matches the requested id.
+
+    M53: ``factories`` may be supplied by a caller that builds many plugins, so
+    entry points are scanned once for the whole batch rather than once per
+    plugin. Discovery is not cached globally -- a scan is cheap and a stale
+    cache would hide plugins installed later in the same process.
     """
-    factories = get_all_plugin_factories()
+    if factories is None:
+        factories = get_all_plugin_factories()
     factory = factories.get(plugin_id)
     if factory is None:
         available = sorted(factories.keys())
@@ -318,9 +339,12 @@ def build_runtime(
         runtime_meta={"config_path": None},
     )
 
-    # Instantiate plugins listed in config via merged discovery
+    # Instantiate plugins listed in config via merged discovery.
+    # M53: resolve the factory set once for the whole batch; create_plugin used
+    # to re-scan entry points for every plugin in the list.
+    factories = get_all_plugin_factories()
     for pid in config.plugins:
-        plugin = create_plugin(pid)
+        plugin = create_plugin(pid, factories=factories)
         manager.register(plugin)
 
     # Extra plugins for testing (inject fakes directly, bypass discovery)

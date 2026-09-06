@@ -105,7 +105,8 @@ in the working tree, uncommitted.
 | **M18, M21, M23, M25, M28, M30, M31** routing semantics | **Fixed** (round 26) | `routing/selection`, `routing/qualification`, `routing/readiness`, `routing/task_aware`, `policy_router`, `schemas/routing`, `research/timeutil` |
 | **M35, M36, M37, M39, M43** literature semantics | **Fixed** (round 27) | `identity_resolver`, `gap_analyzer`, `screening_orchestrator`, `locator_unpaywall` |
 | **M72, M73, M76, L33** CLI structure | **Fixed** (round 28) | `cli/main.py` |
-| The remaining M/L backlog | **Triaged** (round 19) — 34 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **M53, M54, M56, M59, M61** bootstrap / config | **Fixed** (round 29) | `bootstrap.py`, `config/dotenv.py`, `contracts/`, `sessions/jsonl` |
+| The remaining M/L backlog | **Triaged** (round 19) — 30 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -775,6 +776,74 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 29 notes (M53, M54, M56, M59, M61 — bootstrap / config)
+
+Five findings in discovery, config loading, contracts and session storage. A
+sixth in the batch, **M62**, is deliberately not fixed — see below.
+
+- **M53** — three problems in plugin discovery. (a) Every failure path in
+  `_load_entry_points` returned `[]` with no logging, so an unreadable
+  distribution made every external plugin vanish silently. They now log a
+  warning. (b) No error isolation: when two *external* entry points claimed the
+  same id, `discover_external_factories` raised — and because `create_plugin`
+  rebuilds the merged set on every call, that single collision made **every**
+  plugin uninstantiable, built-ins included. The duplicate is now logged and
+  skipped. The external-vs-builtin case still raises, because silently letting a
+  third-party package shadow a built-in is worse than failing. (c) Entry points
+  were re-scanned once per plugin: `build_runtime` loops over `config.plugins`
+  calling `create_plugin`, which called `get_all_plugin_factories` each time.
+  `create_plugin` now takes an optional precomputed factory set and
+  `build_runtime` resolves it once. **Not cached globally** — a scan is cheap and
+  a stale cache would hide plugins installed later in the same process, and would
+  have broken the existing discovery tests.
+- **M54** — the `.env` parser had three defects. `export FOO=bar` defined a
+  variable literally named `export FOO`, so the variable never appeared. An
+  inline `#` was part of the value, so `FOO=bar # note` set `FOO` to the whole
+  rest of the line. And discovery walked a fixed four levels up, which can leave
+  the project and load a `.env` that belongs to something else. All three fixed;
+  discovery now stops at the first project root (`pyproject.toml` or `.git`) and
+  does not go above the root at all when the cwd *is* the root. A `#` inside
+  quotes stays data.
+- **M56** — `LoopResult`, `Message`, `ToolCall`, `ToolSpec`, `ModelResponse`,
+  `Usage`, `SessionEvent` and `SessionMetadata` had no `model_config`, so a
+  misspelled field was silently dropped. Worst on the model contracts:
+  `ModelResponse` with a misspelled usage field constructed happily and every
+  cost report downstream read zero. All ten now set `extra: forbid`. The full
+  suite passes unchanged, so nothing was relying on the loose behaviour.
+- **M59** — **already fixed, never marked.** The immutability/cycle checks and
+  their inserts are already one critical section under `self._lock`; this was
+  done in `49c870e` ("cross-thread artifact loss"). The report still listed it as
+  open. Marked fixed, with a regression test that fails if the check and the
+  insert are ever separated again.
+- **M61** — secret scrubbing matched key names only, and only some of them.
+  `credentials` was the conspicuous omission: a dict handed straight to a
+  provider is exactly where a key lives. Added `credentials`, `client_secret`,
+  `private_key`, `access_key`, `secret_key`, `passwd`, `cookie`, `auth`,
+  `session_token`. Key names are still not enough — a secret also arrives as free
+  text (an error echoing `Bearer sk-or-v1-…` has no sensitive key to match), so
+  `Bearer …` and `sk-…` patterns are redacted in string values. And `read()`
+  applied no scrubbing at all, so anything written before a name or pattern was
+  known leaked on the way out; it now scrubs too.
+
+**M62 is not fixed.** The wildcard subscriber appends to the JSONL file inline,
+so every publish pays for a blocking write on the caller's critical path. I
+implemented a queue plus a background writer, drained on `teardown`, and it broke
+`tests/integration/test_e2e.py::test_e2e_mocked_run`: the run returns, the test
+reads the session, and `run.started` is not there yet. That is not a test problem
+— it is the durability contract changing. "Every event is on disk when the run
+returns" and "persistence is off the critical path" cannot both hold without an
+explicit flush point that callers must honour, which is a design decision rather
+than a bug fix. Reverted, and left open.
+
+**Test note.** 22 of the 26 added tests fail before the change; the 4 that pass
+both ways are guards (built-in shadowing still rejected, a `#` inside quotes is
+still data, the project's own `.env` is still found from a subdirectory, and the
+store's check-and-insert is still one critical section). Two tests were rewritten
+after the first pre-fix run showed they proved nothing: the `extra: forbid` test
+was asserting on construction, which raises for the wrong reason on models with
+required fields, and the dotenv boundary test had the project's own `.env`
+shielding the defect.
 
 ### Round 28 notes (M72, M73, M76, L33 — CLI structure)
 
@@ -2094,15 +2163,15 @@ failed attempt.
   `AutonomyError` missing entirely.
 - **M52** `bootstrap.py:292-296` — per-plugin config overrides shallow-merged, silently
   dropping nested sections.
-- **M53** `bootstrap.py:34-55, 132-136, 189` — entry-point discovery errors swallowed with no
+- **M53** **Fixed (round 29).** `bootstrap.py:34-55, 132-136, 189` — entry-point discovery errors swallowed with no
   logging; one broken third-party package makes **every** plugin instantiation fail (no error
   isolation), and entry points are re-scanned once per plugin.
-- **M54** `config/dotenv.py:29-48, 56-71` — **verified:** `export FOO=bar` never defines
+- **M54** **Fixed (round 29).** `config/dotenv.py:29-48, 56-71` — **verified:** `export FOO=bar` never defines
   `FOO`; inline `#` becomes part of the value; the loader walks up to 4 parent directories
   (picks up secrets from outside the project).
 - **M55** `config/schema.py:470-537` — `AppConfig.plugin_config()` is dead code (zero callers)
   and has diverged from the live `_derived_plugin_configs` by ~22 plugin ids. Delete it.
-- **M56** `contracts/*` — `LoopResult`, `Message`, `ToolCall`, `ToolSpec`, `ModelResponse`,
+- **M56** **Fixed (round 29).** `contracts/*` — `LoopResult`, `Message`, `ToolCall`, `ToolSpec`, `ModelResponse`,
   `Usage`, `SessionEvent`, `SessionMetadata`, `ApprovalRequest/Decision` have no
   `model_config`, unlike `config/schema.py` (`extra: forbid`). A misspelled field is
   silently discarded — worst for `ModelRequest`/`ModelResponse`.
@@ -2110,7 +2179,7 @@ failed attempt.
   hazard) and double-closes the fd in `finally`.
 - **M58** `blobs_filesystem:145-146, 173-174` — `exists()`/`stat()` swallow every exception,
   so I/O errors are indistinguishable from "absent".
-- **M59** `artifacts_sqlite:107+136, 247-262+267` — TOCTOU between the duplicate/cycle checks
+- **M59** **Fixed (round 29 — was already fixed in `49c870e`, never marked).** `artifacts_sqlite:107+136, 247-262+267` — TOCTOU between the duplicate/cycle checks
   and the inserts.
 - **M60** `artifacts_sqlite:421-425` — `_row_to_link` fabricates `datetime.now(UTC)` when a
   stored timestamp fails to parse. **Fix:** raise `ArtifactStoreError`.
@@ -2492,17 +2561,17 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 62 | **24** |
+| Medium (M1-M86) | 86 | 66 | **20** |
 | Low (L1-L39) | 39 | 28 | **10** |
-| **Total** | **158** | **123** | **34** |
+| **Total** | **158** | **127** | **30** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17-M25, M26-M43, M46, M49, M65-M77, M79-M82, M86**
-  (M46 was refuted, not fixed; M44, M45, M47, M48, M50-M64, M78, M83-M85 remain
-  open).
+- Closed Medium: **M1-M16, M17-M25, M26-M43, M46, M49, M53, M54, M56, M59,
+  M61, M65-M77, M79-M82, M86** (M46 was refuted, not fixed; M44, M45, M47, M48,
+  M50-M52, M55, M57, M58, M60, M62-M64, M78, M83-M85 remain open).
 - Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
   M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
@@ -2577,7 +2646,7 @@ novelty phrase is **never detected** (and the span merge keeps the earlier risk)
 | Routing semantics | — | **Done (round 26).** M18, M21, M23, M25, M28, M30, M31. |
 | Literature semantics | — | **Done (round 27).** M35, M36, M37, M39, M43. |
 | Literature performance | M44, M45, M47, M50 | M44 is O(n³) store round-trips plus a 20 GB-read-before-size-check; M45 needs `to_thread` + caps; **M47 ⚠** and **M50 ⚠** touch C6's SSRF/DNS pinning. |
-| Bootstrap / config | M53, M54, M56, M59, M61, M62 | M54 is a parser rewrite that also stops the loader walking 4 parents for secrets; **M56 ⚠** adds `extra: forbid` to 10 contract schemas and can break existing callers; M59 needs a transaction; M61 is secret-scrubbing breadth. |
+| Bootstrap / config | M62 | **Done (round 29) except M62.** M53, M54, M56, M59, M61. |
 | CLI structure | — | **Done (round 28).** M72, M73, M76; L33 partially (3 of 6 nits). |
 | Round-11 leftovers | M83, M85 | M83: decide whether to *emit* `_completed` or drop the metric. M85: honour or remove 5 stored-but-unread knobs (the `results_assembler` one is a live 3-calls-vs-budget-1 difference). |
 | Novelty | L38 (partial) | L13 and L14 are fixed (round 21). L38 is partially fixed (round 22): the per-item store round-trips are gone, but the scan itself remains until there is a store-level index. |
@@ -2629,7 +2698,7 @@ span `main.py`).
 All five triage batches are now done. What is left is the semantic M-bucket
 (§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total now ~82 h**, of which ~42 h is done (five batches + Low sweep + routing + literature semantics + CLI structure). That is the honest number, and it is why the next
+**Rough total now ~79 h**, of which ~45 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Accepted closures (round 24)
@@ -2680,7 +2749,7 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 28 the backlog is **34 open**: 24 Medium and 10 Low.
+After round 29 the backlog is **30 open**: 20 Medium and 10 Low.
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really

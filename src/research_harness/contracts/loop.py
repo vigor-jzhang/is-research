@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 
 class LoopResult(BaseModel):
+    model_config = {"extra": "forbid"}
     output: str
     steps: int
     session_id: str | None = None
