@@ -392,24 +392,41 @@ class DocumentAcquisitionOrchestratorService:
         failed_ids: list[str] = []
         # Map pi_id -> status via acquisitions
         # For simplicity, iterate candidate_ids and check acquisition status
+        # M44: this used to re-fetch every acquisition for every candidate, then
+        # every full-text document for every matching acquisition, then all the
+        # documents again to find the id -- O(candidates x acquisitions x
+        # documents) store round-trips. Index both once instead.
+        from research_harness.research.schemas.full_text import FullTextDocument as FTD
+
+        acqs_by_pi: dict[str, list[tuple[str, DocumentAcquisition]]] = {}
+        for acq_id in acquisition_ids:
+            try:
+                acq_env = await self._store.get(acq_id)
+                if isinstance(acq_env.payload, dict):
+                    acq = DocumentAcquisition.model_validate(acq_env.payload)
+                else:
+                    acq = acq_env.parse_payload(DocumentAcquisition)  # type: ignore[attr-defined]
+            except Exception:
+                continue
+            acqs_by_pi.setdefault(acq.paper_identity_id, []).append((acq_id, acq))
+
+        docs_by_acq: dict[str, list[tuple[str, Any]]] = {}
+        for doc_id in fulltext_ids:
+            try:
+                doc_env = await self._store.get(doc_id)
+                if isinstance(doc_env.payload, dict):
+                    doc = FTD.model_validate(doc_env.payload)
+                else:
+                    doc = doc_env.parse_payload(FTD)  # type: ignore[attr-defined]
+            except Exception:
+                continue
+            docs_by_acq.setdefault(doc.document_acquisition_id, []).append((doc_id, doc))
+
         for pi_id in candidate_ids:
-            # Find acquisitions for this pi
-            acqs_for_pi = []
-            for acq_id in acquisition_ids:
-                try:
-                    acq_env = await self._store.get(acq_id)
-                    if isinstance(acq_env.payload, dict):
-                        acq = DocumentAcquisition.model_validate(acq_env.payload)
-                    else:
-                        acq = acq_env.parse_payload(DocumentAcquisition)  # type: ignore[attr-defined]
-                    if acq.paper_identity_id == pi_id:
-                        acqs_for_pi.append((acq_id, acq))
-                except Exception:
-                    continue
+            acqs_for_pi = acqs_by_pi.get(pi_id, [])
             if not acqs_for_pi:
                 unavailable.append(pi_id)
                 continue
-            # Check if any acquisition is downloaded/imported and has FullTextDocument with extracted text
             has_extracted = False
             has_restricted = False
             has_failed = False
@@ -418,31 +435,10 @@ class DocumentAcquisitionOrchestratorService:
                     acq.status == AcquisitionStatus.downloaded
                     or acq.status == AcquisitionStatus.imported
                 ):
-                    # Check if there's a FullTextDocument for this acquisition with extracted status
-                    for doc_id in fulltext_ids:
-                        try:
-                            doc_env = await self._store.get(doc_id)
-                            from research_harness.research.schemas.full_text import (
-                                FullTextDocument as FTD,
-                            )
-
-                            if isinstance(doc_env.payload, dict):
-                                doc = FTD.model_validate(doc_env.payload)
-                            else:
-                                doc = doc_env.parse_payload(FTD)  # type: ignore[attr-defined]
-                            if doc.document_acquisition_id == acq_id and doc.text_status.value in (
-                                "extracted",
-                                "insufficient_text",
-                            ):
-                                # Even insufficient counts as available? Spec says available_document_ids are FullTextDocuments with extracted text
-                                # We'll count extracted as available, insufficient as not available? But spec corpus says available_document_ids are FullTextDocument ids
-                                # Let's count extracted as available, insufficient as not
-                                if doc.text_status.value == "extracted":
-                                    has_extracted = True
-                                # Also treat insufficient as available? For now, only extracted is available
-                                break
-                        except Exception:
-                            continue
+                    for _doc_id, doc in docs_by_acq.get(acq_id, []):
+                        if doc.text_status.value == "extracted":
+                            has_extracted = True
+                            break
                     if has_extracted:
                         break
                 elif acq.status == AcquisitionStatus.access_restricted:
@@ -456,31 +452,21 @@ class DocumentAcquisitionOrchestratorService:
                     has_failed = True
 
             if has_extracted:
-                # Find doc id
-                for doc_id in fulltext_ids:
-                    doc_env = await self._store.get(doc_id)
-                    from research_harness.research.schemas.full_text import FullTextDocument as FTD
-
-                    if isinstance(doc_env.payload, dict):
-                        doc = FTD.model_validate(doc_env.payload)
-                    else:
-                        doc = doc_env.parse_payload(FTD)  # type: ignore[attr-defined]
-                    # Match pi via acquisition
-                    acq_env = await self._store.get(doc.document_acquisition_id)
-                    if isinstance(acq_env.payload, dict):
-                        acq = DocumentAcquisition.model_validate(acq_env.payload)
-                    else:
-                        acq = acq_env.parse_payload(DocumentAcquisition)  # type: ignore[attr-defined]
-                    if acq.paper_identity_id == pi_id and doc.text_status.value == "extracted":
-                        available.append(doc_id)
+                # Find the document id for this identity
+                found = False
+                for acq_id, _acq in acqs_for_pi:
+                    for doc_id, doc in docs_by_acq.get(acq_id, []):
+                        if doc.text_status.value == "extracted":
+                            available.append(doc_id)
+                            found = True
+                            break
+                    if found:
                         break
-                else:
-                    # No extracted doc but has acquisition, treat as failed
+                if not found:
                     failed_ids.append(pi_id)
             elif has_restricted:
                 restricted.append(pi_id)
             elif has_failed:
-                # Check if unavailable vs failed
                 # If any acquisition is not_available, treat as unavailable
                 if any(acq.status == AcquisitionStatus.not_available for _, acq in acqs_for_pi):
                     unavailable.append(pi_id)
@@ -488,6 +474,7 @@ class DocumentAcquisitionOrchestratorService:
                     failed_ids.append(pi_id)
             else:
                 unavailable.append(pi_id)
+
 
         corpus = FullTextCorpus(
             document_acquisition_execution_id=exec_env.artifact_id,
@@ -562,10 +549,15 @@ class DocumentAcquisitionOrchestratorService:
         p = Path(file_path)
         if not p.exists() or not p.is_file():
             raise ValueError(f"file not found: {file_path!r}")
-        # Validate PDF? Check size and signature
+        # Validate PDF? Check size and signature.
+        # M44: the size must be checked BEFORE the read. Reading first meant a
+        # 20 GB path was loaded into memory and only then rejected, so the guard
+        # caused the OOM it existed to prevent.
+        max_bytes = 52428800
+        size = p.stat().st_size
+        if size > max_bytes:
+            raise ValueError(f"file too large: {size} > {max_bytes}")
         data = p.read_bytes()
-        if len(data) > 52428800:  # default max
-            raise ValueError(f"file too large: {len(data)} > max")
         # Check PDF signature? Allow only PDF for now
         if not data.lstrip(b"\x00\x20\x09\x0a\x0d\xef\xbb\xbf").startswith(b"%PDF-"):
             raise ValueError("file is not a PDF (missing %PDF- signature)")

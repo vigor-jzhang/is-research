@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+import time
 from typing import Any
 
 from research_harness.kernel.plugin import Plugin, PluginContext, PluginMetadata
@@ -19,6 +21,60 @@ logger = logging.getLogger(__name__)
 INSUFFICIENT_CHAR_THRESHOLD = 200
 INSUFFICIENT_PAGE_RATIO = 0.5
 
+# M45: PDF parsing and text extraction are CPU-bound and unbounded. Defaults
+# are deliberately generous; the point is that a pathological document cannot
+# stall the event loop without limit.
+DEFAULT_MAX_PAGES = 2000
+DEFAULT_MAX_SECONDS = 120.0
+
+
+def _open_pdf_reader(pdf_bytes: bytes) -> Any:
+    """Build a pypdf reader. Runs in a worker thread — see M45."""
+    from io import BytesIO
+
+    import pypdf
+
+    return pypdf.PdfReader(BytesIO(pdf_bytes))
+
+
+def _extract_pages(
+    reader: Any, max_pages: int | None, max_seconds: float | None
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    """Extract text page by page. Runs in a worker thread — see M45.
+
+    Returns (pages, pages_considered, pages_with_text, char_count).
+    """
+    import logging as _logging
+
+    log = _logging.getLogger(__name__)
+    deadline = time.monotonic() + max_seconds if max_seconds else None
+    total = len(reader.pages)
+    limit = min(total, max_pages) if max_pages else total
+    pages: list[dict[str, Any]] = []
+    pages_with_text = 0
+    char_count = 0
+    for idx in range(limit):
+        page_num = idx + 1
+        try:
+            text = reader.pages[idx].extract_text() or ""
+        except Exception as e:
+            log.warning("pypdf extract_text failed for page %s: %s", page_num, e)
+            text = ""
+        if text.strip():
+            pages_with_text += 1
+        char_count += len(text)
+        pages.append({"page": page_num, "text": text})
+        if deadline is not None and time.monotonic() > deadline:
+            log.warning(
+                "pypdf extraction hit the %.0fs limit at page %s of %s; "
+                "returning what was extracted",
+                max_seconds,
+                page_num,
+                total,
+            )
+            break
+    return pages, len(pages), pages_with_text, char_count
+
 
 def _pages_to_blob(pages: list[dict[str, Any]]) -> tuple[bytes, str]:
     # Deterministic JSON: schema_version 1, pages sorted by page, sort_keys True
@@ -30,11 +86,21 @@ def _pages_to_blob(pages: list[dict[str, Any]]) -> tuple[bytes, str]:
 
 
 class PypdfExtractorService:
-    def __init__(self, artifact_store: Any, blob_store: Any, events: Any | None = None) -> None:
+    def __init__(
+        self,
+        artifact_store: Any,
+        blob_store: Any,
+        events: Any | None = None,
+        max_pages: int | None = DEFAULT_MAX_PAGES,
+        max_seconds: float | None = DEFAULT_MAX_SECONDS,
+    ) -> None:
         self._store = artifact_store
         self._blobs = blob_store
         self._events = events
         self._version = "0.1.0"
+        # M45: bounds on how much CPU one document may spend.
+        self._max_pages = max_pages
+        self._max_seconds = max_seconds
 
     @property
     def extractor_id(self) -> str:
@@ -113,13 +179,12 @@ class PypdfExtractorService:
                 acq, acquisition_id, TextStatus.extraction_failed, f"blob get failed: {e}"
             )
 
-        # Try extraction via pypdf
+        # Try extraction via pypdf.
+        # M45: PdfReader and extract_text are synchronous CPU work and were
+        # running on the event loop, stalling every other coroutine for as long
+        # as a large document took to parse.
         try:
-            from io import BytesIO
-
-            import pypdf
-
-            reader = pypdf.PdfReader(BytesIO(pdf_bytes))
+            reader = await asyncio.to_thread(_open_pdf_reader, pdf_bytes)
         except Exception as e:
             # Malformed PDF?
             if "encrypted" in str(e).lower():
@@ -133,7 +198,7 @@ class PypdfExtractorService:
             if reader.is_encrypted:
                 # Try to decrypt with empty password? Some PDFs are encrypted but empty password works
                 try:
-                    reader.decrypt("")
+                    await asyncio.to_thread(reader.decrypt, "")
                 except Exception:
                     pass
                 if reader.is_encrypted:
@@ -142,24 +207,9 @@ class PypdfExtractorService:
             # If we cannot check is_encrypted, treat as failed
             pass
 
-        pages: list[dict[str, Any]] = []
-        page_count = len(reader.pages)
-        pages_with_text = 0
-        char_count = 0
-
-        for idx, page in enumerate(reader.pages):
-            page_num = idx + 1  # 1-based human-facing
-            try:
-                text = page.extract_text() or ""
-            except Exception as e:
-                logger.warning("pypdf extract_text failed for page %s: %s", page_num, e)
-                text = ""
-            # Normalize text: keep as is, strip trailing whitespace? Preserve exactly but trim?
-            # Use text as extracted
-            if text.strip():
-                pages_with_text += 1
-            char_count += len(text)
-            pages.append({"page": page_num, "text": text})
+        pages, page_count, pages_with_text, char_count = await asyncio.to_thread(
+            _extract_pages, reader, self._max_pages, self._max_seconds
+        )
 
         # Quality metrics
         pages_without_text = page_count - pages_with_text

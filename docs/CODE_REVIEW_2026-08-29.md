@@ -107,7 +107,8 @@ in the working tree, uncommitted.
 | **M72, M73, M76, L33** CLI structure | **Fixed** (round 28) | `cli/main.py` |
 | **M53, M54, M56, M59, M61** bootstrap / config | **Fixed** (round 29) | `bootstrap.py`, `config/dotenv.py`, `contracts/`, `sessions/jsonl` |
 | **M50, M51, M52, M55, M57, M58, M60, M63, M64** the un-batched M50-M64 block | **Fixed** (round 30) | `kernel/__init__.py`, `bootstrap.py`, `config/schema.py`, `blobs_filesystem`, `artifacts_sqlite`, `contracts/evaluator.py`, `registry.py`, `fetcher_http` |
-| The remaining M/L backlog | **Triaged** (round 19) — 21 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **M44, M45, M47** literature/document performance | **Fixed** (round 31) | `acquisition_orchestrator`, `extractor_pypdf`, `fetcher_http` |
+| The remaining M/L backlog | **Triaged** (round 19) — 18 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -777,6 +778,43 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 31 notes (M44, M45, M47 — literature/document performance)
+
+The last named cluster. (M50 appeared in this group in earlier tallies by
+mistake — there is only one M50, the fetcher finding closed in round 30.)
+
+- **M44** — two separate problems. (a) Building the full-text corpus re-fetched
+  every acquisition for every candidate, then every full-text document for every
+  matching acquisition, then all the documents again to find the id:
+  O(candidates x acquisitions x documents) store round-trips. Both are now
+  indexed once up front (`acqs_by_pi`, `docs_by_acq`) and the per-candidate work
+  is a dict lookup. (b) `import_local` called `read_bytes()` and *then* compared
+  the length to the limit, so a 20 GB path was loaded into memory before being
+  rejected — the guard caused the OOM it existed to prevent. The size is now
+  checked with `stat()` first.
+- **M45** — PDF parsing and text extraction are CPU-bound and ran inline on the
+  event loop, so one large document stalled every other coroutine. `PdfReader`
+  construction, `decrypt` and the page loop now run in a worker thread via
+  `asyncio.to_thread`. The finding also asked for a page cap and a wall-clock
+  limit; both are now parameters on the service (`max_pages`, `max_seconds`),
+  defaulted to generous values rather than left off, because an opt-in bound is a
+  bound nobody sets.
+- **M47** — `_validate_url` called `socket.getaddrinfo` synchronously, once per
+  URL *and* per redirect hop, with no timeout. It now uses `loop.getaddrinfo`
+  through `asyncio.wait_for` (5 s) and caches resolved addresses, since a redirect
+  chain re-validates the same host repeatedly. This changed the function to
+  `async`, so its three call sites and two existing tests were updated to await
+  it. The cache is bounded and only ever holds addresses that passed validation,
+  and `clear_dns_cache()` exists for tests.
+
+**Test note.** All 8 added tests fail before the change. Two of them measure the
+actual complaint rather than the implementation: a ticker coroutine counts event
+loop turns during a deliberately slow DNS lookup and during extraction, so they
+would fail again if either ever moved back onto the loop. The oversized-file test
+uses a sparse 60 MB file, which is over the limit on disk without costing anything
+to create — patching `Path.stat` turned out to break pytest's own internals, which
+is worth remembering.
 
 ### Round 30 notes (M50-M64 sweep)
 
@@ -2192,12 +2230,12 @@ failed attempt.
   ordering the orchestrator depends on (the code even comments "keep that order").
 - **M43** **Fixed (round 27).** `locator_unpaywall:328-343` — on a non-duplicate `put` failure, `snap_id` points at
   a phantom artifact, and `derived_from` provenance is written to it.
-- **M44** `acquisition_orchestrator:385-480` — O(n³) store round-trips; `import_local:556-558`
+- **M44** **Fixed (round 31).** `acquisition_orchestrator:385-480` — O(n³) store round-trips; `import_local:556-558`
   reads the whole file before checking size (20 GB path ⇒ OOM, not `ValueError`).
-- **M45** `extractor_pypdf:122-162` — CPU-bound PDF parsing on the event loop with no
+- **M45** **Fixed (round 31).** `extractor_pypdf:122-162` — CPU-bound PDF parsing on the event loop with no
   `to_thread`, no page cap, no wall-clock limit.
 - **M46** **Refuted (round 22).** `fetcher_http:230, 267-271` — off-by-one: `max_redirects=5` permits 6 hops.
-- **M47** `fetcher_http:71` — blocking `socket.getaddrinfo` on the event loop, no timeout,
+- **M47** **Fixed (round 31).** `fetcher_http:71` — blocking `socket.getaddrinfo` on the event loop, no timeout,
   once per URL **and per redirect hop**. Use `loop.getaddrinfo` + a small cache.
 - **M48** No global rate limiter, concurrency cap or semaphore anywhere in `src/`; the shared
   `_pinned_backend._addresses` dict is mutated without a lock. Config has no
@@ -2611,17 +2649,17 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 75 | **11** |
+| Medium (M1-M86) | 86 | 78 | **8** |
 | Low (L1-L39) | 39 | 28 | **10** |
-| **Total** | **158** | **136** | **21** |
+| **Total** | **158** | **139** | **18** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17-M25, M26-M43, M46, M49-M61, M63-M65, M66-M77,
-  M79-M82, M86** (M46 was refuted, not fixed; M44, M45, M47, M48, M62, M78,
-  M83-M85 remain open).
+- Closed Medium: **M1-M16, M17-M25, M26-M47, M49-M61, M63-M65, M66-M77,
+  M79-M82, M86** (M46 was refuted, not fixed; M48, M62, M78, M83-M85 remain
+  open).
 - Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
   M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
@@ -2695,7 +2733,7 @@ novelty phrase is **never detected** (and the span merge keeps the earlier risk)
 |---|---|---|
 | Routing semantics | — | **Done (round 26).** M18, M21, M23, M25, M28, M30, M31. |
 | Literature semantics | — | **Done (round 27).** M35, M36, M37, M39, M43. |
-| Literature performance | M44, M45, M47, M50 | M44 is O(n³) store round-trips plus a 20 GB-read-before-size-check; M45 needs `to_thread` + caps; **M47 ⚠** and **M50 ⚠** touch C6's SSRF/DNS pinning. |
+| Literature performance | — | **Done (round 31).** M44, M45, M47. |
 | Bootstrap / config | M62 | **Done (round 29) except M62.** M53, M54, M56, M59, M61. |
 | CLI structure | — | **Done (round 28).** M72, M73, M76; L33 partially (3 of 6 nits). |
 | Round-11 leftovers | M83, M85 | M83: decide whether to *emit* `_completed` or drop the metric. M85: honour or remove 5 stored-but-unread knobs (the `results_assembler` one is a live 3-calls-vs-budget-1 difference). |
@@ -2748,7 +2786,7 @@ span `main.py`).
 All five triage batches are now done. What is left is the semantic M-bucket
 (§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total now ~76 h**, of which ~47 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config + M50-M64 sweep). That is the honest number, and it is why the next
+**Rough total now ~74 h**, of which ~49 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config + M50-M64 sweep + literature performance). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Accepted closures (round 24)
@@ -2799,7 +2837,7 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 30 the backlog is **21 open**: 11 Medium and 10 Low.
+After round 31 the backlog is **18 open**: 8 Medium and 10 Low.
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really

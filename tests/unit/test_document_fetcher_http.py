@@ -556,24 +556,28 @@ async def test_fetcher_timeout(tmp_path: pathlib.Path):
     await store.close()
 
 
-def test_fetcher_rejects_hostname_resolving_to_private_ip(monkeypatch):
+@pytest.mark.asyncio
+async def test_fetcher_rejects_hostname_resolving_to_private_ip(monkeypatch):
     monkeypatch.setattr(
         fetcher_http.socket,
         "getaddrinfo",
         lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))],
     )
+    fetcher_http.clear_dns_cache()
     with pytest.raises(ValueError, match="resolves to private"):
-        fetcher_http._validate_url("https://public-looking.example/paper.pdf")
+        await fetcher_http._validate_url("https://public-looking.example/paper.pdf")
 
 
-def test_fetcher_rejects_non_global_cgnat_address(monkeypatch):
+@pytest.mark.asyncio
+async def test_fetcher_rejects_non_global_cgnat_address(monkeypatch):
     monkeypatch.setattr(
         fetcher_http.socket,
         "getaddrinfo",
         lambda *args, **kwargs: [(2, 1, 6, "", ("100.64.0.1", 443))],
     )
+    fetcher_http.clear_dns_cache()
     with pytest.raises(ValueError, match="non-global"):
-        fetcher_http._validate_url("https://public-looking.example/paper.pdf")
+        await fetcher_http._validate_url("https://public-looking.example/paper.pdf")
 
 
 @pytest.mark.asyncio

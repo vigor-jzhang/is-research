@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import ipaddress
 import logging
@@ -55,7 +56,20 @@ def _is_private_hostname(host: str) -> bool:
         return low == "localhost" or low.endswith(".localhost")
 
 
-def _validate_url(
+# M47: DNS was resolved synchronously, once per URL *and* per redirect hop, so
+# a slow resolver stalled the whole event loop. Resolved addresses are cached
+# because a redirect chain validates the same host repeatedly.
+_DNS_CACHE: dict[tuple[str, int], tuple[str, ...]] = {}
+_DNS_CACHE_MAX = 256
+_DNS_TIMEOUT_SECONDS = 5.0
+
+
+def clear_dns_cache() -> None:
+    """Drop cached lookups (tests, or after a network change)."""
+    _DNS_CACHE.clear()
+
+
+async def _validate_url(
     url: str, *, resolve: bool = True
 ) -> tuple[str, int, tuple[str, ...]]:
     """Validate a URL for safe fetching.
@@ -84,8 +98,17 @@ def _validate_url(
     # Hostname strings are not sufficient: DNS can map a public-looking name
     # to loopback, private, or metadata addresses. Validate every resolved IP
     # immediately before the client is allowed to connect.
+    cached = _DNS_CACHE.get((host, port))
+    if cached is not None:
+        return host, port, cached
+    loop = asyncio.get_running_loop()
     try:
-        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        addresses = await asyncio.wait_for(
+            loop.getaddrinfo(host, port, type=socket.SOCK_STREAM),
+            timeout=_DNS_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as e:
+        raise ValueError(f"URL hostname resolution timed out: {host!r}") from e
     except OSError as e:
         raise ValueError(f"URL hostname could not be resolved: {host!r}") from e
     if not addresses:
@@ -98,6 +121,9 @@ def _validate_url(
     for address in resolved:
         if _is_private_hostname(address):
             raise ValueError(f"URL hostname resolves to private or non-global address: {host!r}")
+    if len(_DNS_CACHE) >= _DNS_CACHE_MAX:
+        _DNS_CACHE.clear()
+    _DNS_CACHE[(host, port)] = resolved
     return host, port, resolved
 
 
@@ -225,7 +251,7 @@ class HttpFetcherService:
 
         # Validate initial URL
         try:
-            _validate_url(url, resolve=self._resolve_dns)
+            await _validate_url(url, resolve=self._resolve_dns)
         except ValueError as e:
             return await self._create_failed_acquisition(
                 paper_identity_id,
@@ -266,7 +292,9 @@ class HttpFetcherService:
         try:
             while redirect_count <= self._max_redirects:
                 # Validate each redirect url
-                host, port, addresses = _validate_url(current_url, resolve=self._resolve_dns)
+                host, port, addresses = await _validate_url(
+                    current_url, resolve=self._resolve_dns
+                )
                 if self._own_client:
                     self._pinned_backend.pin(host, port, addresses)
                 try:
@@ -308,7 +336,7 @@ class HttpFetcherService:
                         break
                     # Validate redirect target
                     try:
-                        _validate_url(current_url)
+                        await _validate_url(current_url)
                     except ValueError as e:
                         error_code = "private_redirect"
                         error_msg = str(e)
