@@ -85,18 +85,45 @@ class PluginManager:
                 provider = self._service_providers.get(dep_service)
                 if provider is not None and provider != pid:
                     graph[pid].add(provider)
+        return graph
+
+    def _build_ordering_graph(self) -> dict[str, set[str]]:
+        """L23: required plus optional edges, used only for ordering.
+
+        Optional dependencies are not really dependencies: their absence is
+        allowed. Including them in the graph fed to cycle detection meant a
+        legitimate "A requires B, B optionally uses A" pair was rejected as a
+        cycle and the runtime refused to start. They still impose ordering when
+        the provider exists — which is what they are for.
+        """
+        graph = self._build_dependency_graph()
+        for pid, plugin in self._plugins.items():
             for dep_service in plugin.metadata.optional_requires:
                 provider = self._service_providers.get(dep_service)
                 if provider is not None and provider != pid:
-                    # Optional deps only impose ordering if provider exists; no failure if missing
                     graph[pid].add(provider)
         return graph
 
     def resolve_order(self) -> list[str]:
-        """Topological sort with deterministic tie-breaking; raises on cycle."""
+        """Topological sort with deterministic tie-breaking; raises on cycle.
+
+        L23: optional dependencies are used for ordering, but they are not
+        dependencies — their absence is allowed — so they must not be allowed to
+        make the runtime refuse to start. If including them produces a cycle,
+        they are dropped and the required-only order is used instead.
+        """
         self._validate_dependencies()
-        graph = self._build_dependency_graph()
-        # Kahn's algorithm with sorted queues for determinism
+        try:
+            return self._topo_sort(self._build_ordering_graph())
+        except PluginDependencyError:
+            logger.warning(
+                "optional dependencies form a cycle with required ones; "
+                "falling back to the required-only ordering"
+            )
+            return self._topo_sort(self._build_dependency_graph())
+
+    def _topo_sort(self, graph: dict[str, set[str]]) -> list[str]:
+        """Kahn's algorithm with sorted queues for determinism."""
         in_degree: dict[str, int] = {pid: len(deps) for pid, deps in graph.items()}
         # Reverse adjacency: provider -> list of dependents
         dependents: dict[str, set[str]] = defaultdict(set)

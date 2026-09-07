@@ -94,6 +94,22 @@ class PropositionGeneratorService:
         self._generator_role = generator_role
         self._max_propositions = max_propositions
 
+    def _free_symbols(self, expr: str) -> set[str]:
+        """L7: declared symbols of an expression.
+
+        `symbols_used` was hardcoded to [], so every proposition claimed to use
+        no symbols at all while its expression parsed to several. Anything
+        downstream that trusts the declared set — the verifier's local symbol
+        table among them — saw an empty one, so `pi*E` was read as `E*pi` with
+        `pi` a free symbol rather than the constant.
+        """
+        from research_harness.research.symbolic import safe_sympify
+
+        try:
+            return {str(s) for s in safe_sympify(expr, auto_symbols=True).free_symbols}
+        except Exception:  # noqa: BLE001
+            return set()
+
     @property
     def service_id(self) -> str:
         return "research.proposition_generator"
@@ -180,7 +196,10 @@ class PropositionGeneratorService:
                 parameter=item.parameter,
                 expected_sign=item.expected_sign,
                 mathematical_form=(
-                    Expression(expression=item.mathematical_form, symbols_used=[])
+                    Expression(
+                        expression=item.mathematical_form,
+                        symbols_used=sorted(self._free_symbols(item.mathematical_form)),
+                    )
                     if item.mathematical_form
                     else None
                 ),

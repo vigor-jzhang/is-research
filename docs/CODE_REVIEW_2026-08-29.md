@@ -110,7 +110,8 @@ in the working tree, uncommitted.
 | **M44, M45, M47** literature/document performance | **Fixed** (round 31) | `acquisition_orchestrator`, `extractor_pypdf`, `fetcher_http` |
 | **M83, M84, M85** round-11 leftovers | **Fixed** (round 32) | `evaluator_live_quality_reasoning`, `screening_orchestrator`, `results_assembler`, `equilibrium_deriver` + 3 inert knobs removed |
 | **M48a, M48b** rate limiting + unlocked address map | **Fixed** (round 33) | `models/openrouter`, `config/schema.py`, `bootstrap.py`, `documents/fetcher_http` |
-| The remaining M/L backlog | **Triaged** (round 19) — 15 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **L7, L23** Low tier, first batch | **Fixed** (round 34) | `proposition_generator`, `kernel/manager.py` |
+| The remaining M/L backlog | **Triaged** (round 19) — 13 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -780,6 +781,45 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 34 notes (L7, L23 — Low tier, first batch)
+
+The Low tier went last because it is mostly hygiene, but two of the open items
+were real correctness bugs rather than nits.
+
+- **L7** — `proposition_generator` built every `Expression` with
+  `symbols_used=[]`. The declared set is what the verifier builds its local
+  symbol table from, so a proposition was verified with an empty one: `pi*E`
+  parsed as `E*pi` with `pi` read as a free symbol rather than the constant, and
+  any expression mentioning an undeclared name was accepted silently. The
+  declaration is now derived from the expression's free symbols, mirroring what
+  `equilibrium_deriver` already does.
+  **Caveat, not fixed:** free symbols are computed with `auto_symbols=True`, so
+  `pi` and `E` are still reported as symbols rather than recognised as
+  constants. That makes the declaration *consistent* with how the expression is
+  actually parsed, which is what the defect was, but resolving them against the
+  model's symbol table would be the better fix and needs the model in scope at
+  that point.
+- **L23** — optional dependencies were added to the same graph used for cycle
+  detection, so "A requires B, B optionally uses A" — a legitimate pair, since
+  an optional dependency's absence is allowed by definition — was reported as a
+  cycle and the runtime refused to start. Required and optional edges are now
+  built separately: ordering uses both, and if including the optional edges
+  produces a cycle the optional edges are dropped and the required-only order is
+  used. A cycle among *required* dependencies still raises.
+
+**Not done this round.** The rest of the open Low tier: L5, L10, L26, L37, plus
+the partials L8, L29, L33 (its remaining three nits: the `runtime inspect`
+"Services" heading, 13 `__import__` hacks, and the dead `or` branch), L34 and
+L38. L10 is the one I looked at hardest and set aside: the fix is to persist
+findings only once the whole response validates, but persistence currently
+happens inside the retry loop and the artifact store is immutable, so a partial
+batch cannot be rolled back — doing it properly means restructuring
+`assemble()`, which is more than a nit-sized change.
+
+**Test note.** 4 of the 6 added tests fail before the change; the 2 that pass
+both ways are guards (a real required cycle still raises, and optional edges
+still order plugins when they can).
 
 ### Round 33 notes (M48a, M48b — rate limiting; M48c deferred)
 
@@ -2551,7 +2591,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
   produced artifacts", diluting the evidence graph.
 - **L6** **Closed — accepted (round 24; see §9.7).** `evaluator_document_acquisition:175` — convoluted `{k for k in ... if expected_fallback and key == k}`;
   `:216` compares ISO strings as sort keys while envelope `created_at` is a `datetime`.
-- **L7** `proposition_generator:178-182` — `symbols_used` hardcoded `[]`, so the verifier
+- **L7** **Fixed (round 34).** `proposition_generator:178-182` — `symbols_used` hardcoded `[]`, so the verifier
   parses with an empty/local-str table: `pi*E` → `E*pi`, `beta - gamma` → SymPy functions,
   `I*2` → imaginary unit.
 - **L8** **Partially fixed (round 25).** `proposition_generator:185` — `Proposition.status` never updated from `candidate`;
@@ -2584,7 +2624,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
   where the execution says `failed` for `pending`.
 - **L21** **Blocked (round 23).** `symbolic.py:28-33` — an actor in two stages is bound to the first.
 - **L22** **Fixed (round 25).** `model_builder:365-393` — truncates before validating.
-- **L23** `kernel/manager.py:88-92` — optional dependencies participate in cycle detection,
+- **L23** **Fixed (round 34).** `kernel/manager.py:88-92` — optional dependencies participate in cycle detection,
   so a legitimate A→requires B, B→optional A configuration refuses to boot (**verified**).
 - **L24** **Fixed (round 25).** `kernel/plugin.py:23` — version regex `^\d+\.\d+\.\d+.*$` accepts
   `1.2.3; DROP TABLE`.
@@ -2760,8 +2800,8 @@ The review found several classes of defect the suite structurally cannot catch:
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
 | Medium (M1-M86) | 86 | 81 | **5** |
-| Low (L1-L39) | 39 | 28 | **10** |
-| **Total** | **158** | **142** | **15** |
+| Low (L1-L39) | 39 | 30 | **9** |
+| **Total** | **158** | **144** | **13** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
@@ -2775,7 +2815,8 @@ derived finding-by-finding from §4/§5 against the progress table in §1.1.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
   (round 21), **L15, L16, L18, L19** (round 23), **L3, L9, L11, L17, L22, L24,
   L25, L27, L28, L30-L32, L35** (round 25), **L1, L2, L4, L6, L36 accepted**
-  (round 24), **L33 partially** (round 28). **L21 is blocked**; **L8, L29,
+  (round 24), **L33 partially** (round 28), **L7, L23** (round 34). **L21 is
+  blocked**; **L8, L29,
   L33, L34, L38 are partially fixed** and stay open — see the round-21 and
   round-28 notes.
 
@@ -2947,7 +2988,7 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 33 the backlog is **15 open**: 5 Medium and 10 Low (M48 remains open on M48c).
+After round 34 the backlog is **13 open**: 5 Medium and 8 Low (M48 remains open on M48c).
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really
