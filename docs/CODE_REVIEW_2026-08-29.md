@@ -108,7 +108,8 @@ in the working tree, uncommitted.
 | **M53, M54, M56, M59, M61** bootstrap / config | **Fixed** (round 29) | `bootstrap.py`, `config/dotenv.py`, `contracts/`, `sessions/jsonl` |
 | **M50, M51, M52, M55, M57, M58, M60, M63, M64** the un-batched M50-M64 block | **Fixed** (round 30) | `kernel/__init__.py`, `bootstrap.py`, `config/schema.py`, `blobs_filesystem`, `artifacts_sqlite`, `contracts/evaluator.py`, `registry.py`, `fetcher_http` |
 | **M44, M45, M47** literature/document performance | **Fixed** (round 31) | `acquisition_orchestrator`, `extractor_pypdf`, `fetcher_http` |
-| The remaining M/L backlog | **Triaged** (round 19) — 18 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
+| **M83, M84, M85** round-11 leftovers | **Fixed** (round 32) | `evaluator_live_quality_reasoning`, `screening_orchestrator`, `results_assembler`, `equilibrium_deriver` + 3 inert knobs removed |
+| The remaining M/L backlog | **Triaged** (round 19) — 15 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
 
@@ -778,6 +779,54 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 32 notes (M83, M84, M85 — the round-11 leftovers)
+
+The last of the straightforward Medium work. What remains in the tier is M48
+(large), M62 (needs a decision about the session durability contract) and M78
+(live-suite only).
+
+- **M83** — `task_completion_rate` read `ctx.case.input.get("_completed", True)`.
+  Nothing in the repository ever writes `_completed`, so the metric was a
+  constant 1.0 with denominator 1: permanently green, and reported as though it
+  were measured. It is **removed** rather than left in place. There is no
+  completion signal in a benchmark case input to substitute — completion is a
+  property of the *run* (`LiveQualityTaskResult.task_completed`, set from
+  `cases_error == 0`), not of the case — so wiring it up here would have meant
+  inventing a second, differently-defined metric. Dropped from the metrics, the
+  dimension scores and the coverage-matrix declaration so the three stay in
+  agreement.
+- **M84** — `ScreeningExecution.counts["missing_abstract"]` was hard-coded to 0
+  while `screening_view_builder` sets `metadata["missing_abstract"] = True` and
+  nothing ever read it back. A reported 0 therefore read as "no paper lacked an
+  abstract" when the flag had simply never been aggregated — and the workflow
+  docs treat missing abstracts as a first-class condition that must not cause
+  auto-exclusion, so the number matters. The orchestrator now counts the views
+  that carry the flag.
+- **M85** — five configured knobs were stored and never read. Two had live
+  consequences and are **wired up**:
+
+  - `results_assembler`: the retry loop ran `1 + _MAX_VALIDATION_RETRIES` times
+    regardless, so setting `max_llm_calls = 1` (the schema allows `ge=1`) still
+    spent three model calls. The loop is now bounded by the configured budget.
+  - `equilibrium_deriver`: `_llm_candidate_call` always used `self._model_role`,
+    so revisions ran under the derivation role and `revision_role` did nothing —
+    while the sibling `mechanism_critic` and `model_specification_critic` plugins
+    do honour theirs. The call now takes a role, and the revision path passes
+    `revision_role`. The initial proposal is unchanged.
+
+  The other three (`proposition_generator.max_llm_calls`,
+  `mechanism_generator.max_model_calls`, `gap_analyzer.max_model_calls`) were
+  **removed**. None of those services has a call loop to bound — each makes one
+  model call per run — so the knob could never have done anything, and leaving a
+  parameter that reads like a working control is worse than not having it. Their
+  call sites in `benchmarks/workflows.py` were updated too.
+
+**Test note.** 8 of the 10 added tests fail before the change; the 2 that pass
+both ways are guards (the other reasoning metrics survived, and the initial
+proposal still uses the derivation role). One test initially asserted on
+`execution.metadata` when the counter lives in `execution.counts` — worth knowing
+that `ScreeningExecution` has both and they are not the same thing.
 
 ### Round 31 notes (M44, M45, M47 — literature/document performance)
 
@@ -2342,21 +2391,21 @@ below was traced to confirm the guard's result is not consumed.
   report therefore asserts 1.0 (n=1) for checks that never ran. The *verdict* is
   unaffected (status derives from `failures`), so this is false confidence in
   metrics rather than a bypass — the same shape as M8.
-- **M83** `plugins/research/evaluator_live_quality_reasoning/plugin.py:553` —
+- **M83** **Fixed (round 32).** `plugins/research/evaluator_live_quality_reasoning/plugin.py:553` —
   `ctx.case.input.get("_completed", True)`. Nothing in the repository ever
   writes `_completed` (grep across `src`, `tests` and `docs` returns only this
   read), and `BenchmarkCase.input` is immutable benchmark data, so
   `task_completion_rate` (600-605, 642) is a constant 1.0 with denominator 1.
   Declared in `evaluation_coverage.py:596`. Permanently green; nothing gates on
   it today.
-- **M84** `plugins/literature/screening_orchestrator/plugin.py:423` —
+- **M84** **Fixed (round 32).** `plugins/literature/screening_orchestrator/plugin.py:423` —
   `"missing_abstract": 0` is hard-coded, while the real signal is set at
   `screening_view_builder/plugin.py:249` (`metadata["missing_abstract"] = True`)
   and never read by the orchestrator. A reported 0 reads as "no paper lacked an
   abstract" when the flag was simply never aggregated. The workflow docs
   (`docs/workflows/literature/screening.md:48`) treat missing abstracts as a
   first-class condition that must not cause auto-exclusion.
-- **M85** Five configured budgets/roles are stored and never read, so the knob
+- **M85** **Fixed (round 32).** Five configured budgets/roles are stored and never read, so the knob
   does nothing: `results_assembler/plugin.py:192` (`max_llm_calls`, 1
   occurrence), `proposition_generator/plugin.py:91` (`max_llm_calls`),
   `mechanism_generator/plugin.py:145` (`max_model_calls`),
@@ -2649,17 +2698,17 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 78 | **8** |
+| Medium (M1-M86) | 86 | 81 | **5** |
 | Low (L1-L39) | 39 | 28 | **10** |
-| **Total** | **158** | **139** | **18** |
+| **Total** | **158** | **142** | **15** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
 - Closed Medium: **M1-M16, M17-M25, M26-M47, M49-M61, M63-M65, M66-M77,
-  M79-M82, M86** (M46 was refuted, not fixed; M48, M62, M78, M83-M85 remain
-  open).
+  M79-M86** (M46 was refuted, not fixed; **M48, M62, M78 remain open** — M48 is
+  large, M62 needs a decision, M78 is live-suite only).
 - Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
   M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
 - Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
@@ -2786,7 +2835,7 @@ span `main.py`).
 All five triage batches are now done. What is left is the semantic M-bucket
 (§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total now ~74 h**, of which ~49 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config + M50-M64 sweep + literature performance). That is the honest number, and it is why the next
+**Rough total now ~72 h**, of which ~51 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config + M50-M64 sweep + literature performance + round-11 leftovers). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Accepted closures (round 24)
@@ -2837,7 +2886,7 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 31 the backlog is **18 open**: 8 Medium and 10 Low.
+After round 32 the backlog is **15 open**: 5 Medium and 10 Low.
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really

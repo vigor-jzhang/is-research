@@ -420,6 +420,26 @@ class ScreeningOrchestratorService:
 
         completed_at = datetime.now(UTC)
 
+        # M84: this was hard-coded to 0 while screening_view_builder sets
+        # metadata["missing_abstract"] = True and nothing ever read it back. A
+        # reported 0 reads as "no paper lacked an abstract" when the flag was
+        # simply never aggregated.
+        missing_abstract = 0
+        from research_harness.research.schemas.screening_view import PaperScreeningView
+
+        for view_id in view_ids:
+            try:
+                view_env = await self._store.get(view_id)
+                view = (
+                    PaperScreeningView.model_validate(view_env.payload)
+                    if isinstance(view_env.payload, dict)
+                    else view_env.parse_payload(PaperScreeningView)  # type: ignore[attr-defined]
+                )
+                if view.metadata.get("missing_abstract"):
+                    missing_abstract += 1
+            except Exception:
+                continue
+
         # Create ScreeningExecution
 
         execution = ScreeningExecution(
@@ -439,7 +459,7 @@ class ScreeningOrchestratorService:
                 "uncertain": len(uncertain),
                 "failed": len(failed),
                 "reused": reused,
-                "missing_abstract": 0,
+                "missing_abstract": missing_abstract,
             },
             failures=failed,
             budget_stop_reason=budget_stop_reason,

@@ -227,7 +227,11 @@ class ResultsAssemblerService:
         contribution_ids: list[str] = []
         implication_ids: list[str] = []
         errors: list[str] = []
-        for attempt in range(1 + _MAX_VALIDATION_RETRIES):
+        # M85: the configured budget was stored and never read, so the loop
+        # always ran 1 + _MAX_VALIDATION_RETRIES times — setting max_llm_calls=1
+        # still spent three calls.
+        max_attempts = max(1, min(1 + _MAX_VALIDATION_RETRIES, self._max_llm_calls))
+        for attempt in range(max_attempts):
             try:
                 response = await self._call_model(context, errors)
                 parsed = _AssemblyResponse.model_validate(response)
@@ -236,7 +240,7 @@ class ResultsAssemblerService:
                 implication_ids = await self._persist_implications(context, parsed, finding_ids)
                 break
             except ValueError as e:
-                if attempt >= _MAX_VALIDATION_RETRIES:
+                if attempt >= max_attempts - 1:
                     raise
                 logger.info("assembly validation rejected (%s); retrying with feedback", e)
                 errors.append(str(e))

@@ -86,7 +86,6 @@ class PropositionGeneratorService:
         critic: Any,
         generator_role: str = "reasoning",
         max_propositions: int = 8,
-        max_llm_calls: int = 20,
     ) -> None:
         self._router = model_router
         self._store = artifact_store
@@ -94,7 +93,6 @@ class PropositionGeneratorService:
         self._critic = critic
         self._generator_role = generator_role
         self._max_propositions = max_propositions
-        self._max_llm_calls = max_llm_calls
 
     @property
     def service_id(self) -> str:
@@ -386,7 +384,6 @@ class PropositionGeneratorPlugin(Plugin):
             self._generator_role_override or research_cfg.get("generator_role") or "reasoning"
         )
         max_propositions = int(research_cfg.get("max_propositions", 8))
-        max_llm_calls = int(research_cfg.get("max_llm_calls", 20))
 
         router = ctx.require("model_router.default")
         store = ctx.require("artifact_store.default")
@@ -399,6 +396,5 @@ class PropositionGeneratorPlugin(Plugin):
             critic=critic,
             generator_role=str(generator_role),
             max_propositions=max_propositions,
-            max_llm_calls=max_llm_calls,
         )
         ctx.register("proposition_generator.default", self._service)

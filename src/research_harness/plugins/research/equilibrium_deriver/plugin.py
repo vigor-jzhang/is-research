@@ -671,13 +671,18 @@ class EquilibriumDeriverService:
         if exec_record.counts.get("model_calls", 0) >= self._max_llm_calls:
             return None
         prompt = self._build_revision_prompt(model, candidate, verification)
-        result = await self._llm_candidate_call(prompt)
+        # M85: revisions ran under the derivation role; the configured
+        # revision_role was stored and never used. The sibling critic plugins
+        # honour theirs.
+        result = await self._llm_candidate_call(prompt, role=self._revision_role)
         if result is None:
             return None
         exec_record.counts["model_calls"] = exec_record.counts.get("model_calls", 0) + 1
         return result
 
-    async def _llm_candidate_call(self, prompt: str) -> list[tuple[str, str, list[str]]] | None:
+    async def _llm_candidate_call(
+        self, prompt: str, role: str | None = None
+    ) -> list[tuple[str, str, list[str]]] | None:
         from research_harness.contracts.model import Message, ModelRequest
 
         request = ModelRequest(
@@ -695,7 +700,7 @@ class EquilibriumDeriverService:
             temperature=0.0,
         )
         try:
-            response = await self._router.complete(self._model_role, request)
+            response = await self._router.complete(role or self._model_role, request)
             data = json.loads(response.message.content or "")
             parsed = _CandidateProposal.model_validate(data)
         except Exception as e:  # noqa: BLE001

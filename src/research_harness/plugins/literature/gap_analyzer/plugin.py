@@ -129,7 +129,6 @@ class GapAnalyzerService:
         model_role: str = "reasoning",
         max_statements: int = 200,
         max_gaps: int = 50,
-        max_model_calls: int = 20,
         events: Any | None = None,
     ) -> None:
         self._router = model_router
@@ -137,7 +136,6 @@ class GapAnalyzerService:
         self._model_role = model_role
         self._max_statements = max_statements
         self._max_gaps = max_gaps
-        self._max_model_calls = max_model_calls
         self._events = events
 
     @property
@@ -823,7 +821,6 @@ class GapAnalyzerPlugin(Plugin):
         model_role = self._model_role_override or lit_cfg.get("model_role") or "reasoning"
         max_statements = int(lit_cfg.get("max_statements", 200))
         max_gaps = int(lit_cfg.get("max_gaps", 50))
-        max_model_calls = int(lit_cfg.get("max_model_calls", 20))
 
         router = ctx.require("model_router.default")
         store = ctx.require("artifact_store.default")
@@ -833,7 +830,6 @@ class GapAnalyzerPlugin(Plugin):
             model_role=str(model_role),
             max_statements=max_statements,
             max_gaps=max_gaps,
-            max_model_calls=max_model_calls,
             events=ctx.events,
         )
         ctx.register("gap_analyzer.default", self._service)

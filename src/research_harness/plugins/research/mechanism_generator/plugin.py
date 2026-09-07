@@ -135,14 +135,12 @@ class MechanismGeneratorService:
         artifact_store: Any,
         model_role: str = "reasoning",
         max_candidates: int = 5,
-        max_model_calls: int = 20,
         events: Any | None = None,
     ) -> None:
         self._router = model_router
         self._store = artifact_store
         self._model_role = model_role
         self._max_candidates = max_candidates
-        self._max_model_calls = max_model_calls
         self._events = events
 
     @property
@@ -746,7 +744,6 @@ class MechanismGeneratorPlugin(Plugin):
             or "reasoning"
         )
         max_candidates = int(research_cfg.get("max_candidates", 5))
-        max_model_calls = int(research_cfg.get("max_model_calls", 20))
 
         router = ctx.require("model_router.default")
         store = ctx.require("artifact_store.default")
@@ -755,7 +752,6 @@ class MechanismGeneratorPlugin(Plugin):
             artifact_store=store,
             model_role=str(model_role),
             max_candidates=max_candidates,
-            max_model_calls=max_model_calls,
             events=ctx.events,
         )
         ctx.register("mechanism_generator.default", self._service)

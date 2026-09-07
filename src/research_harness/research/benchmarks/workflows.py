@@ -1207,7 +1207,6 @@ async def run_gap_workflow(
         model_role="reasoning",
         max_statements=gap_config.get("max_statements", 200),
         max_gaps=gap_config.get("max_gaps", 50),
-        max_model_calls=gap_config.get("max_model_calls", 20),
     )
     await analyzer.run(
         synthesis_id, corpus_id, research_question_id=case.input.get("research_question_id")
@@ -1369,7 +1368,6 @@ async def run_mechanism_workflow(
         artifact_store=artifact_store,
         model_role="reasoning",
         max_candidates=5,
-        max_model_calls=20,
     )
     await generator_svc.generate(selection_id)
 
@@ -2040,7 +2038,6 @@ async def run_proposition_workflow(
         critic=critic,
         generator_role="reasoning",
         max_propositions=8,
-        max_llm_calls=20,
     )
     await generator.generate(cs_analysis_id)
 
@@ -3087,7 +3084,6 @@ async def run_e2e_workflow(
         artifact_store=artifact_store,
         model_role="reasoning",
         max_candidates=5,
-        max_model_calls=20,
     )
     await generator_svc.generate(selection_id)
     produced_now = await artifact_store.list()
@@ -3191,7 +3187,6 @@ async def run_e2e_workflow(
         critic=prop_critic,
         generator_role="reasoning",
         max_propositions=8,
-        max_llm_calls=20,
     )
     await prop_generator.generate(cs_analysis_id)
     prop_by_statement: dict[str, str] = {}

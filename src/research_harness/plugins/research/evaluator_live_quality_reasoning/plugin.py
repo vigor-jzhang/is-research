@@ -550,7 +550,6 @@ class LiveQualityReasoningEvaluator:
         unsupported_rate = unsupported_refs / total_refs if total_refs else 0.0
         instruction_ok = not missing_concepts
         fields_ok = not any("required field" in f for f in failures)
-        completed = ctx.case.input.get("_completed", True)
 
         metrics: dict[str, dict[str, Any]] = {
             "structured_output_success": _metric(
@@ -597,13 +596,12 @@ class LiveQualityReasoningEvaluator:
                 "rate",
                 "deterministic downstream validation passed (e.g. proposition verification)",
             ),
-            "task_completion_rate": _metric(
-                "task_completion_rate",
-                1.0 if completed else 0.0,
-                1,
-                "rate",
-                "the task ran to completion without errors",
-            ),
+            # M83 removed "task_completion_rate": it read a `_completed` key
+            # that nothing in the repository ever writes, so it was a constant
+            # 1.0 presented as a measured rate. There is no completion signal
+            # in a benchmark case input to replace it with — completion is a
+            # property of the run (LiveQualityTaskResult.task_completed), not of
+            # the case. A fabricated metric is worse than an absent one.
             "critical_grounding_failures": _metric(
                 "critical_grounding_failures",
                 float(critical_grounding),
@@ -639,7 +637,6 @@ class LiveQualityReasoningEvaluator:
                         if task != "proposition_generation" or (verifications and downstream_ok)
                         else 0.0
                     ),
-                    "task_completion_rate": float(completed),
                 },
             },
             status=status,

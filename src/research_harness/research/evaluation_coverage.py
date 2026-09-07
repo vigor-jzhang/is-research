@@ -593,7 +593,6 @@ COVERAGE_MATRIX: tuple[CoverageRow, ...] = (
             "instruction_adherence",
             "required_field_completeness",
             "deterministic_downstream_pass",
-            "task_completion_rate",
             "critical_grounding_failures",
         ),
         gating="deterministic",
