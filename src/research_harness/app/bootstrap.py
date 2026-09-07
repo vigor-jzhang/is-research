@@ -246,6 +246,10 @@ def _derived_plugin_configs(
             pc[pid] = copy.deepcopy(cfg)
 
     derived: dict[str, dict[str, Any]] = {
+        "model.openrouter": {
+            "requests_per_second": config.models.requests_per_second,
+            "max_retries": config.models.max_retries,
+        },
         "routing.role_router": {"models": config.models.model_dump()},
         "routing.policy_router": {"models": config.models.model_dump()},
         "routing.task_aware_router": {"models": config.models.model_dump()},

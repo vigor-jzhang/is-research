@@ -27,6 +27,17 @@ class ModelsConfig(BaseModel):
     roles: dict[str, ModelRoleConfig] = Field(
         default_factory=dict, description="Logical role -> provider/model"
     )
+    # M48a: outbound pacing and retry budget. Both default to the behaviour that
+    # existed before (unpaced, MAX_RETRIES = 2), so nothing changes unless these
+    # are set.
+    requests_per_second: float | None = Field(
+        default=None,
+        ge=0,
+        description="Max outbound model requests per second; null means unpaced",
+    )
+    max_retries: int = Field(
+        default=2, ge=0, le=10, description="Retries per model call for transient failures"
+    )
 
     @field_validator("roles")
     @classmethod

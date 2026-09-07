@@ -109,6 +109,7 @@ in the working tree, uncommitted.
 | **M50, M51, M52, M55, M57, M58, M60, M63, M64** the un-batched M50-M64 block | **Fixed** (round 30) | `kernel/__init__.py`, `bootstrap.py`, `config/schema.py`, `blobs_filesystem`, `artifacts_sqlite`, `contracts/evaluator.py`, `registry.py`, `fetcher_http` |
 | **M44, M45, M47** literature/document performance | **Fixed** (round 31) | `acquisition_orchestrator`, `extractor_pypdf`, `fetcher_http` |
 | **M83, M84, M85** round-11 leftovers | **Fixed** (round 32) | `evaluator_live_quality_reasoning`, `screening_orchestrator`, `results_assembler`, `equilibrium_deriver` + 3 inert knobs removed |
+| **M48a, M48b** rate limiting + unlocked address map | **Fixed** (round 33) | `models/openrouter`, `config/schema.py`, `bootstrap.py`, `documents/fetcher_http` |
 | The remaining M/L backlog | **Triaged** (round 19) — 15 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
@@ -779,6 +780,61 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 33 notes (M48a, M48b — rate limiting; M48c deferred)
+
+M48 was carried as one large finding bundling four loosely-related complaints.
+Scoping it first showed it is really two small items and one that should not be
+done yet, so it is recorded here under three labels and stays open on the third.
+
+**M48a — no rate limiting; retry budget was a constant. Done.**
+
+  Retries were not actually missing, which the original text implies: the
+  OpenRouter provider already had `MAX_RETRIES = 2`, a retryable-status set
+  (408/409/425/429/500/502/503/504), a non-retryable set for 4xx that would fail
+  identically anyway, `Retry-After` parsing, and exponential backoff with jitter
+  (H20's work). What was missing was anything *proactive* — the only way to learn
+  a provider's limit was to exceed it and eat a 429 — and the retry count was a
+  module constant regardless of config.
+
+  Both are now configurable (`models.requests_per_second`, `models.max_retries`)
+  and derived into the `model.openrouter` plugin config. Pacing is a minimum
+  interval enforced before each outbound attempt, so a retry is paced too.
+  Defaults preserve the old behaviour exactly: unpaced, 2 retries.
+
+  **Placement matters here.** `ModelRouter.complete` is not the chokepoint —
+  `routing/preflight.py` and `evaluation_model_tournament` call
+  `provider.complete` directly, so a limiter on the router would miss them. The
+  limiter is in the provider (the only provider implementation), which catches
+  everything in one place.
+
+**M48b — `_PinnedNetworkBackend._addresses` was mutated without a lock. Done.**
+
+  `pin()` is called from the fetch loop and `connect_tcp()` reads the map during
+  the request. There is no concurrency today so it cannot race, but the two
+  already run on opposite sides of an await. `pin` is now async and both critical
+  sections take an `asyncio.Lock`; neither section contains an await.
+
+**M48c — a global concurrency cap. Deferred, not skipped.**
+
+  There is **no concurrency anywhere in `src/`** — no `asyncio.gather`, no
+  `Semaphore`, no `create_task` (the only match is a plugin factory's name). The
+  codebase is entirely sequential. A semaphore added now would be inert: it reads
+  like a working control and does nothing, which is exactly the failure mode
+  three knobs were removed for in round 32 (M85). It should be introduced
+  together with concurrency, whenever that happens, and this note is the place to
+  pick it up.
+
+  Note also that "global" is only process-wide: the provider is a single
+  registered service instance, so a per-instance limiter covers one process, but
+  coordinating across processes would need shared state, which is not
+  recommended.
+
+**Test note.** 7 of the 9 added tests fail before the change; the 2 that pass
+both ways are guards (unpaced by default, and the default retry budget still
+matches the old constant). Pacing is observable because the provider's `sleep_fn`
+hook (H20) is used for pacing delays as well as backoff, so no real time passes
+in the tests.
 
 ### Round 32 notes (M83, M84, M85 — the round-11 leftovers)
 
@@ -2286,7 +2342,12 @@ failed attempt.
 - **M46** **Refuted (round 22).** `fetcher_http:230, 267-271` — off-by-one: `max_redirects=5` permits 6 hops.
 - **M47** **Fixed (round 31).** `fetcher_http:71` — blocking `socket.getaddrinfo` on the event loop, no timeout,
   once per URL **and per redirect hop**. Use `loop.getaddrinfo` + a small cache.
-- **M48** No global rate limiter, concurrency cap or semaphore anywhere in `src/`; the shared
+- **M48** **Partially fixed (round 33).** M48a (rate limiting, configurable
+  retries) and M48b (unlocked address map) are done; **M48c (a global
+  concurrency cap) is not**, and M48 stays open until it is — see the round-33
+  notes for why it is deferred rather than skipped.
+
+  Original text: No global rate limiter, concurrency cap or semaphore anywhere in `src/`; the shared
   `_pinned_backend._addresses` dict is mutated without a lock. Config has no
   `requests_per_second`/`max_concurrency`/`retry` fields.
 - **M49** **Fixed (round 22).** Unbounded `Retry-After` sleeps (`crossref:106-128`, `semantic_scholar:101-119`) —
@@ -2835,7 +2896,7 @@ span `main.py`).
 All five triage batches are now done. What is left is the semantic M-bucket
 (§9.3), the two large items (M48, M78), and hygiene.
 
-**Rough total now ~72 h**, of which ~51 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config + M50-M64 sweep + literature performance + round-11 leftovers). That is the honest number, and it is why the next
+**Rough total now ~71 h**, of which ~52 h is done (five batches + Low sweep + routing + literature semantics + CLI structure + bootstrap/config + M50-M64 sweep + literature performance + round-11 leftovers + M48a/b). That is the honest number, and it is why the next
 question is not "which batch first" but "which of these do we not want at all".
 
 ### 9.7 Accepted closures (round 24)
@@ -2886,7 +2947,7 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 32 the backlog is **15 open**: 5 Medium and 10 Low.
+After round 33 the backlog is **15 open**: 5 Medium and 10 Low (M48 remains open on M48c).
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really

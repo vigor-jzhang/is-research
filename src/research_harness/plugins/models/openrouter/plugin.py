@@ -40,6 +40,16 @@ NON_RETRYABLE_STATUSES = frozenset({400, 401, 403, 404, 422})
 MAX_BACKOFF_SECONDS = 30.0
 
 
+def _opt_float(value: Any) -> float | None:
+    """Config arrives untyped; None means "not set", which is not the same as 0."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _retry_after_seconds(resp: Any) -> float | None:
     """Read Retry-After as seconds; the HTTP-date form is ignored."""
     raw = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
@@ -77,6 +87,8 @@ class OpenRouterProvider:
         default_headers: dict[str, str] | None = None,
         http_client: httpx.AsyncClient | None = None,
         sleep_fn: Any = None,
+        max_retries: int = MAX_RETRIES,
+        requests_per_second: float | None = None,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.base_url = base_url.rstrip("/")
@@ -84,8 +96,16 @@ class OpenRouterProvider:
         self.default_headers = default_headers or {}
         self._client = http_client
         self._owns_client = http_client is None
-        # Injectable so tests can skip the real backoff delay (H20).
+        # Injectable so tests can skip the real backoff delay (H20). Pacing
+        # delays go through the same hook, so they are observable too.
         self._sleep = sleep_fn or asyncio.sleep
+        # M48a: retries were a module constant; pacing did not exist at all, so
+        # the only way to learn a provider's limit was to exceed it and eat a
+        # 429. `None` means unpaced, which is the previous behaviour.
+        self._max_retries = max_retries
+        self._requests_per_second = requests_per_second
+        self._pace_lock = asyncio.Lock()
+        self._next_allowed = 0.0
         self.capabilities = ModelCapabilities(
             tool_calling=True,
             structured_output=True,
@@ -100,6 +120,23 @@ class OpenRouterProvider:
         # per request leaks connection pools because ``close`` cannot reach it.
         self._client = httpx.AsyncClient(timeout=self.timeout)
         return self._client
+
+    async def _pace(self) -> None:
+        """M48a: wait out the minimum interval before the next outbound request.
+
+        Retries react to a 429; this avoids causing one. The lock keeps the
+        read-modify-write of ``_next_allowed`` atomic if calls ever run
+        concurrently.
+        """
+        if not self._requests_per_second or self._requests_per_second <= 0:
+            return
+        min_interval = 1.0 / self._requests_per_second
+        async with self._pace_lock:
+            now = time.monotonic()
+            if now < self._next_allowed:
+                await self._sleep(self._next_allowed - now)
+                now = time.monotonic()
+            self._next_allowed = now + min_interval
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         if not self.api_key:
@@ -117,9 +154,10 @@ class OpenRouterProvider:
 
         # Retry for transient transport failures
         last_exc: Exception | None = None
-        for attempt in range(MAX_RETRIES + 1):
+        for attempt in range(self._max_retries + 1):
             start = time.monotonic()
             try:
+                await self._pace()
                 client = self._get_client()
                 # Use client.request to allow injected mock client
                 resp = await client.post(url, headers=headers, json=payload, timeout=self.timeout)
@@ -143,30 +181,30 @@ class OpenRouterProvider:
             except httpx.TimeoutException as e:
                 last_exc = e
                 logger.warning(
-                    "OpenRouter timeout (attempt %d/%d): %s", attempt + 1, MAX_RETRIES + 1, e
+                    "OpenRouter timeout (attempt %d/%d): %s", attempt + 1, self._max_retries + 1, e
                 )
-                if attempt == MAX_RETRIES:
+                if attempt == self._max_retries:
                     raise ModelError(f"OpenRouter request timed out after {self.timeout}s") from e
                 await self._sleep(_backoff_delay(attempt))
                 continue
             except httpx.ConnectError as e:
                 last_exc = e
                 logger.warning(
-                    "OpenRouter connect error (attempt %d/%d): %s", attempt + 1, MAX_RETRIES + 1, e
+                    "OpenRouter connect error (attempt %d/%d): %s", attempt + 1, self._max_retries + 1, e
                 )
-                if attempt == MAX_RETRIES:
+                if attempt == self._max_retries:
                     raise ModelError(f"OpenRouter connection failed: {e}") from e
                 await self._sleep(_backoff_delay(attempt))
                 continue
             except _RetryableHTTPError as e:
                 last_exc = e
-                if attempt == MAX_RETRIES:
+                if attempt == self._max_retries:
                     raise ModelError(str(e)) from e
                 delay = _backoff_delay(attempt, e.retry_after)
                 logger.warning(
                     "OpenRouter retryable error (attempt %d/%d, retrying in %.2fs): %s",
                     attempt + 1,
-                    MAX_RETRIES + 1,
+                    self._max_retries + 1,
                     delay,
                     e,
                 )
@@ -178,7 +216,7 @@ class OpenRouterProvider:
                 last_exc = e
                 # Check if it's a transport-level httpx error that is retryable
                 if isinstance(e, httpx.TransportError):
-                    if attempt == MAX_RETRIES:
+                    if attempt == self._max_retries:
                         raise ModelError(f"OpenRouter transport error: {e}") from e
                     await self._sleep(_backoff_delay(attempt))
                     continue
@@ -384,6 +422,8 @@ class OpenRouterPlugin(Plugin):
             base_url=base_url,
             timeout=float(timeout),
             http_client=http_client,  # type: ignore[arg-type]
+            max_retries=int(cfg.get("max_retries") or 0) or MAX_RETRIES,
+            requests_per_second=_opt_float(cfg.get("requests_per_second")),
         )
         self._provider = provider
         ctx.register("model_provider.openrouter", provider)

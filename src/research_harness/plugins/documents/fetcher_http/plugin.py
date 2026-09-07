@@ -147,14 +147,20 @@ class _PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
     def __init__(self) -> None:
         self._backend = AutoBackend()
         self._addresses: dict[tuple[str, int], tuple[str, ...]] = {}
+        # M48b: `pin` is called from the fetch loop and `connect_tcp` reads the
+        # map during the request, so the two can interleave once fetches are
+        # ever run together. The critical sections contain no await.
+        self._lock = asyncio.Lock()
 
-    def pin(self, host: str, port: int, addresses: tuple[str, ...]) -> None:
-        self._addresses[(host.lower(), port)] = addresses
+    async def pin(self, host: str, port: int, addresses: tuple[str, ...]) -> None:
+        async with self._lock:
+            self._addresses[(host.lower(), port)] = addresses
 
     async def connect_tcp(
         self, host: str, port: int, timeout: float | None = None, local_address: str | None = None, socket_options: Any = None
     ) -> Any:
-        addresses = self._addresses.get((host.lower(), port))
+        async with self._lock:
+            addresses = self._addresses.get((host.lower(), port))
         if not addresses:
             raise httpcore.ConnectError(f"no validated address pinned for {host}:{port}")
         # The HTTP origin retains the hostname for TLS SNI and certificate checks.
@@ -296,7 +302,7 @@ class HttpFetcherService:
                     current_url, resolve=self._resolve_dns
                 )
                 if self._own_client:
-                    self._pinned_backend.pin(host, port, addresses)
+                    await self._pinned_backend.pin(host, port, addresses)
                 try:
                     # Use streaming to enforce size limits
                     req = client.build_request(
