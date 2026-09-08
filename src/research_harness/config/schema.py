@@ -446,9 +446,11 @@ class EvaluationConfig(BaseModel):
         description="Model role used by model-assisted evaluators "
         "(independent of the artifact-generating role)",
     )
-    cost_per_million_tokens: dict[str, float] = Field(
-        default_factory=lambda: {"prompt": 0.0, "completion": 0.0},
-        description="USD per 1M tokens for cost estimation",
+    cost_per_million_tokens: dict[str, float] | None = Field(
+        default=None,
+        description="USD per 1M tokens for cost estimation. Unset means costs are "
+        "unknown: the harness warns and reports cost as not measured instead of "
+        "fabricating a $0.00 run (L34).",
     )
 
     model_config = {"extra": "forbid"}

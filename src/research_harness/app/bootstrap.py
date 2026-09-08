@@ -349,6 +349,18 @@ def build_runtime(
     Discovers built-in + external plugins, instantiates those listed in
     config.plugins, and wires the kernel components.
     """
+    # L37: an empty plugin set composes a runtime that silently does nothing —
+    # every `run` over it reports success while producing nothing. The config
+    # schema cannot reject this (empty-list configs are routine as a base that
+    # callers extend), so the composition root decides, where extra_plugins is
+    # visible too.
+    if not config.plugins and not extra_plugins:
+        raise PluginError(
+            "no plugins to compose: config.plugins is empty and no extra_plugins "
+            "were supplied; a runtime without plugins silently does nothing. "
+            "List plugin ids in the config or pass extra_plugins."
+        )
+
     services = ServiceRegistry()
     events = EventBus()
     pc = _derived_plugin_configs(config, plugin_configs)

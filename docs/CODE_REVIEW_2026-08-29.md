@@ -111,6 +111,15 @@ in the working tree, uncommitted.
 | **M83, M84, M85** round-11 leftovers | **Fixed** (round 32) | `evaluator_live_quality_reasoning`, `screening_orchestrator`, `results_assembler`, `equilibrium_deriver` + 3 inert knobs removed |
 | **M48a, M48b** rate limiting + unlocked address map | **Fixed** (round 33) | `models/openrouter`, `config/schema.py`, `bootstrap.py`, `documents/fetcher_http` |
 | **L7, L23** Low tier, first batch | **Fixed** (round 34) | `proposition_generator`, `kernel/manager.py` |
+| **L33** remaining CLI nits — Services heading, `__import__` hacks, dead `or` branch | **Fixed** (round 35) | `cli/main.py` |
+| **L26** frozen dataclass with mutable fields; shared criteria instances | **Fixed** (round 35) | `routing/policies.py`, `schemas/live_quality.py` |
+| **L37** empty `plugins` list composes a silently inert runtime | **Fixed** (round 36) | `app/bootstrap.py` |
+| **L5** `evidence_artifact_ids` degenerates to all produced artifacts | **Fixed** (round 36) | `evaluator_pipeline_integrity` |
+| **L10** retry orphans the first findings batch; substring condition check | **Fixed** (round 37) | `results_assembler` |
+| **L34** cost defaults to a fabricated `$0.00` pricing table | **Fixed** (round 38) | `config/schema.py`, `evaluation_harness`, `cli/main.py` |
+| **L8** `Proposition.status` never leaves `candidate` | **Fixed** (round 38) | `numerical_analysis` |
+| **L29** dead `effective_pricing` resolver | **Fixed** (round 38) | `tournament/accounting.py` |
+| **L38** O(N×M) evidence scans per candidate | **Fixed** (round 38) | `novelty_validator` |
 | The remaining M/L backlog | **Triaged** (round 19) — 13 open, see §9 | `docs/CODE_REVIEW_2026-08-29.md` |
 
 **Post-fix verification (after round 5):**
@@ -781,6 +790,222 @@ old dead-code result (`dp_b.sign == ambiguous`) and now asserts `negative`,
 which is correct: `d/db[(ab+c)/(2b)] = -c/(2b²) < 0` for positive `b`, `c`. One
 test needed a genuinely ambiguous static, so one parameter's domain was changed
 to `R` (unsigned) — preserving its intent rather than its assertion.
+
+### Round 38 notes (the four partials: L34, L8, L29, L38)
+
+Each of these had sat as "partially fixed" since rounds 21/25. What remained,
+and what was done:
+
+- **L34 — cost reported as $0.00 when pricing is unconfigured.** The harness
+  half (None ⇒ warn, skip accumulation) landed in round 25, but it was
+  defeated by the config schema's own default: `EvaluationConfig.cost_per_
+  million_tokens` defaulted to `{0.0, 0.0}`, and `_derived_plugin_configs`
+  dumps the whole section into the plugin config, so the harness always
+  received a fabricated (truthy) table and computed real-looking zeros. The
+  default is now `None`, so the round-25 path actually fires. The round-25
+  note claimed the rest "needs a schema change — neither EvaluationReport nor
+  EvaluationRun has a metadata field": both models gained `metadata` in later
+  rounds, so no schema change was needed after all. The harness now records
+  `cost_configured` on the report and the run, emits `execution_cost_usd` as
+  not measured (value AND count zero — the M82 convention) when unconfigured,
+  and `evaluation report` prints "cost $0.00 (pricing not configured)"
+  instead of a bare `$0.000000`.
+- **L8 — `Proposition.status` never left `candidate`.** Half of this was the
+  first-vs-newest `_latest_verification` lookup, fixed in round 25. The other
+  half cannot be fixed the way the finding literally asks: the store is
+  append-only (immutability is load-bearing — C7/M59), so the generator can
+  never move the field. The codebase's own answer, already used by the
+  results assembler, is derive-at-read: the ONE live consumer of the stale
+  field — the L16 refutation guard in `numerical_analysis` — now reads the
+  newest `PropositionVerification` for the proposition (falling back to the
+  stored field for fixture chains that set it directly). Until now a
+  proposition the verifier had refuted was still hunted for numerical support
+  in every live run, because the guard compared against a field frozen at
+  `candidate`.
+- **L29 — `effective_pricing` dead code.** The percentile-docstring and
+  range-check half was already fixed (round 25). The resolver itself was
+  never called, and its provider-section fallback reads a config path that
+  does not exist anywhere in the schema — no `models.providers[*].pricing`,
+  nothing. Rather than invent a provider-pricing config surface nobody asked
+  for (a design decision), the dead resolver and its two direct tests were
+  removed, per the round-32 precedent for controls that read as working but
+  are not wired. Cost resolution in production is and was: provider-reported
+  `usage.cost` (OpenRouter supplies it), then candidate plan pricing, then
+  None. The two removed tests were the only callers.
+- **L38 — O(N×M) evidence scans.** Round 21/22 removed the per-item store
+  round-trips, but `_gather_evidence` still re-listed the evidence-item and
+  full-text-document tables **per candidate** (twice per enriched candidate).
+  `assess_candidates` now lists each table once per assessment and passes the
+  envelopes down; after an enrichment (which may append evidence) the lists
+  are refreshed, so later candidates still see enriched evidence — that
+  ordering is why the scan could not simply be memoized. Other `_gather_
+  evidence` call sites (critic pass, revalidation) are per-claim, not
+  per-candidate loops, and keep their self-listing default. A store-level
+  index remains the deeper fix and is recorded as such.
+
+**Test note.** 6 tests in `tests/unit/test_low_partials_l34_l8_l29_l38.py`;
+**all 6 fail on the pre-fix tree** (config default is None; unconfigured cost
+marked on report/run/metric; configured cost measured; verification-derived
+refutation blocks numerical support; resolver removed — a source-shape
+assertion, the same trade-off rounds 28/37 recorded; evidence tables listed
+once). The suite net +4: 6 added, 2 dead-code tests removed with their
+subject. Fixtures are reused from `test_evaluation_harness`,
+`test_scientific_core_followon` and `test_novelty` via the importable tests
+package. One pyright lesson: assigning `Any` (the `Any`-typed store's return)
+to a variable declared `list[x] | None` re-widens the narrowed type — the
+fallback assignment must build a separate non-Optional local via a ternary.
+
+**Verification.** ruff clean; pyright 0 errors; **1409 passed** (round 37:
+1405 + 6 new − 2 removed), zero failures.
+
+### Round 37 notes (L10 — results_assembler: retry orphaning + substring condition check)
+
+The handover had L10 examined and set aside because "the store is immutable so a
+partial batch cannot be rolled back; fixing it properly means restructuring
+`assemble()`". Round 37 re-examined that verdict and found a fix that needs no
+rollback: **validate the whole response before the first store write.**
+
+- **Half 1 — retry orphans the first findings batch.** The retry loop catches
+  `ValueError`, but the ValueErrors all came from validation that was
+  interleaved with persistence: `_validate_finding` ran between `put`s inside
+  `_persist_findings`, and the contributions/implications checks ran after the
+  findings were already in the store. A rejected attempt therefore left a
+  persisted findings batch behind, and the retry wrote a second, parallel
+  batch — the package referenced only the new one. New `_validate_assembly`
+  runs every one of those checks *before* anything is persisted, so a
+  rejection now leaves the store untouched and the retry starts clean. The
+  contributions/implications reference findings positionally (`FINDINGk`), and
+  resolution depends only on the persisted *count* — known up front — so the
+  pre-persist check is exact. A non-positional ref can never name one of the
+  fresh uuid4 ids the call is about to create, so rejecting it early matches
+  the old post-persist membership test. The irreducible residue (a store I/O
+  failure mid-persist) does not retry — the loop only catches `ValueError` —
+  so no second batch can ever be created to orphan the first.
+- **Half 2 — substring condition check.** `required ⊆ declared` was tested
+  with `c in cond`, so a finding carrying `"not (a > 0)"` satisfied the
+  required condition `"a > 0"` — a *negated* condition passed as preserved,
+  the exact fail-open shape this review exists to kill. Now exact equality
+  with whitespace removed. The old test was not even consistently lenient:
+  `"a>0"` (no spaces) did **not** satisfy `"a > 0"` by substring, while a
+  negation did — the guard test pins the tolerant direction that remains.
+
+**Test note.** 3 tests in `tests/unit/test_low_l10_results_assembler.py`, all
+3 fail pre-fix and pass post-fix (stash loop, pycache cleared both sides):
+retry-leaves-no-orphan; negated-condition rejected (single attempt, error
+propagates); `"a>0"` still accepted. The Phase 4A fixture chain
+(`build_chain`, `assembly_response`, `FakeRouter`) is reused from
+`tests/unit/test_results_assembly` via the importable tests package rather
+than copied.
+
+**Verification.** ruff clean; pyright 0 errors; **1405 passed** (round 36:
+1402 + 3), zero failures.
+
+### Round 36 notes (L37 — empty plugin set; L5 — evidence graph)
+
+- **L37.** `build_runtime` now raises `PluginError` when `config.plugins` is
+  empty **and** no `extra_plugins` were supplied. The handover's caution —
+  many tests build configs with an empty list — turned out to be about the
+  *schema-level* validator: a survey found no `src/` or `tests/` caller that
+  composes a truly plugin-less runtime (every test either lists plugins or
+  passes fakes via `extra_plugins`), so the loud option was available at the
+  composition root, where both inputs are visible. That is exactly why the
+  check does not live in `AppConfig`: an empty list is legitimate as a base
+  that `extra_plugins` extends, and only `build_runtime` knows whether
+  anything was added. The finding's second half (`start_all()` re-running
+  `setup_all()` and returning success) was already fixed by round 15's H18
+  idempotence guard — verified in `kernel/manager.py` before starting.
+- **L5.** The evidence filter was `artifact_type in types_present`, where
+  `types_present` is keyed by the types of the produced artifacts themselves —
+  a membership test that can never fail, so `evidence_artifact_ids` was "every
+  artifact the run touched", acquisition noise included. The list now names
+  the artifacts the audit actually enumerates: the declared stage types
+  (`expected_stages`), the provenance-pair types, and the eight types the
+  checks scan directly (`synthesis_statement`, `research_gap`,
+  `research_finding`, `manuscript_section`, `equilibrium_candidate`,
+  `proposition`, `numerical_result`, `bibliography`). Referenced-but-never-
+  enumerated artifacts (evidence items cited by statements, paper identities
+  behind citations) deliberately stay out — their contribution to the verdict
+  is a membership test only, and the provenance graph already connects them;
+  the evidence list is what the evaluator *read*, not the transitive closure.
+
+**Test note.** 4 tests in `tests/unit/test_low_l37_l5.py`; 3 fail pre-fix
+(empty-set rejection, evidence scoping, audited-types helper — the last by
+`AttributeError`, which is how a missing helper should fail). The fourth
+(`extra_plugins` over an empty config list still works) is a guard against
+over-rejection and passes both ways, same status as the guards round 29
+recorded. One near-miss avoided: the pipeline-integrity evidence test was
+first written with a sync helper calling `asyncio.run` inside an async test —
+redundant under `asyncio_mode = "auto"`; it awaits the coroutine directly.
+
+**Verification.** ruff clean; pyright 0 errors; **1402 passed** (round 35:
+1398 + 4), zero failures.
+
+### Round 35 notes (task zero — tally reconciliation; L33's three nits; L26)
+
+**Task zero — the §9.0 Medium tally.** The row said 81 closed / 5 open, but the
+closed-ID enumeration beneath it has said **83 / 3** since round 32 closed M83-M85:
+the row was never repriced as rounds 26-32 landed. Re-derived by ID and corrected;
+the three genuinely-open Mediums are M48 (on M48c only), M62, M78 — all deferred, all
+counted open. The stale round-19 "Open Medium" line (which still listed M18-M47 and
+M50-M85) was replaced with the real three. The Low row was restated 30/9 → 29/10 for
+the same reason: the closed-Low prose names 29 IDs, and **L21 (blocked) is a
+deferral, not a closure** — deferred counts as open here exactly as it does for M62
+and M78. Net effect: the "13 open" total both the handover and §9.8 quoted was
+right, its split (5 Medium + 8 Low) was wrong; true split 3 + 10.
+
+**21 finding bodies that were fixed but never marked** now carry their
+`**Fixed (round N).**` marker: M1-M7 and M9-M16 (rounds 4-5 — only later rounds
+marked reliably), M61 (round 29), M77/M81/M82/M86 (round 14), L20 (round 18, as
+part of H9). Each was verified in code before marking, per the M59 lesson; M8 keeps
+its inline round-6 investigation note since it was investigated, not "fixed".
+
+- **L33 (three remaining nits).**
+  *Services heading.* `runtime inspect` now prints the actual service registry
+  (`runtime.services.list_services()`); since `inspect` deliberately does not start
+  plugins and services register at start, that is honestly "none registered — …",
+  with the static `provides` still listed per plugin in the Plugins section where it
+  always was. Round 28 deferred this as "needs a runtime service registry" — the
+  registry already existed (`Runtime.services`); it is just empty until start, which
+  is a fact to print, not a design question.
+  *`__import__` hacks.* 12 sites at current HEAD (the review counted 13; one is gone
+  in later rounds' rewrites) replaced with normal function-local imports, matching
+  the file's idiom; in five `numerical_*`/`findings`/`contributions` commands the new
+  import merged with one the command already had from the same module. The
+  `literature sources` `__import__('os')` became a plain `import os`.
+  *Dead `or` branch.* `screening sets list --execution` had
+  `payload.get(key) == exec or parse_payload(Model).field == exec`. Since
+  `screening_execution_id` is a required schema field, the second branch either
+  recomputed the first comparison or raised `ValidationError` on a payload missing
+  the key. The filter now uses the raw payload key; a malformed artifact is skipped
+  where it used to crash the whole listing. Recorded, not fixed: the *unfiltered*
+  `sets list` path (and `sets inspect`) still `parse_payload` every artifact and will
+  crash on a malformed one — that is a different, older behaviour and not part of
+  L33.
+- **L26.** `PolicySpec.__post_init__` now normalises `fields` to a tuple and
+  `selection_rules` to a `MappingProxyType`, so the module-level singletons in
+  `_POLICIES` can no longer be mutated through a reference a caller was handed
+  (`policy_rules=dict(...)` in the router already copied; the callers that only
+  `.get()` are unaffected). Note a `PolicySpec` still cannot be *hashed* (the proxy
+  field is unhashable) — nothing hashes specs; recorded so nobody relies on it.
+  `QualificationCriteria` is now `frozen`, so mutating a shared instance —
+  `readiness.py` hands out module-level singletons per role — raises instead of
+  silently re-thresholding every later run. The only adjustment pattern in the
+  codebase is `model_copy(update=...)` (2 sites), which keeps working; no direct
+  attribute assignment existed anywhere, so nothing had to change its shape.
+
+**Test note.** 5 new tests in `tests/unit/test_low_l33_l26.py`; **all 5 fail on the
+pre-fix tree** (proven via `git stash push -- src/` with `__pycache__` cleared on
+both sides): runtime-inspect-services, no-`__import__`-in-CLI (source-shape, same
+trade-off as round 28's store-leak tests), screening-sets malformed-artifact filter,
+PolicySpec immutability, shared-criteria immutability. Two false starts worth
+recording: the screening test first failed *post*-fix because the test was
+`async` while the command calls `asyncio.run()` — CliRunner tests must stay sync;
+and the malformed artifact cannot be built with `ArtifactEnvelope.create` (payload
+is typed `BaseModel`) — the test builds it exactly as `_row_to_envelope` does, via
+`ArtifactEnvelope[Any]` with a dict payload.
+
+**Verification.** ruff clean; pyright 0 errors; **1398 passed** (baseline 1393 +
+5), zero failures.
 
 ### Round 34 notes (L7, L23 — Low tier, first batch)
 
@@ -2258,23 +2483,23 @@ failed attempt.
 ## 4. Medium-severity findings
 
 **Correctness / scoring**
-- **M1** `evaluation_harness:267-283` — `metadata["failures"]` only populated on `_run_case`
+- **M1** **Fixed (round 5).** `evaluation_harness:267-283` — `metadata["failures"]` only populated on `_run_case`
   exception; evaluator errors (673–685) never appended. **Verified:** `failures == []` while
   a case carries `error="formatter failed: …"`. Operators read emptiness as "nothing wrong".
-- **M2** `evaluation_harness:300-302` + 774 — a case can be simultaneously `passed` and have
+- **M2** **Fixed (round 5).** `evaluation_harness:300-302` + 774 — a case can be simultaneously `passed` and have
   `error` set, and is counted in `cases_passed`.
-- **M3** `evaluator_evidence_enrichment:309-315, 360` — `stale_reuse_rate` is
+- **M3** **Fixed (round 5).** `evaluator_evidence_enrichment:309-315, 360` — `stale_reuse_rate` is
   `stale / max(stale, 1)`, always exactly 0.0 or 1.0; never a rate.
-- **M4** `evaluator_evidence_enrichment:327-333, 370-372` — `provenance_version_accuracy`
+- **M4** **Fixed (round 5).** `evaluator_evidence_enrichment:327-333, 370-372` — `provenance_version_accuracy`
   is a copy-paste duplicate of `enrichment_grounding_accuracy`.
-- **M5** `evaluator_equilibrium:265-274, 288-301` and `evaluator_comparative_statics:213-225`
+- **M5** **Fixed (round 4).** `evaluator_equilibrium:265-274, 288-301` and `evaluator_comparative_statics:213-225`
   — symbolic recomputation failures swallowed (`raw_foc_by_key = {}`, `continue`,
   `recomputed = None`) ⇒ `br_accuracy = 1.0` with no failure. Compare
   `evaluator_proposition:189-193`, which does it right.
-- **M6** `evaluator_evidence:88, 332-333` — `grounding_verified = ctx.blob_store is not None`.
+- **M6** **Fixed (round 4).** `evaluator_evidence:88, 332-333` — `grounding_verified = ctx.blob_store is not None`.
   `blob_store` is an *optional* harness dependency, so a legitimate deployment without one
   fails every case.
-- **M7** `evaluator_document_acquisition:215-250` — corpus expectations silently skipped when
+- **M7** **Fixed (round 4).** `evaluator_document_acquisition:215-250` — corpus expectations silently skipped when
   no corpus is produced, so a failed orchestrator can pass.
 - **M8** `benchmarks/__init__.py:6673-6691` — `acq-duplicate-blob` is vacuous: the
   orchestrator runs once, so `dup_groups` is always empty and `duplicate_ok = 1`.
@@ -2292,23 +2517,23 @@ failed attempt.
   lives: `test_fetcher_reuses_acquisition_for_identical_bytes` (verified to fail when
   the reuse block is disabled). The benchmark case now carries a comment recording
   that it cannot fail, so it is not "fixed" the wrong way later.
-- **M9** `evaluator_citation_correctness:84-89` — `total == 0` ⇒ `passed`; and
+- **M9** **Fixed (round 5).** `evaluator_citation_correctness:84-89` — `total == 0` ⇒ `passed`; and
   `placeholder_check` mode emits no `metrics`/`dimension_scores`, so `novelty-threat-v1`
   (wired without `citation_mode`) contributes **zero** aggregate metrics.
-- **M10** `evaluator_sanity:122-138` — deterministic but emits no metrics, so
+- **M10** **Fixed (round 5).** `evaluator_sanity:122-138` — deterministic but emits no metrics, so
   `live-quality-evaluator-sanity-v1` produces none despite `evaluation_coverage:704-710`
   declaring three.
-- **M11** `evaluation_coverage.py:33` — `novelty-threat-v1` metric list is stale (declares
+- **M11** **Fixed (round 5).** `evaluation_coverage.py:33` — `novelty-threat-v1` metric list is stale (declares
   `pass_rate`, `deterministic_gate_failures`; produces six unrelated ids).
-- **M12** `evaluation_harness:819-823` — rate/score metrics fall back to a raw numerator when
+- **M12** **Fixed (round 5).** `evaluation_harness:819-823` — rate/score metrics fall back to a raw numerator when
   `count == 0`; `value=0.0, count=0` is indistinguishable from "0 out of many".
-- **M13** `evaluation_harness:785-788` — store read failures during aggregation are
+- **M13** **Fixed (round 5).** `evaluation_harness:785-788` — store read failures during aggregation are
   swallowed, silently shrinking denominators.
-- **M14** `evaluation_harness:192` — case `version` hardcoded to `1`, so versioning is a
+- **M14** **Fixed (round 4).** `evaluation_harness:192` — case `version` hardcoded to `1`, so versioning is a
   no-op and any future bump raises `BenchmarkVersionError` forever.
-- **M15** `benchmarks/__init__.py:9932-9936` — `ZeroDivisionError` on an empty
+- **M15** **Fixed (round 4).** `benchmarks/__init__.py:9932-9936` — `ZeroDivisionError` on an empty
   `repetition_rates` list (`is not None` then `sum/len`).
-- **M16** `evaluation_readiness.py:161` — narrative hardcodes "all 31 benchmark families";
+- **M16** **Fixed (round 4).** `evaluation_readiness.py:161` — narrative hardcodes "all 31 benchmark families";
   **verified count is 32**.
 
 **Routing / qualification**
@@ -2421,7 +2646,7 @@ failed attempt.
   and the inserts.
 - **M60** **Fixed (round 30).** `artifacts_sqlite:421-425` — `_row_to_link` fabricates `datetime.now(UTC)` when a
   stored timestamp fails to parse. **Fix:** raise `ArtifactStoreError`.
-- **M61** `sessions/jsonl:18-43` — secret scrubbing is exact-key-name only; `credentials`,
+- **M61** **Fixed (round 29).** `sessions/jsonl:18-43` — secret scrubbing is exact-key-name only; `credentials`,
   `apiKey`, `Authorization` and secrets inside free-text (e.g. an error echoing
   `Bearer sk-or-v1-…`) survive; `read()` applies no scrubbing.
 - **M62** `sessions/jsonl:175-194` — a wildcard subscriber does a blocking file append on
@@ -2475,7 +2700,7 @@ below was traced to confirm the guard's result is not consumed.
   (`tournament/accounting.py:113-116` leaves it `None`). The production
   qualification path treats unknown as failing (`readiness.py:96-101` maps it to
   `0.0`); the routing path disagrees. **Fix:** mirror the cost/latency handling.
-- **M81** `plugins/research/evaluator_live_quality_fast/plugin.py:77-80` —
+- **M81** **Fixed (round 14).** `plugins/research/evaluator_live_quality_fast/plugin.py:77-80` —
   `uncertain_handled` is **unreachable**. The branch is entered only when
   `actual != expected_class` and `expected_class == "uncertain"`, so the inner
   `if actual == "uncertain"` can never be true. Worse, a *correctly* handled
@@ -2483,7 +2708,7 @@ below was traced to confirm the guard's result is not consumed.
   `uncertain_expected`, so `uncertain_rate` (113) degenerates to a step
   function: `1.0` when no expected-uncertain case was mishandled, `0.0`
   otherwise — never a proportion, despite being reported as a rate.
-- **M82** `plugins/research/evaluator_model_qualification/plugin.py:439` — the
+- **M82** **Fixed (round 14).** `plugins/research/evaluator_model_qualification/plugin.py:439` — the
   matrix path returns `decision_ok, True, eligibility_ok, True, True, True,
   unsafe, failures`, hard-coding stability, rejection, role and tiebreak checks
   to `True`. Two of them are still **reported as measured**:
@@ -2520,7 +2745,7 @@ below was traced to confirm the guard's result is not consumed.
   revisions run under the derivation role and the configured `revision_role` has
   no effect — the sibling `mechanism_critic` (381) and
   `model_specification_critic` (248) plugins *do* honour theirs.
-- **M86** `research/tournament/accounting.py:192` — `error_cases` is computed,
+- **M86** **Fixed (round 14).** `research/tournament/accounting.py:192` — `error_cases` is computed,
   returned, and never read by any caller (the only caller is
   `evaluation_model_tournament/plugin.py:403`, which reads
   `case_error_rate` instead). Unlike the original H2 defect this is only a dead
@@ -2538,7 +2763,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 
 **Found during rounds 7-8 — documented, not yet fixed**
 
-- **M77** `research/routing/selection.py:146` — the reliability gate is
+- **M77** **Fixed (round 14).** `research/routing/selection.py:146` — the reliability gate is
   `if a.model_error_rate is not None and a.model_error_rate > max_error`. When the
   rate is unknown the entire check is skipped and the candidate passes, so "we
   could not measure whether this model errors" is treated as "it does not error".
@@ -2587,18 +2812,18 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 - **L4** **Closed — accepted (round 24; see §9.7).** `evaluator_evidence:220` — dead `documents_missed = documents_missed` self-assignment;
   `:328-329` duplicates `:309-312` under two labels; the metric named
   `documents_with_required_evidence_missed` counts statements, not documents.
-- **L5** `evaluator_pipeline_integrity:414-416` — `evidence_artifact_ids` degenerates to "all
+- **L5** **Fixed (round 36).** `evaluator_pipeline_integrity:414-416` — `evidence_artifact_ids` degenerates to "all
   produced artifacts", diluting the evidence graph.
 - **L6** **Closed — accepted (round 24; see §9.7).** `evaluator_document_acquisition:175` — convoluted `{k for k in ... if expected_fallback and key == k}`;
   `:216` compares ISO strings as sort keys while envelope `created_at` is a `datetime`.
 - **L7** **Fixed (round 34).** `proposition_generator:178-182` — `symbols_used` hardcoded `[]`, so the verifier
   parses with an empty/local-str table: `pi*E` → `E*pi`, `beta - gamma` → SymPy functions,
   `I*2` → imaginary unit.
-- **L8** **Partially fixed (round 25).** `proposition_generator:185` — `Proposition.status` never updated from `candidate`;
+- **L8** **Fixed (round 38; `_latest_verification` half in round 25).** `proposition_generator:185` — `Proposition.status` never updated from `candidate`;
   `_latest_verification` (226-234) returns the **first** match, not the newest.
 - **L9** **Fixed (round 25).** `proposition_verifier:218-224` — `threshold` claim type is advertised to the LLM but
   can never verify.
-- **L10** `results_assembler:225-237` — on retry, findings are persisted twice, orphaning the
+- **L10** **Fixed (round 37).** `results_assembler:225-237` — on retry, findings are persisted twice, orphaning the
   first batch; `:676` condition check is substring-based, so `"not (b > 0)"` satisfies
   `"b > 0"`.
 - **L11** **Fixed (round 25).** `results_assembler:740-743` — normalization can empty a claim after validation.
@@ -2620,7 +2845,7 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
   Hessian/cross-partials) and emits an unsatisfiable `0 < 0` condition when `soc == 0`.
 - **L19** **Fixed (round 23).** `equilibrium_deriver:139-141`, `numerical_analysis:123-125, 774-775` — payoff dict
   keyed by `actor_id` silently overwrites duplicate payoffs.
-- **L20** `equilibrium_deriver:761-770` vs `372-377` — analysis says `partially_derived`
+- **L20** **Fixed (round 18, as part of H9).** `equilibrium_deriver:761-770` vs `372-377` — analysis says `partially_derived`
   where the execution says `failed` for `pending`.
 - **L21** **Blocked (round 23).** `symbolic.py:28-33` — an actor in two stages is bound to the first.
 - **L22** **Fixed (round 25).** `model_builder:365-393` — truncates before validating.
@@ -2629,13 +2854,13 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 - **L24** **Fixed (round 25).** `kernel/plugin.py:23` — version regex `^\d+\.\d+\.\d+.*$` accepts
   `1.2.3; DROP TABLE`.
 - **L25** **Fixed (round 25).** `kernel/services.py:75-77` — `__bool__` always `True` while `__len__` is 0.
-- **L26** `policies.py:50-59` — `@dataclass(frozen=True)` with mutable `list`/`dict` fields;
+- **L26** **Fixed (round 35).** `policies.py:50-59` — `@dataclass(frozen=True)` with mutable `list`/`dict` fields;
   `readiness.py:22-48` shares mutable criteria instances across runs.
 - **L27** **Fixed (round 25).** `qualification.py:371-373, 597-599` — passing criteria for the wrong role silently
   rewrites the role label instead of raising.
 - **L28** **Fixed (round 25).** `preflight.py:260` — dead `so_latency` assignment; the outer retry loop multiplies
   attempts to `(retries+1)²`.
-- **L29** **Partially fixed (round 25).** `accounting.py:28-38` — docstring says "nearest-rank percentile", code interpolates;
+- **L29** **Fixed (round 38; percentile half in round 25).** `accounting.py:28-38` — docstring says "nearest-rank percentile", code interpolates;
   `q` is not range-checked. `accounting.py:174-198` — `effective_pricing` is dead code, so
   cost stays `None` for candidates without plan-level pricing.
 - **L30** **Fixed (round 25).** `schemas/tournament.py:134-149` — all six rate fields lack `ge=0, le=1`; a rate of
@@ -2646,19 +2871,19 @@ H5 shape, but both genuinely consume them (`equilibrium_verifier/plugin.py:65-86
 - **L32** **Fixed (round 25).** `calibration.py:193-198` — unknown-benchmark branch records `case_id="*"`, which can
   never match, so the defect is never excluded; `:338` — `IndexError` on
   `{"documents": []}`.
-- **L33** **Partially fixed (round 28).** `cli/main.py:313-317` — `--prompt` silently discarded when `--prompt-file` is given;
+- **L33** **Fixed (round 35; first three nits in round 28).** `cli/main.py:313-317` — `--prompt` silently discarded when `--prompt-file` is given;
   `:274-284` — `runtime inspect` prints a "Services" heading over `metadata.provides`, not
   the registry; `:545` — silent 4000-char truncation; `:1643+` — `__import__()` string hacks
   where a normal import would do; `:1638-1650` — dead `or` branch that can raise
   `ValidationError`; `:7396-7405` — Rich markup counted in a `{mark:16s}` pad.
-- **L34** **Partially fixed (round 25).** `config/schema.py:440-443` — cost defaults to `{0.0, 0.0}`, so live reports read
+- **L34** **Fixed (round 38).** `config/schema.py:440-443` — cost defaults to `{0.0, 0.0}`, so live reports read
   $0.00 unless configured.
 - **L35** **Fixed (round 25).** `config/loader.py:19-24`, `dotenv.py:53-55` — catch `OSError` only, so
   `UnicodeDecodeError` escapes raw.
 - **L36** **Closed — accepted (round 24; see §9.7).** `bootstrap.py:318` — `runtime_meta={"config_path": None}` hardcoded.
-- **L37** `config/schema.py:450` — an empty `plugins` list yields a runtime that silently does
+- **L37** **Fixed (round 36).** `config/schema.py:450` — an empty `plugins` list yields a runtime that silently does
   nothing; `start_all()` then re-runs `setup_all()` and returns success.
-- **L38** **Partially fixed (round 21).** `novelty_validator:1882, 1930` — O(N×M) full-store scans in `_gather_evidence`.
+- **L38** **Fixed (round 38; per-item round-trips in round 21).** `novelty_validator:1882, 1930` — O(N×M) full-store scans in `_gather_evidence`.
 - **L39** **Fixed (round 20).** `cli/main.py:3764-3770` — only `not_solvable` exits non-zero; `failed` and
   `partially_derived` print a green ✓ and exit 0.
 
@@ -2799,26 +3024,37 @@ The review found several classes of defect the suite structurally cannot catch:
 |---|---|---|---|
 | Critical (C1-C8) | 8 | 8 | 0 |
 | High (H1-H25) | 25 | 25 | 0 |
-| Medium (M1-M86) | 86 | 81 | **5** |
-| Low (L1-L39) | 39 | 30 | **9** |
-| **Total** | **158** | **144** | **13** |
+| Medium (M1-M86) | 86 | 83 | **3** |
+| Low (L1-L39) | 39 | 38 | **1** |
+| **Total** | **158** | **154** | **4** |
 
 **Correction.** The "110 remaining" quoted after round 18 overstated the backlog:
 it did not deduct the Mediums closed in rounds 4-6 and 13-14. The table above is
 derived finding-by-finding from §4/§5 against the progress table in §1.1.
 
-- Closed Medium: **M1-M16, M17-M25, M26-M47, M49-M61, M63-M65, M66-M77,
+**Correction (round 35, task zero).** The Medium row previously said 81/5, but the
+closed-ID enumeration beneath it already summed to **83 closed / 3 open** — the row
+was never repriced after rounds 26-32 closed M18-M47, M50-M64, M72-M76 and M83-M85.
+Re-derived by ID, the row now agrees with the enumeration. The Low row was restated
+30/9 → **29/10** for the same reason: the closed-Low prose names 29 IDs, and **L21
+(blocked) is a deferral, not a closure** — deferred counts as open here exactly as it
+does for M62 and M78. The 13 open total is unchanged; only its split was wrong
+(5 Medium + 8 Low → 3 Medium + 10 Low).
+
+- Closed Medium (83): **M1-M16, M17-M25, M26-M47, M49-M61, M63-M65, M66-M77,
   M79-M86** (M46 was refuted, not fixed; **M48, M62, M78 remain open** — M48 is
-  large, M62 needs a decision, M78 is live-suite only).
-- Open Medium: **M18, M21, M23, M25, M28, M30, M31, M35, M36, M37, M39, M43, M44,
-  M45, M47, M48, M50-M64, M72, M73, M76, M78, M83, M84, M85**.
-- Closed Low: **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
+  open on M48c only, M62 needs a decision, M78 is live-suite only).
+- Open Medium (3): **M48** (on M48c only — M48a/M48b fixed in round 33; M48c stays
+  deferred until `src/` has concurrency), **M62** (needs the session-durability
+  decision), **M78** (needs `OPENROUTER_API_KEY`).
+- Closed Low (38): **L20** (round 18's H9), **L39** (round 20), **L12, L13, L14**
   (round 21), **L15, L16, L18, L19** (round 23), **L3, L9, L11, L17, L22, L24,
   L25, L27, L28, L30-L32, L35** (round 25), **L1, L2, L4, L6, L36 accepted**
-  (round 24), **L33 partially** (round 28), **L7, L23** (round 34). **L21 is
-  blocked**; **L8, L29,
-  L33, L34, L38 are partially fixed** and stay open — see the round-21 and
-  round-28 notes.
+  (round 24), **L7, L23** (round 34), **L26, L33** (round 35; L33's first three
+  nits were round 28), **L5, L37** (round 36), **L10** (round 37), **L8, L29,
+  L34, L38** (round 38; each was a partial from rounds 21/25 until then).
+- Open Low (1): **L21 is blocked** (the timing schema cannot express the
+  decision — see the round-23 notes). The Low tier is otherwise clear.
 
 ### 9.1 Legend
 
@@ -2988,7 +3224,13 @@ earlier in this document.
 
 ### 9.8 What is left, and the recommended order
 
-After round 34 the backlog is **13 open**: 5 Medium and 8 Low (M48 remains open on M48c).
+After round 38 the backlog is **4 open**: 3 Medium and 1 Low. All three open
+Mediums are deferred (M48 open on M48c until `src/` has concurrency, M62 on the
+durability decision, M78 on an API key); the one open Low, **L21**, is blocked —
+the timing schema cannot express the decision. The Low tier is otherwise clear.
+Counts re-derived by ID in round 35 (task zero); before that round the split was
+quoted as 5 Medium and 8 Low against the same 13 total, and the row/prose
+disagreement in §9.0 went back to round 32.
 
 1. ~~A single Low sweep.~~ **Done in round 25.** Sixteen Low findings were
    resolved in one batch: thirteen fixed outright, three partially. Most really

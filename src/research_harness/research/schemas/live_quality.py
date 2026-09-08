@@ -63,7 +63,11 @@ class QualificationCriteria(BaseModel):
     )
     description: str = ""
 
-    model_config = {"extra": "forbid"}
+    # L26: readiness.py shares module-level criteria instances across runs, so
+    # a caller mutating what criteria_for_role handed back used to silently
+    # re-threshold every later run. Frozen turns that into a loud error;
+    # callers adjust thresholds via model_copy(update=...), which still works.
+    model_config = {"extra": "forbid", "frozen": True}
 
 
 class LiveQualityTaskResult(BaseModel):

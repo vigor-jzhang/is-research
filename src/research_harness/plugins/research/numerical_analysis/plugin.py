@@ -41,6 +41,8 @@ from research_harness.research.schemas.numerical import (
 from research_harness.research.schemas.proposition import (
     Proposition,
     PropositionStatus,
+    PropositionVerification,
+    PropositionVerificationStatus,
 )
 from research_harness.research.symbolic import parse_sympy
 
@@ -767,7 +769,14 @@ class NumericalAnalysisService:
             # hunt for numerical support for. Reporting "supported" for a claim
             # whose status is `failed` contradicts the verification and reads as
             # evidence it is not.
-            if prop.status in (PropositionStatus.failed, PropositionStatus.rejected):
+            # L8: the generator writes `status=candidate` and the append-only
+            # store cannot update the field afterwards — the verdict lives in
+            # the PropositionVerification artifacts. Derive the effective
+            # status from the newest verification (falling back to the stored
+            # field for fixture chains that set it directly), else the
+            # refutation guard below could never fire in a live run.
+            effective = await self._effective_status(env.artifact_id, prop)
+            if effective in (PropositionStatus.failed, PropositionStatus.rejected):
                 refuted = RobustnessCheck(
                     model_id=model_id,
                     equilibrium_candidate_id=candidate_id,
@@ -778,7 +787,7 @@ class NumericalAnalysisService:
                     outcome=RobustnessOutcome.not_testable,
                     admissible_points=0,
                     conclusion=(
-                        f"proposition status is {prop.status.value}; a refuted claim "
+                        f"proposition status is {effective.value}; a refuted claim "
                         f"is not tested for numerical support"
                     ),
                 )
@@ -808,6 +817,40 @@ class NumericalAnalysisService:
             await self._store.put(c_env)
             out.append(c_env.artifact_id)
         return out
+
+    async def _effective_status(
+        self, proposition_id: str, prop: Proposition
+    ) -> PropositionStatus:
+        """Newest verification verdict for the proposition, else the stored field.
+
+        L8: the generator writes `status=candidate` and the append-only store
+        cannot update the field afterwards — the verification artifacts are the
+        authoritative record (the same rule the results assembler applies when
+        it builds its verified-proposition map). Reading the stored field
+        alone meant a proposition refuted after generation still counted as
+        unrefuted here. Fixtures that persist terminal statuses directly have
+        no verification to consult and keep working via the fallback.
+        """
+        newest: PropositionVerification | None = None
+        newest_at = None
+        for env in await self._store.list(artifact_type="proposition_verification"):
+            try:
+                v = env.parse_payload(PropositionVerification)
+            except Exception:  # noqa: BLE001
+                continue
+            if v.proposition_id != proposition_id:
+                continue
+            if newest is None or env.created_at >= newest_at:
+                newest, newest_at = v, env.created_at
+        if newest is None:
+            return prop.status
+        if newest.status == PropositionVerificationStatus.failed:
+            return PropositionStatus.failed
+        if newest.status == PropositionVerificationStatus.verified:
+            return PropositionStatus.verified
+        if newest.status == PropositionVerificationStatus.conditionally_verified:
+            return PropositionStatus.conditionally_verified
+        return prop.status
 
     async def _check_proposition_numerically(
         self,

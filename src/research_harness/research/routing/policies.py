@@ -10,8 +10,9 @@ deterministic rank-key builder over eligible `RoutingCandidateAssessment`s.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from research_harness.research.schemas.routing import RoutingCandidateAssessment
@@ -31,7 +32,7 @@ _COST_FIELDS: list[tuple[str, bool]] = [("cost_per_successful_case", True)]
 
 
 def build_rank_key(
-    fields: list[tuple[str, bool]],
+    fields: Sequence[tuple[str, bool]],
 ) -> Callable[[RoutingCandidateAssessment], tuple[Any, ...]]:
     def _key(assessment: RoutingCandidateAssessment) -> tuple[Any, ...]:
         out: list[Any] = []
@@ -56,8 +57,19 @@ class PolicySpec:
     policy_id: str
     name: str
     description: str
-    fields: list[tuple[str, bool]]
-    selection_rules: dict[str, Any]
+    fields: tuple[tuple[str, bool], ...]
+    selection_rules: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        # L26: frozen=True only prevents attribute rebinding. The specs are
+        # module-level singletons shared by every routing decision in the
+        # process, so the fields list and rules dict are normalised to
+        # immutable views here — a caller mutating what it got back used to
+        # corrupt every later decision.
+        object.__setattr__(self, "fields", tuple(self.fields))
+        object.__setattr__(
+            self, "selection_rules", MappingProxyType(dict(self.selection_rules))
+        )
 
     def rank_key(self) -> Callable[[RoutingCandidateAssessment], tuple[Any, ...]]:
         return build_rank_key(self.fields)
@@ -71,7 +83,11 @@ _POLICIES: dict[str, PolicySpec] = {
             "Gate first, then choose the highest deterministic quality; latency "
             "and cost break quality ties only. Correctness is never traded for cost."
         ),
-        fields=[*_QUALITY_FIELDS, *_LATENCY_FIELDS, *_COST_FIELDS],
+        fields=(
+            *_QUALITY_FIELDS,
+            *_LATENCY_FIELDS,
+            *_COST_FIELDS,
+        ),
         selection_rules={
             "gate": "capability -> deterministic eligibility -> reliability -> constraints",
             "rank": "deterministic_pass_rate desc, benchmark_pass_rate desc, "
@@ -85,7 +101,12 @@ _POLICIES: dict[str, PolicySpec] = {
             "Gate first, then a documented lexicographic blend: quality, "
             "reliability, latency, cost — quality strictly dominates the rest."
         ),
-        fields=[*_QUALITY_FIELDS, *_RELIABILITY_FIELDS, *_LATENCY_FIELDS, *_COST_FIELDS],
+        fields=(
+            *_QUALITY_FIELDS,
+            *_RELIABILITY_FIELDS,
+            *_LATENCY_FIELDS,
+            *_COST_FIELDS,
+        ),
         selection_rules={
             "gate": "capability -> deterministic eligibility -> reliability -> constraints",
             "rank": "deterministic_pass_rate desc, benchmark_pass_rate desc, "
@@ -101,7 +122,11 @@ _POLICIES: dict[str, PolicySpec] = {
             "then choose the lowest expected cost among eligible candidates. "
             "Cheaper-but-ineligible models are never chosen."
         ),
-        fields=[*_COST_FIELDS, *_QUALITY_FIELDS, *_LATENCY_FIELDS],
+        fields=(
+            *_COST_FIELDS,
+            *_QUALITY_FIELDS,
+            *_LATENCY_FIELDS,
+        ),
         selection_rules={
             "gate": "capability -> deterministic eligibility (min quality) -> "
             "reliability (mandatory) -> constraints",
@@ -116,7 +141,11 @@ _POLICIES: dict[str, PolicySpec] = {
             "Gate by minimum deterministic quality + mandatory reliability first, "
             "then choose the fastest eligible model; quality breaks latency ties."
         ),
-        fields=[*_LATENCY_FIELDS, *_QUALITY_FIELDS, *_COST_FIELDS],
+        fields=(
+            *_LATENCY_FIELDS,
+            *_QUALITY_FIELDS,
+            *_COST_FIELDS,
+        ),
         selection_rules={
             "gate": "capability -> deterministic eligibility (min quality) -> "
             "reliability (mandatory) -> constraints",

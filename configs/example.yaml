@@ -248,9 +248,9 @@ evaluation:
     - evaluator.citation_correctness
     - evaluator.llm_judge
   judge_role: critic
-  cost_per_million_tokens:
-    prompt: 0.0
-    completion: 0.0
+  # L34 (round 38): no cost_per_million_tokens is set on purpose. A fabricated
+  # {0.0, 0.0} table made every run report $0.00; leaving it unset records
+  # costs as not configured / not measured instead.
 
 live_quality:
   repetitions: 3

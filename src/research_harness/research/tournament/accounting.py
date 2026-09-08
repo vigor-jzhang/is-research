@@ -20,7 +20,6 @@ from typing import Any
 from research_harness.research.schemas.tournament import (
     BenchmarkRunRef,
     ModelCallRecord,
-    TournamentModelConfig,
     TournamentPricing,
 )
 
@@ -201,30 +200,3 @@ def aggregate_run_results(
         "cost_per_successful_case": cost_per_successful_case,
         "cost_per_successful_benchmark": cost_per_successful_benchmark,
     }
-
-
-def effective_pricing(
-    candidate: TournamentModelConfig, provider_cfg: dict[str, Any] | None
-) -> TournamentPricing | None:
-    """Configured pricing for a candidate: plan-level wins, else the provider
-    section (both rates required). Never guesses."""
-    if (
-        candidate.pricing is not None
-        and candidate.pricing.input_per_million is not None
-        and candidate.pricing.output_per_million is not None
-    ):
-        return candidate.pricing
-    if provider_cfg is not None:
-        rates = provider_cfg.get("pricing") or {}
-        if (
-            isinstance(rates, dict)
-            and rates.get("input_per_million") is not None
-            and rates.get("output_per_million") is not None
-        ):
-            return TournamentPricing(
-                source=rates.get("source"),
-                version=rates.get("version"),
-                input_per_million=float(rates["input_per_million"]),
-                output_per_million=float(rates["output_per_million"]),
-            )
-    return None

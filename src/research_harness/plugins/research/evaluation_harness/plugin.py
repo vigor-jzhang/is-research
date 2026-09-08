@@ -120,13 +120,10 @@ class EvaluationHarnessService:
         self._judge_role = judge_role
         # L34: an unset pricing table used to fall back to 0.0/0.0, so every
         # unconfigured run reported $0.00 — indistinguishable from a genuinely
-        # free one. Keep it None so nothing is computed from a fabricated rate.
-        #
-        # The remaining half of L34 is a schema change and is NOT done here:
-        # `cost_usd` is a plain `float` on both EvaluationReport and
-        # EvaluationRun, and neither model has a metadata field, so a run cannot
-        # yet record "cost was never configured". Until then the warning below
-        # is what distinguishes the two cases in the logs.
+        # free one. Keep it None so nothing is computed from a fabricated rate,
+        # and record `cost_configured` on the report and run so the 0.0 is
+        # interpretable (the config schema's own {0.0, 0.0} default used to
+        # defeat this by handing the fabricated table straight through).
         self._cost_per_million = (
             dict(cost_per_million_tokens) if cost_per_million_tokens else None
         )
@@ -399,6 +396,7 @@ class EvaluationHarnessService:
             cases_skipped=report.cases_skipped,
             failures=failures,
             status=report.status,
+            metadata={"cost_configured": self._cost_per_million is not None},
         )
         await self._store.put(
             ArtifactEnvelope.create(
@@ -931,9 +929,14 @@ class EvaluationHarnessService:
                     metric_id="execution_cost_usd",
                     dimension="cost",
                     kind=EvaluationMetricKind.cost,
-                    value=cost_usd,
-                    count=1,
-                    definition="estimated model cost of the run (0 for offline fixtures)",
+                    # L34: with no pricing table the 0.0 was never computed,
+                    # so report it as not measured — value AND count zero, the
+                    # convention the M82 fix recorded; a value with no
+                    # denominator inflates the aggregate above 1.0.
+                    value=cost_usd if self._cost_per_million is not None else 0.0,
+                    count=1 if self._cost_per_million is not None else 0,
+                    measured=self._cost_per_million is not None,
+                    definition="estimated model cost of the run",
                 ),
                 EvaluationMetric(
                     metric_id="execution_latency_ms",
@@ -992,6 +995,9 @@ class EvaluationHarnessService:
                 # Non-zero means some metric denominators are smaller than
                 # they should be, so the aggregates understate coverage.
                 "aggregation_error_count": aggregation_errors,
+                # L34: False marks a run whose $0.00 cost was never computed —
+                # no pricing table was configured — rather than a free one.
+                "cost_configured": self._cost_per_million is not None,
             },
         )
 

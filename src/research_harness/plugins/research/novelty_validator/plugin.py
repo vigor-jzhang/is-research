@@ -926,9 +926,19 @@ class NoveltyValidationService:
         cset = (await self._store.get(candidate_set_id)).parse_payload(NoveltyCandidateSet)
 
         assessment_ids: list[str] = []
+        # L38: `_gather_evidence` used to re-list the evidence-item and
+        # full-text-document tables on every call — once per candidate, twice
+        # per enriched candidate — i.e. O(candidates × artifacts) full-store
+        # scans. List once per assessment and refresh only after enrichment
+        # may have appended evidence, so every candidate still sees whatever
+        # enrichment produced before it.
+        evidence_envs = await self._store.list(artifact_type="evidence_item")
+        doc_envs = await self._store.list(artifact_type="full_text_document")
         for candidate in cset.candidates:
             identity_id = candidate.paper_identity_id
-            basis, evidence_text, evidence_ids = await self._gather_evidence(identity_id)
+            basis, evidence_text, evidence_ids = await self._gather_evidence(
+                identity_id, evidence_envs=evidence_envs, doc_envs=doc_envs
+            )
 
             # ---- Phase 5C: enrich sparse evidence before assessment -------
             enrichment_exec_id: str | None = None
@@ -950,8 +960,10 @@ class NoveltyValidationService:
                         enrichment_exec_id = await self._enrich(
                             claim_id, identity_id, basis, offline=offline
                         )
+                        evidence_envs = await self._store.list(artifact_type="evidence_item")
+                        doc_envs = await self._store.list(artifact_type="full_text_document")
                         basis, evidence_text, evidence_ids = await self._gather_evidence(
-                            identity_id
+                            identity_id, evidence_envs=evidence_envs, doc_envs=doc_envs
                         )
                     except Exception as e:  # noqa: BLE001
                         logger.warning("evidence enrichment failed (%s): %s", identity_id, e)
@@ -1914,21 +1926,32 @@ class NoveltyValidationService:
             "assessment": parsed.assessment,
         }
 
-    async def _identity_full_text_doc_ids(self, paper_identity_id: str) -> set[str]:
+    async def _identity_full_text_doc_ids(
+        self,
+        paper_identity_id: str,
+        doc_envs: list[Any] | None = None,
+    ) -> set[str]:
         """Ids of the FullTextDocuments belonging to `paper_identity_id`.
 
         L38: resolves the identity's documents from a single listing so that
         evidence items can be matched to their source from the envelope payload
-        instead of one store.get() per item per candidate.
+        instead of one store.get() per item per candidate. The listing itself
+        is supplied by the caller when one assessment covers many candidates.
         """
         doc_ids: set[str] = set()
-        for env in await self._store.list(artifact_type="full_text_document"):
+        for env in doc_envs if doc_envs is not None else await self._store.list(
+            artifact_type="full_text_document"
+        ):
             if (env.payload or {}).get("paper_identity_id") == paper_identity_id:
                 doc_ids.add(env.artifact_id)
         return doc_ids
 
     async def _gather_evidence(
-        self, paper_identity_id: str
+        self,
+        paper_identity_id: str,
+        *,
+        evidence_envs: list[Any] | None = None,
+        doc_envs: list[Any] | None = None,
     ) -> tuple[EvidenceBasis, str, list[str]]:
         """Evidence preference order: full text (evidence items) -> abstract ->
         indexed metadata -> title only. Returns (basis, text, artifact ids)."""
@@ -1938,13 +1961,19 @@ class NoveltyValidationService:
         # L38: the evidence items are listed once and each one's source is read
         # from the envelope payload dict. The old form issued a store.get() for
         # every evidence item -- once per candidate -- and then scanned the whole
-        # table a second time in step 2b.
-        evidence_envs = await self._store.list(artifact_type="evidence_item")
+        # table a second time in step 2b. The listing is supplied by the caller
+        # in the per-candidate loop so it runs once per assessment, not once
+        # per candidate.
+        listed = (
+            evidence_envs
+            if evidence_envs is not None
+            else await self._store.list(artifact_type="evidence_item")
+        )
 
         # 1. full-text evidence items already in the repository
-        doc_ids = await self._identity_full_text_doc_ids(paper_identity_id)
+        doc_ids = await self._identity_full_text_doc_ids(paper_identity_id, doc_envs=doc_envs)
         statements: list[str] = []
-        for env in evidence_envs:
+        for env in listed:
             src = (env.payload or {}).get("source_artifact_id")
             if not src or src not in doc_ids:
                 continue
@@ -1989,7 +2018,7 @@ class NoveltyValidationService:
 
         # 2b. enrichment-acquired abstracts (EvidenceItems imported by the
         # provider_get_abstract strategy, matched deterministically by DOI)
-        for env in evidence_envs:
+        for env in listed:
             # Filter on the payload before any store round-trip: only the few
             # enrichment items reach get() now (L38).
             if not ((env.payload or {}).get("metadata") or {}).get("novelty_enrichment"):

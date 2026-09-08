@@ -10,7 +10,6 @@ from research_harness.research.schemas.tournament import (
     BenchmarkRunRef,
     ModelCallRecord,
     TournamentFailureKind,
-    TournamentModelConfig,
 )
 from research_harness.research.tournament.accounting import (
     aggregate_calls,
@@ -221,28 +220,10 @@ def test_failed_repetitions_count_as_attempts():
     assert out["deterministic_pass_rate"] == 0.9
 
 
-def test_effective_pricing_plan_wins():
-    from research_harness.research.tournament.accounting import effective_pricing
-
-    candidate = TournamentModelConfig(
-        candidate_id="c",
-        requested_model="m",
-        pricing={
-            "source": "plan",
-            "input_per_million": 5.0,
-            "output_per_million": 6.0,
-        },
-    )
-    pricing = effective_pricing(candidate, None)
-    assert pricing is not None
-    assert pricing.input_per_million == 5.0
-
-
-def test_effective_pricing_none_without_rates():
-    from research_harness.research.tournament.accounting import effective_pricing
-
-    candidate = TournamentModelConfig(candidate_id="c", requested_model="m")
-    assert effective_pricing(candidate, None) is None
+# L29 (round 38): `effective_pricing` and its two tests were removed — the
+# provider-pricing section it fell back to does not exist anywhere in the
+# config schema, so the fallback could never fire. Cost resolution is
+# provider-reported `usage.cost`, then candidate plan pricing, then None.
 
 
 def test_resolved_model_is_deterministic_on_ties():

@@ -285,15 +285,19 @@ def runtime_inspect(
 
     console.print("\n[bold]Services[/bold]")
     console.print("--------")
-    # Show services after setup would have been registered; we need to simulate?
-    # For inspect we show what each plugin provides statically from metadata
-    for pid in order:
-        try:
-            plugin = runtime.plugins.get_plugin(pid)
-            for svc in plugin.metadata.provides:
-                console.print(f"[yellow]{svc}[/yellow] -> {pid}")
-        except Exception:
-            continue
+    # L33: this used to print metadata.provides under a "Services" heading —
+    # a static declaration already shown per plugin above — rather than the
+    # registry the heading names. inspect does not start plugins, and services
+    # register during start, so print the registry itself and say so.
+    registered = runtime.services.list_services()
+    if registered:
+        for name, entry in sorted(registered.items()):
+            console.print(f"[yellow]{name}[/yellow] -> {entry.owner}")
+    else:
+        console.print(
+            "[dim]none registered — services register at start and inspect does not start"
+            " plugins; declared provides are listed per plugin above[/dim]"
+        )
 
     console.print("\n[bold]Model Roles[/bold]")
     console.print("-----------")
@@ -671,6 +675,8 @@ def literature_sources(
     ),
 ) -> None:
     """List configured/available literature providers."""
+    import os
+
     # Load config if available
     if config is not None and config.exists():
         try:
@@ -680,7 +686,7 @@ def literature_sources(
                 f"  crossref enabled: {cfg.literature.crossref.enabled} (timeout {cfg.literature.crossref.timeout_seconds}s, mailto={cfg.literature.crossref.mailto or 'not set'})"
             )
             console.print(
-                f"  semantic_scholar enabled: {cfg.literature.semantic_scholar.enabled} (timeout {cfg.literature.semantic_scholar.timeout_seconds}s, api_key={'set' if __import__('os').getenv('SEMANTIC_SCHOLAR_API_KEY') else 'not set'})"
+                f"  semantic_scholar enabled: {cfg.literature.semantic_scholar.enabled} (timeout {cfg.literature.semantic_scholar.timeout_seconds}s, api_key={'set' if os.getenv('SEMANTIC_SCHOLAR_API_KEY') else 'not set'})"
             )
             console.print(f"  plugins: {cfg.plugins}")
         except Exception as e:
@@ -1677,18 +1683,15 @@ def screening_sets_list(
         try:
             sets = await store.list(artifact_type="screened_literature_set")
             if execution:
+                # L33: the old second `or` branch re-parsed the payload to
+                # compare the same field. `screening_execution_id` is a
+                # required schema field, so for a well-formed artifact the
+                # parse could only recompute the first comparison, and for a
+                # malformed one it raised ValidationError instead of
+                # filtering the artifact out.
                 sets = [
-                    s
-                    for s in sets
-                    if s.payload.get("screening_execution_id") == execution
-                    or s.parse_payload(
-                        __import__(
-                            "research_harness.research.schemas.screening_execution",
-                            fromlist=["ScreenedLiteratureSet"],
-                        ).ScreenedLiteratureSet
-                    ).screening_execution_id
-                    == execution
-                ]  # type: ignore[attr-defined]
+                    s for s in sets if s.payload.get("screening_execution_id") == execution
+                ]
             if not sets:
                 console.print("[dim]No screened sets found[/dim]")
                 return
@@ -2857,6 +2860,8 @@ def gaps_run(
     """Run evidence-grounded research gap analysis (Phase 2H)."""
     import asyncio
 
+    from research_harness.research.schemas.gap import ResearchGap
+
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
         cfg = load_config(cfg_path) if cfg_path is not None else None
@@ -2905,11 +2910,7 @@ def gaps_run(
                 if a.literature_synthesis_id == synthesis:
                     console.print(f"  GapAnalysis: {a_env.artifact_id}")
                     for gid in a.ranked_gap_ids[:5]:
-                        g = (await store.get(gid)).parse_payload(
-                            __import__(
-                                "research_harness.research.schemas.gap", fromlist=["ResearchGap"]
-                            ).ResearchGap
-                        )
+                        g = (await store.get(gid)).parse_payload(ResearchGap)
                         console.print(
                             f"    [{g.strength.value}] {g.title[:70]} ({g.gap_type.value}) "
                             f"papers {g.supporting_papers} ev {g.supporting_evidence_items}"
@@ -3187,6 +3188,8 @@ def mechanisms_generate(
     """Generate mechanism candidates for a selected gap (Phase 3A)."""
     import asyncio
 
+    from research_harness.research.schemas.mechanism import MechanismCandidate
+
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
         cfg = load_config(cfg_path) if cfg_path is not None else None
@@ -3233,12 +3236,7 @@ def mechanisms_generate(
                 if a.gap_selection_id == selection:
                     console.print(f"  MechanismAnalysis: {env.artifact_id} ({a.status.value})")
                     for cid in a.candidate_ids:
-                        c = (await store.get(cid)).parse_payload(
-                            __import__(
-                                "research_harness.research.schemas.mechanism",
-                                fromlist=["MechanismCandidate"],
-                            ).MechanismCandidate
-                        )
+                        c = (await store.get(cid)).parse_payload(MechanismCandidate)
                         comp = c.evaluation.composite if c.evaluation else 0.0
                         console.print(
                             f"    [{comp:.3f}] {c.name[:70]} papers {c.literature_support_papers} "
@@ -3698,6 +3696,8 @@ def equilibrium_derive(
     """Derive + symbolically verify equilibrium (Phase 3C)."""
     import asyncio
 
+    from research_harness.research.schemas.equilibrium import EquilibriumCandidate
+
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
         cfg = load_config(cfg_path) if cfg_path is not None else None
@@ -3762,12 +3762,7 @@ def equilibrium_derive(
                         f"  solution order: {' -> '.join(a.solution_order) or 'n/a'}  method: {a.solution_method}"
                     )
                     for cid in a.candidate_ids:
-                        c = (await store.get(cid)).parse_payload(
-                            __import__(
-                                "research_harness.research.schemas.equilibrium",
-                                fromlist=["EquilibriumCandidate"],
-                            ).EquilibriumCandidate
-                        )
+                        c = (await store.get(cid)).parse_payload(EquilibriumCandidate)
                         line = ", ".join(
                             f"{e.variable} = {e.expression.expression}" for e in c.expressions
                         )
@@ -4367,6 +4362,8 @@ def numerical_inspect(
     """Inspect a NumericalExperiment (Phase 3E)."""
     import asyncio
 
+    from research_harness.research.schemas.numerical import RobustnessCheck, WelfareAnalysis
+
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
         cfg = load_config(cfg_path) if cfg_path is not None else None
@@ -4415,20 +4412,10 @@ def numerical_inspect(
             if len(exp.results) > 8:
                 console.print(f"  ... {len(exp.results) - 8} more results")
             for cid in exp.robustness:
-                c = (await store.get(cid)).parse_payload(
-                    __import__(
-                        "research_harness.research.schemas.numerical",
-                        fromlist=["RobustnessCheck"],
-                    ).RobustnessCheck
-                )
+                c = (await store.get(cid)).parse_payload(RobustnessCheck)
                 console.print(f"  robustness [{c.outcome.value}] {c.description[:70]}")
             for wid in exp.welfare:
-                w = (await store.get(wid)).parse_payload(
-                    __import__(
-                        "research_harness.research.schemas.numerical",
-                        fromlist=["WelfareAnalysis"],
-                    ).WelfareAnalysis
-                )
+                w = (await store.get(wid)).parse_payload(WelfareAnalysis)
                 console.print(f"  welfare total {w.total_welfare}")
             parents = await store.get_parents(exp_env.artifact_id)
             for p in parents:
@@ -4446,6 +4433,8 @@ def numerical_results(
 ) -> None:
     """List all NumericalResult series rows (visualization-ready)."""
     import asyncio
+
+    from research_harness.research.schemas.numerical import NumericalExperiment
 
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
@@ -4466,12 +4455,7 @@ def numerical_results(
         runtime = build_runtime(cfg)
         async with runtime:
             store = runtime.services.require("artifact_store.default")
-            exp = (await store.get(experiment_id)).parse_payload(
-                __import__(
-                    "research_harness.research.schemas.numerical",
-                    fromlist=["NumericalExperiment"],
-                ).NumericalExperiment
-            )
+            exp = (await store.get(experiment_id)).parse_payload(NumericalExperiment)
             from research_harness.research.schemas.numerical import NumericalResult
 
             header = "feasible | x_param | x_value | parameters -> outcomes"
@@ -4501,6 +4485,8 @@ def numerical_robustness(
     """Show robustness checks of a NumericalExperiment (Phase 3E)."""
     import asyncio
 
+    from research_harness.research.schemas.numerical import NumericalExperiment
+
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
         cfg = load_config(cfg_path) if cfg_path is not None else None
@@ -4520,12 +4506,7 @@ def numerical_robustness(
         runtime = build_runtime(cfg)
         async with runtime:
             store = runtime.services.require("artifact_store.default")
-            exp = (await store.get(experiment_id)).parse_payload(
-                __import__(
-                    "research_harness.research.schemas.numerical",
-                    fromlist=["NumericalExperiment"],
-                ).NumericalExperiment
-            )
+            exp = (await store.get(experiment_id)).parse_payload(NumericalExperiment)
             from research_harness.research.schemas.numerical import RobustnessCheck
 
             for cid in exp.robustness:
@@ -4555,6 +4536,8 @@ def numerical_welfare(
     """Show welfare analysis of a NumericalExperiment (Phase 3E)."""
     import asyncio
 
+    from research_harness.research.schemas.numerical import NumericalExperiment
+
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
         cfg = load_config(cfg_path) if cfg_path is not None else None
@@ -4574,12 +4557,7 @@ def numerical_welfare(
         runtime = build_runtime(cfg)
         async with runtime:
             store = runtime.services.require("artifact_store.default")
-            exp = (await store.get(experiment_id)).parse_payload(
-                __import__(
-                    "research_harness.research.schemas.numerical",
-                    fromlist=["NumericalExperiment"],
-                ).NumericalExperiment
-            )
+            exp = (await store.get(experiment_id)).parse_payload(NumericalExperiment)
             from research_harness.research.schemas.numerical import WelfareAnalysis
 
             for wid in exp.welfare:
@@ -4784,6 +4762,8 @@ def findings_list(
     """List findings of a package (Phase 4A)."""
     import asyncio
 
+    from research_harness.research.schemas.results import ResearchResultsPackage
+
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
         cfg = load_config(cfg_path) if cfg_path is not None else None
@@ -4803,12 +4783,7 @@ def findings_list(
         runtime = build_runtime(cfg)
         async with runtime:
             store = runtime.services.require("artifact_store.default")
-            pkg = (await store.get(package)).parse_payload(
-                __import__(
-                    "research_harness.research.schemas.results",
-                    fromlist=["ResearchResultsPackage"],
-                ).ResearchResultsPackage
-            )
+            pkg = (await store.get(package)).parse_payload(ResearchResultsPackage)
             from research_harness.research.schemas.results import ResearchFinding
 
             for fid in pkg.finding_ids:
@@ -4834,6 +4809,8 @@ def contributions_list(
     """List contribution claims of a package (Phase 4A)."""
     import asyncio
 
+    from research_harness.research.schemas.results import ResearchResultsPackage
+
     async def _run() -> None:
         cfg_path = config if config is not None and config.exists() else None
         cfg = load_config(cfg_path) if cfg_path is not None else None
@@ -4853,12 +4830,7 @@ def contributions_list(
         runtime = build_runtime(cfg)
         async with runtime:
             store = runtime.services.require("artifact_store.default")
-            pkg = (await store.get(package)).parse_payload(
-                __import__(
-                    "research_harness.research.schemas.results",
-                    fromlist=["ResearchResultsPackage"],
-                ).ResearchResultsPackage
-            )
+            pkg = (await store.get(package)).parse_payload(ResearchResultsPackage)
             from research_harness.research.schemas.results import ContributionClaim
 
             for cid in pkg.contribution_claim_ids:
@@ -6016,9 +5988,16 @@ def eval_run(
                 f"[red]{report.cases_failed} failed[/red] / "
                 f"{report.cases_error} error"
             )
+            # L34: an unconfigured pricing table reports 0.0 — say so instead
+            # of printing a bare $0.000000 that reads as a free run.
+            cost_part = (
+                "cost $0.00 (pricing not configured)"
+                if report.metadata.get("cost_configured") is False
+                else f"cost ${report.execution_cost_usd:.6f}"
+            )
             console.print(
                 f"  latency {report.execution_latency_ms} ms  "
-                f"cost ${report.execution_cost_usd:.6f}  "
+                f"{cost_part}  "
                 f"failures {len(run.failures)}"
             )
             for metric in report.metrics:

@@ -235,6 +235,14 @@ class ResultsAssemblerService:
             try:
                 response = await self._call_model(context, errors)
                 parsed = _AssemblyResponse.model_validate(response)
+                # L10: validate the WHOLE response before the first store
+                # write. Validation used to be interleaved with persistence,
+                # so a rejected contribution or implication orphaned the
+                # findings already persisted, and the retry wrote a second,
+                # parallel batch. The store is append-only — there is no
+                # rollback — so the fix is to finish validating before the
+                # first put and let a retry start from a clean store.
+                self._validate_assembly(context, parsed)
                 finding_ids = await self._persist_findings(context, parsed)
                 contribution_ids = await self._persist_contributions(context, parsed, finding_ids)
                 implication_ids = await self._persist_implications(context, parsed, finding_ids)
@@ -647,6 +655,41 @@ Rules:
             out.append(f_env.artifact_id)
         return out
 
+    def _validate_assembly(self, context: dict[str, Any], parsed: _AssemblyResponse) -> None:
+        """Validate the entire parsed response without touching the store.
+
+        Raises the same ValueErrors the persist phase would, but before the
+        first `put`, so a rejected attempt leaves nothing behind for the
+        retry to duplicate. Contributions and implications reference findings
+        positionally (FINDINGk), and resolution depends only on the persisted
+        *count* — known before any write. A non-positional ref can never name
+        one of the fresh uuid4 ids this call is about to create, so rejecting
+        it here matches what the post-persist membership check would do.
+        """
+        verified = set(context["verified_props"])
+        statics = set(context["statics"])
+        results = set(context["result_ids"])
+        failed = context["failed_prop_ids"]
+        trimmed_findings = parsed.findings[: self._max_findings]
+        for item in trimmed_findings:
+            self._validate_finding(context, item, verified, statics, results, failed)
+        positional = [f"FINDING{i}" for i in range(len(trimmed_findings))]
+        positional_set = set(positional)
+        for item in parsed.contributions[: self._max_contributions]:
+            if not item.finding_ids:
+                raise ValueError("contribution claim must reference at least one finding")
+            refs = self._resolve_finding_refs(item.finding_ids, positional, positional_set)
+            unsupported = [fid for fid in refs if fid not in positional_set]
+            if unsupported:
+                raise ValueError(f"contribution references unknown findings: {unsupported}")
+        for item in parsed.implications[: self._max_implications]:
+            refs = self._resolve_finding_refs(
+                item.grounded_in_finding_ids, positional, positional_set
+            )
+            unsupported = [fid for fid in refs if fid not in positional_set]
+            if unsupported:
+                raise ValueError(f"implication references unknown findings: {unsupported}")
+
     def _validate_finding(
         self,
         context: dict[str, Any],
@@ -682,7 +725,20 @@ Rules:
         for sid in item.supporting_comparative_static_ids:
             stat = context["statics"][sid]
             required_conditions.extend(stat.conditions)
-        missing = [c for c in required_conditions if not any(c in cond for cond in item.conditions)]
+
+        # L10: this used to be a substring test (`c in cond`), so a required
+        # condition "b > 0" was "satisfied" by the finding carrying
+        # "not (b > 0)" — a negated condition passed as preserved. Compare
+        # whitespace-insensitively for exact equality instead; carrying the
+        # condition verbatim is what the retry feedback asks the model for.
+        def _norm(c: str) -> str:
+            return "".join(c.split())
+
+        missing = [
+            c
+            for c in required_conditions
+            if not any(_norm(c) == _norm(cond) for cond in item.conditions)
+        ]
         if missing:
             raise ValueError(
                 f"finding drops required conditions: {missing} "

@@ -49,6 +49,35 @@ class PipelineIntegrityEvaluator:
     evaluator_version = "0.1.0"
     category = EvaluatorCategory.deterministic.value
 
+    # L5: the types the audit itself enumerates and reads payloads of. Used to
+    # scope `evidence_artifact_ids`; the old filter tested membership in
+    # `types_present` — the types of the produced artifacts themselves — so it
+    # could never exclude anything and the evidence graph degraded to "every
+    # artifact the run touched", acquisition noise included.
+    _SCANNED_TYPES = frozenset(
+        {
+            "synthesis_statement",
+            "research_gap",
+            "research_finding",
+            "manuscript_section",
+            "equilibrium_candidate",
+            "proposition",
+            "numerical_result",
+            "bibliography",
+        }
+    )
+
+    @staticmethod
+    def _audited_types(
+        expected_stages: dict[str, Any], expected_provenance: list[tuple[str, str]]
+    ) -> frozenset[str]:
+        types_ = set(PipelineIntegrityEvaluator._SCANNED_TYPES)
+        types_.update(str(t) for t in expected_stages.values())
+        for source_type, target_type in expected_provenance:
+            types_.add(str(source_type))
+            types_.add(str(target_type))
+        return frozenset(types_)
+
     async def evaluate(self, ctx: EvaluatorContext) -> EvaluatorResult:
         produced_ids = {e.artifact_id for e in ctx.produced_artifacts}
         types_present: dict[str, list[str]] = {}
@@ -414,7 +443,9 @@ class PipelineIntegrityEvaluator:
             if failures_detail
             else "the full research pipeline passed every deterministic gate",
             evidence_artifact_ids=[
-                e.artifact_id for e in ctx.produced_artifacts if e.artifact_type in types_present
+                e.artifact_id
+                for e in ctx.produced_artifacts
+                if e.artifact_type in self._audited_types(expected_stages, expected_provenance)
             ],
         )
 
