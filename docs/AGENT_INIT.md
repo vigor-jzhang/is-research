@@ -77,11 +77,19 @@ One round = a small coherent set of findings. For each:
 - Deferring with a written rationale is a valid outcome (L21, M48c, M62 and M78 are all
   deferred for real reasons). Report honestly rather than shipping something that doesn't
   work.
-- M62 and M78 are **not** code work: M62 needs the user's decision on the session
-  durability contract, M78 needs an API key. Don't guess — ask.
+- **Hard boundary: the Medium tier is out of scope.** Do not work on **M62**, **M78** or
+  **M48c**, and do not start them on your own initiative even if they look tractable.
+  - M62 needs the user's decision on the session durability contract. A fix was implemented
+    and reverted; redoing it without that decision just re-litigates it.
+  - M78 needs an `OPENROUTER_API_KEY`; nothing about it is fixable as a regression gate.
+  - M48c (a global concurrency cap) is inert until `src/` has concurrency. Leave it
+    deferred. M48a and M48b are already done.
+  - If you believe one of these has become tractable, **stop and ask** rather than
+    starting.
 
 ## Definition of done
 
-Every remaining finding is either closed with a green suite and a pre-fix-failing test, or
-explicitly recorded as blocked/deferred with the reason written into the round notes. The
-tally in §9.0 is internally consistent and matches reality.
+Clear the Low tier, then stop and report. Every Low finding is either closed with a green
+suite and a pre-fix-failing test, or explicitly recorded as blocked with the reason written
+into the round notes. The Medium tier is untouched apart from reconciling the §9.0 count in
+task zero. The tally in §9.0 is internally consistent and matches reality.

@@ -47,6 +47,23 @@ sat in the report as open for 20 rounds.
 
 ---
 
+## 1.1 Scope boundary — hard limit
+
+**The Medium tier is out of scope. Do not work on M62, M78 or M48c.**
+
+| ID | Status | Why it is excluded |
+|---|---|---|
+| **M62** | **Do not touch** | Needs the user's decision on the session durability contract. A fix was implemented and reverted; redoing it without that decision just re-litigates it. |
+| **M78** | **Do not touch** | Needs `OPENROUTER_API_KEY`. Nothing about it is fixable as a regression gate without one. |
+| **M48c** | **Stays deferred** | M48a and M48b are done. M48c (a global concurrency cap) is inert until `src/` actually has concurrency. Do not implement it. |
+
+**Scope is: clear the Low tier, then stop and report.** That means L33 (its three nits),
+L26, L37, L5, L10, then the partials L34, L8, L29, L38. When they are done — or when what
+remains is blocked for real reasons you have written down — report and wait. Do not start
+M62 or M78 on your own initiative even if they look tractable. **Ask first.**
+
+---
+
 ## 2. How a round works
 
 One round = pick a small coherent set of findings, fix them, verify, update the report.
@@ -115,12 +132,15 @@ for the next person.
 
 ## 3. Remaining work
 
-### Medium — 3 by enumeration (5 by the tally row): reconciling is task zero
+### Medium — OUT OF SCOPE
+
+See §1.1. **All three remaining Medium findings are excluded: M48 (on M48c), M62, M78.**
+Reconcile the count as task zero so the report is honest, then leave them alone.
 
 | ID | What's left | Why it's not just code |
 |---|---|---|
 | **M48** | **M48c only** — a global concurrency cap | Deferred deliberately. There is **no concurrency anywhere in `src/`** (no `gather`, no `Semaphore`, no `create_task`). A semaphore added now would be inert — a control that reads as working and does nothing. Add it when concurrency is added. M48a (rate limiting) and M48b (locked pinned-address map) are done. |
-| **M62** | Wildcard session subscriber blocks on a file append per event | Needs a product decision: "every event is on disk when the run returns" and "persistence off the critical path" cannot both hold without an explicit flush point callers must honour. A queue + background writer was implemented and reverted — it broke `test_e2e_mocked_run`. |
+| **M62** | Wildcard session subscriber blocks on a file append per event | Needs the user's decision: "every event is on disk when the run returns" and "persistence off the critical path" cannot both hold without an explicit flush point callers must honour. A queue + background writer was implemented and reverted — it broke `test_e2e_mocked_run`. |
 | **M78** | Live suite can't gate anything | Needs `OPENROUTER_API_KEY`. Not fixable as a regression gate. |
 
 ### Low — 9 open
