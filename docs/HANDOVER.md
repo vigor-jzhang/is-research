@@ -1,9 +1,11 @@
 # Handover — finishing the code-review remediation
 
 **Repository:** `/home/vigor/agentwork/is-research` (`research-harness`)
-**Handover date:** 2026-09-08
-**HEAD at handover:** `4d03cfe` — *Fix declared symbols and optional-dependency cycles: L7, L23*
-**Branch:** `main`, remote `origin` (`git@github.com:vigor-jzhang/is-research.git`), fully pushed
+**Handover date:** 2026-09-08 (updated same day, after rounds 35–38)
+**HEAD at handover:** `9b8a235` — *docs: make the Medium tier an explicit out-of-scope boundary*
+**Branch:** `main`, remote `origin` (`git@github.com:vigor-jzhang/is-research.git`)
+**Working tree at update:** rounds 35–38 complete and verified, **uncommitted** (standing
+instruction: do not commit unless asked).
 
 ---
 
@@ -18,9 +20,9 @@ checks that cannot fire, and `None`/absent values scored as successes. In a rese
 harness (which is a measurement instrument) this silently manufactures scientific
 claims, so the review's standard is: *when it fails it must fail loudly.*
 
-Since the review there have been **34 fix rounds**. Critical and High are fully closed.
-Read §1 (executive summary) and §6 (what the codebase gets right) of the report first —
-§6 in particular explains the architecture you must not break.
+Since the review there have been **38 fix rounds**. Critical, High and the Low tier are
+fully closed. Read §1 (executive summary) and §6 (what the codebase gets right) of the
+report first — §6 in particular explains the architecture you must not break.
 
 ### State at handover
 
@@ -28,22 +30,17 @@ Read §1 (executive summary) and §6 (what the codebase gets right) of the repor
 |---|---|---|---|
 | Critical | 8 | 8 | 0 |
 | High | 25 | 25 | 0 |
-| Medium | 86 | 81 | **5** |
-| Low | 39 | 30 | **9** |
-| **Total** | **158** | **144** | **13** |
+| Medium | 86 | 83 | **3** (all deferred: M48 on M48c, M62, M78) |
+| Low | 39 | 38 | **1** (L21, blocked) |
+| **Total** | **158** | **154** | **4** |
 
-**⚠ The Medium number is not trustworthy — reconcile it first.** The §9.0 tally row says
-*81 closed / 5 open*, but the closed-ID enumeration directly beneath it
-(`M1-M16, M17-M25, M26-M47, M49-M61, M63-M65, M66-M77, M79-M86`) sums to **83 closed / 3
-open**: M48 (on M48c), M62, M78. Re-derive the count by finding ID before trusting either
-number, and fix whichever is wrong.
-
-Related: **many finding bodies in §4/§5 were never marked** even though the work was done
-(e.g. M61 was fixed in round 29, M77/M81/M82/M86 in round 14, L20 in round 18 — none of
-their bodies say so). Only later rounds reliably added `**Fixed (round N).**` markers. So
-**do not infer "open" from the absence of a marker**; cross-check the round notes and the
-§9.0 enumeration. M59 is the cautionary example: it was already fixed in `49c870e` and
-sat in the report as open for 20 rounds.
+The Medium tally was reconciled in round 35 (task zero): the §9.0 row had said 81/5
+while the closed-ID enumeration said 83/3; by-ID truth is **83 closed / 3 open**, and
+the row now agrees. Deferred findings count as open (L21 blocked ⇒ open, exactly like
+M62/M78). The stale round-19 "Open Medium" list in §9.0 and §9.8's split were also
+corrected. Twenty-one finding bodies closed in early rounds (M1–M16, M61, M77/M81/
+M82/M86, L20) now carry their `**Fixed (round N).**` markers, each verified in code
+first.
 
 ---
 
@@ -57,10 +54,11 @@ sat in the report as open for 20 rounds.
 | **M78** | **Do not touch** | Needs `OPENROUTER_API_KEY`. Nothing about it is fixable as a regression gate without one. |
 | **M48c** | **Stays deferred** | M48a and M48b are done. M48c (a global concurrency cap) is inert until `src/` actually has concurrency. Do not implement it. |
 
-**Scope is: clear the Low tier, then stop and report.** That means L33 (its three nits),
-L26, L37, L5, L10, then the partials L34, L8, L29, L38. When they are done — or when what
-remains is blocked for real reasons you have written down — report and wait. Do not start
-M62 or M78 on your own initiative even if they look tractable. **Ask first.**
+**Scope is: clear the Low tier, then stop and report.** That was completed in rounds
+35–38 (L33+L26, L37+L5, L10, then L34+L8+L29+L38). Every Low finding is closed, and
+every remaining open item is blocked/deferred **with a written rationale** (L21, M48c,
+M62, M78). Do not start M62 or M78 on your own initiative even if they look tractable.
+**Ask first.**
 
 ---
 
@@ -85,7 +83,7 @@ find . -path ./.venv -prune -o -name "__pycache__" -type d -print0 | xargs -0 rm
 .venv/bin/python -m pytest tests/unit tests/integration -q -p no:cacheprovider
 ```
 
-Current baseline: **1393 passed**. A round is green only when all three are clean and the
+Current baseline: **1409 passed**. A round is green only when all three are clean and the
 suite has zero failures.
 
 ### Every new test must be proven to fail before the fix
@@ -143,21 +141,15 @@ Reconcile the count as task zero so the report is honest, then leave them alone.
 | **M62** | Wildcard session subscriber blocks on a file append per event | Needs the user's decision: "every event is on disk when the run returns" and "persistence off the critical path" cannot both hold without an explicit flush point callers must honour. A queue + background writer was implemented and reverted — it broke `test_e2e_mocked_run`. |
 | **M78** | Live suite can't gate anything | Needs `OPENROUTER_API_KEY`. Not fixable as a regression gate. |
 
-### Low — 9 open
+### Low — cleared in rounds 35–38
 
-| ID | Item | Note |
-|---|---|---|
-| **L33** | 3 of 6 nits remain | `runtime inspect` prints a "Services" heading over `metadata.provides`; 13 `__import__()` string hacks; a dead `or` branch that can raise `ValidationError`. All mechanical. |
-| **L26** | `policies.py` frozen dataclass with mutable `list`/`dict` fields; `readiness.py` shares mutable criteria instances | Both small. |
-| **L37** | Empty `plugins` list yields a runtime that silently does nothing | Careful: many tests construct configs with `plugins: []`, so a hard validator would be a breaking change — warn or reject at `build_runtime` instead. |
-| **L5** | `evaluator_pipeline_integrity` — `evidence_artifact_ids` degenerates to "all produced artifacts" | Dilutes the evidence graph. |
-| **L10** | `results_assembler` — on retry, findings are persisted twice, orphaning the first batch | **Examined and set aside.** The store is immutable so a partial batch cannot be rolled back; fixing it properly means restructuring `assemble()`. More than a nit. |
-| **L34** | Cost defaults to `{0.0, 0.0}` so live reports read $0.00 | Partial from round 25. |
-| **L8** | `Proposition.status` never updated from `candidate` | Partial from round 25. |
-| **L29** | `accounting.py` docstring says nearest-rank percentile, code interpolates; `q` not range-checked | Partial from round 25. |
-| **L38** | O(N×M) full-store scans in novelty `_gather_evidence` | Partial from round 21. |
-
-Suggested next batch: **L33's three nits + L26**, then **L37 + L5**.
+Every Low finding is now closed: **L33** (three remaining nits) and **L26** (round 35),
+**L37** and **L5** (round 36), **L10** — both halves; the retry-orphaning half the
+previous handover set aside was fixed by validating the whole assembly response before
+the first store write, no rollback needed — (round 37), and the four partials **L34,
+L8, L29, L38** (round 38). The only Low not closed is **L21**, blocked since round 23
+(the timing schema cannot express the decision). See the round notes in the report for
+what each fix did and what was deliberately left alone.
 
 ---
 
@@ -195,6 +187,21 @@ These cost real time. Read before editing.
 - **M53**: do **not** cache plugin discovery globally — a stale cache hides plugins
   installed later in the same process and breaks the existing discovery tests.
 
+**New pitfalls found in rounds 35–38**
+
+- **CliRunner tests must be sync.** The CLI commands call `asyncio.run()` internally;
+  invoking them from inside an `async def` test (pytest-asyncio) dies with
+  "asyncio.run() cannot be called from a running event loop". Seed stores with
+  `asyncio.run()` in a sync test, then invoke.
+- **`ArtifactEnvelope.create` rejects a plain dict payload** (payload is typed
+  `BaseModel`). To simulate a *malformed stored artifact*, build it the way
+  `SQLiteArtifactStore._row_to_envelope` does: `ArtifactEnvelope[Any](...)` with a dict
+  payload and a `compute_content_hash` of that dict.
+- **pyright: assigning `Any` to a declared `x: list[T] | None` re-widens x after an
+  `is None` narrowing.** Build a separate local via a ternary instead of reassigning.
+- **pytest-asyncio is in `auto` mode** — an explicit `asyncio.run()` wrapper around a
+  coroutine inside an async test is redundant; just await it.
+
 **Environment facts**
 
 - **typer 0.27 has no `typer.Choice`, and `click` is not installed as its own distribution.**
@@ -231,7 +238,11 @@ than shipping something that doesn't work.
 - Round 18+ test files are the best examples of the expected test style:
   `test_literature_semantics.py`, `test_cli_structure.py`, `test_bootstrap_config.py`,
   `test_m50_m64_sweep.py`, `test_literature_performance.py`, `test_round11_leftovers.py`,
-  `test_m48_rate_limiting.py`, `test_low_l7_l23.py`.
+  `test_m48_rate_limiting.py`, `test_low_l7_l23.py`, and the round 35–38 files
+  `test_low_l33_l26.py`, `test_low_l37_l5.py`, `test_low_l10_results_assembler.py`,
+  `test_low_partials_l34_l8_l29_l38.py` (the last reuses fixtures from
+  `test_evaluation_harness` / `test_scientific_core_followon` / `test_novelty` /
+  `test_results_assembly` via the importable `tests.unit` package).
 
 **Verification tooling:** `uv`-managed `.venv`; run everything through `.venv/bin/`.
 `pytest -x` is useful when triaging. There is no pre-commit hook.
